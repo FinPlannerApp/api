@@ -1,3 +1,4 @@
+using System;
 using Application;
 using Application.Contracts;
 using Domain.Entities;
@@ -33,19 +34,41 @@ public static class InfrastructureServiceExtensions
         // 2.1 Register Redis connection with AbortOnConnectFail=false for local dev resilience
         services.AddSingleton<IConnectionMultiplexer>(sp => 
         {
-            var connectionString = configuration.GetConnectionString("Redis") ?? "localhost";
-            var options = ConfigurationOptions.Parse(connectionString);
-            options.AbortOnConnectFail = false;
-            options.ConnectRetry = 3;
-            if (options.ConnectTimeout < 10000)
+            var rawConnectionString = configuration.GetConnectionString("Redis") ?? 
+                                     configuration["REDIS_URL"] ?? 
+                                     "localhost";
+            
+            ConfigurationOptions options;
+            
+            if (rawConnectionString.StartsWith("redis", StringComparison.OrdinalIgnoreCase) && rawConnectionString.Contains("://"))
             {
-                options.ConnectTimeout = 10000;
+                var uri = new Uri(rawConnectionString);
+                var userInfo = uri.UserInfo;
+                var password = string.IsNullOrEmpty(userInfo) ? null : userInfo.Split(':').LastOrDefault();
+                
+                options = new ConfigurationOptions
+                {
+                    EndPoints = { { uri.Host, uri.Port > 0 ? uri.Port : 6379 } },
+                    Password = password,
+                    Ssl = uri.Scheme.Equals("rediss", StringComparison.OrdinalIgnoreCase) || uri.Host.Contains("upstash.io"),
+                    AbortOnConnectFail = false
+                };
             }
-            if (options.SyncTimeout < 10000)
+            else
             {
-                options.SyncTimeout = 10000;
-                options.AsyncTimeout = 10000;
+                options = ConfigurationOptions.Parse(rawConnectionString);
+                options.AbortOnConnectFail = false;
+                if (options.EndPoints.Any(e => e?.ToString()?.Contains("upstash.io") == true))
+                {
+                    options.Ssl = true;
+                }
             }
+
+            options.ConnectRetry = 5;
+            options.ConnectTimeout = 30000;
+            options.SyncTimeout = 30000;
+            options.AsyncTimeout = 30000;
+            
             return ConnectionMultiplexer.Connect(options);
         });
 
