@@ -61,11 +61,14 @@ public static class InfrastructureServiceExtensions
         services.AddHostedService<InfrastructureMonitorWorker>();
 
         // 2.4 Register Hangfire
-        services.AddHangfire(config => config
-            .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
-            .UseSimpleAssemblyNameTypeSerializer()
-            .UseRecommendedSerializerSettings()
-            .UseRedisStorage(configuration.GetConnectionString("Redis") ?? "localhost"));
+        services.AddHangfire((sp, config) => 
+        {
+            var redis = sp.GetRequiredService<IConnectionMultiplexer>();
+            config.SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+                  .UseSimpleAssemblyNameTypeSerializer()
+                  .UseRecommendedSerializerSettings()
+                  .UseRedisStorage(redis);
+        });
         
         services.AddHangfireServer();
         
