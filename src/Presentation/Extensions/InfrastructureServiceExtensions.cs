@@ -14,7 +14,7 @@ using System.Text;
 namespace API.Extensions;
 
 using Hangfire;
-using Hangfire.Redis.StackExchange;
+using Hangfire.MemoryStorage;
 using Infrastructure.BackgroundJobs;
 using StackExchange.Redis;
 
@@ -84,23 +84,13 @@ public static class InfrastructureServiceExtensions
         services.AddHostedService<InfrastructureMonitorWorker>();
 
         // 2.4 Register Hangfire
-        services.AddHangfire((sp, config) => 
-        {
-            var redis = sp.GetRequiredService<IConnectionMultiplexer>();
-            config.SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
-                  .UseSimpleAssemblyNameTypeSerializer()
-                  .UseRecommendedSerializerSettings()
-                  .UseRedisStorage(redis, new RedisStorageOptions
-                  {
-                      ExpiryCheckInterval = TimeSpan.FromMinutes(10)
-                  });
-        });
+        services.AddHangfire(config => config
+            .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+            .UseSimpleAssemblyNameTypeSerializer()
+            .UseRecommendedSerializerSettings()
+            .UseMemoryStorage());
         
-        services.AddHangfireServer(options => 
-        {
-            options.SchedulePollingInterval = TimeSpan.FromMinutes(10);
-            options.HeartbeatInterval = TimeSpan.FromMinutes(10);
-        });
+        services.AddHangfireServer();
         
         services.AddScoped<RecurringTransactionJob>();
 
