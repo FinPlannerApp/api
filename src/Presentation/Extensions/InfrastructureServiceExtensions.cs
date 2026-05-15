@@ -67,7 +67,7 @@ public static class InfrastructureServiceExtensions
             .UseRecommendedSerializerSettings()
             .UsePostgreSqlStorage(options => options.UseNpgsqlConnection(configuration.GetConnectionString("DefaultConnection")), new PostgreSqlStorageOptions 
             {
-                SchemaName = "public",
+                SchemaName = "identity",
                 PrepareSchemaIfNecessary = true
             }));
         
