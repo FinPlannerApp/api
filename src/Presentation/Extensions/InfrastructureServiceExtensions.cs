@@ -65,7 +65,11 @@ public static class InfrastructureServiceExtensions
             .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
             .UseSimpleAssemblyNameTypeSerializer()
             .UseRecommendedSerializerSettings()
-            .UsePostgreSqlStorage(options => options.UseNpgsqlConnection(configuration.GetConnectionString("DefaultConnection"))));
+            .UsePostgreSqlStorage(options => options.UseNpgsqlConnection(configuration.GetConnectionString("DefaultConnection")), new PostgreSqlStorageOptions 
+            {
+                SchemaName = "public",
+                PrepareSchemaIfNecessary = true
+            }));
         
         services.AddHangfireServer();
         
