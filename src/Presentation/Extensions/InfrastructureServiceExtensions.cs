@@ -90,10 +90,17 @@ public static class InfrastructureServiceExtensions
             config.SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
                   .UseSimpleAssemblyNameTypeSerializer()
                   .UseRecommendedSerializerSettings()
-                  .UseRedisStorage(redis);
+                  .UseRedisStorage(redis, new RedisStorageOptions
+                  {
+                      ExpiryCheckInterval = TimeSpan.FromMinutes(10)
+                  });
         });
         
-        services.AddHangfireServer();
+        services.AddHangfireServer(options => 
+        {
+            options.SchedulePollingInterval = TimeSpan.FromMinutes(10);
+            options.HeartbeatInterval = TimeSpan.FromMinutes(10);
+        });
         
         services.AddScoped<RecurringTransactionJob>();
 
