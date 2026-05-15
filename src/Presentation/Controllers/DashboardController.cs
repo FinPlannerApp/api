@@ -58,9 +58,9 @@ public class DashboardController : BaseController
     }
 
     [HttpGet("financial-health")]
-    public async Task<IActionResult> GetFinancialHealth()
+    public async Task<IActionResult> GetFinancialHealth([FromQuery] int month, [FromQuery] int year)
     {
-        var result = await _mediator.Send(new GetFinancialHealthQuery(UserId));
+        var result = await _mediator.Send(new GetFinancialHealthQuery(UserId, month, year));
         return HandleResult(result);
     }
 }

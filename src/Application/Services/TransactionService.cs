@@ -52,16 +52,26 @@ public class TransactionService : ITransactionService
                 (t.TransactionCategory != null && t.TransactionCategory.Name.ToLower().Contains(search)));
         }
 
+        if (queryParams.Month.HasValue && queryParams.Year.HasValue)
+        {
+            queryable = queryable.Where(t => t.Date.Month == queryParams.Month.Value && t.Date.Year == queryParams.Year.Value);
+        }
+
+        if (queryParams.TransactionCategoryId.HasValue)
+        {
+            queryable = queryable.Where(t => t.TransactionCategoryId == queryParams.TransactionCategoryId.Value);
+        }
+
         var totalRecords = await queryable.CountAsync();
 
         // Apply dynamic sorting
         queryable = queryParams.SortBy?.ToLower() switch
         {
-            "date" => queryParams.SortOrder == "asc" ? queryable.OrderBy(t => t.Date) : queryable.OrderByDescending(t => t.Date),
-            "amount" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(t => t.Amount) : queryable.OrderBy(t => t.Amount),
-            "category" or "categoryname" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(t => t.TransactionCategory.Name) : queryable.OrderBy(t => t.TransactionCategory.Name),
-            "description" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(t => t.Description) : queryable.OrderBy(t => t.Description),
-            _ => queryable.OrderByDescending(t => t.Date) // Default
+            "date" => queryParams.SortOrder == "asc" ? queryable.OrderBy(t => t.Date).ThenByDescending(t => t.Id) : queryable.OrderByDescending(t => t.Date).ThenByDescending(t => t.Id),
+            "amount" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(t => t.Amount).ThenByDescending(t => t.Id) : queryable.OrderBy(t => t.Amount).ThenByDescending(t => t.Id),
+            "category" or "categoryname" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(t => t.TransactionCategory != null ? t.TransactionCategory.Name.ToLower() : "").ThenByDescending(t => t.Id) : queryable.OrderBy(t => t.TransactionCategory != null ? t.TransactionCategory.Name.ToLower() : "").ThenByDescending(t => t.Id),
+            "description" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(t => t.Description.ToLower()).ThenByDescending(t => t.Id) : queryable.OrderBy(t => t.Description.ToLower()).ThenByDescending(t => t.Id),
+            _ => queryable.OrderByDescending(t => t.Date).ThenByDescending(t => t.Id) // Default
         };
 
         var items = await queryable
@@ -82,6 +92,9 @@ public class TransactionService : ITransactionService
 
     public async Task<Result<TransactionDto>> UpsertTransactionAsync(string userId, int accountId, UpsertTransactionDto dto)
     {
+        if (!string.IsNullOrWhiteSpace(dto.Description))
+            dto.Description = ToTitleCase(dto.Description);
+
         var account = await _context.Accounts.FindAsync(accountId);
         if (account == null || account.UserId != userId)
             return Result.Failure<TransactionDto>(new Error("Account.NotFound", "Account not found."));
@@ -313,6 +326,7 @@ public class TransactionService : ITransactionService
             return Result.Failure<BulkInsertResponseDto>(new Error("BulkInsert.Error", "An unexpected error occurred during bulk insert."));
         }
     }
+
     public async Task<Result<TransactionPageResultDto>> GetAllTransactionsAsync(string userId, QueryParameters queryParams)
     {
         // Get all account IDs for this user
@@ -444,5 +458,11 @@ public class TransactionService : ITransactionService
             AccountName = t.Account?.Name,
             CategoryName = t.TransactionCategory?.Name ?? (t.Description.Contains("Transfer") ? "Transfer" : null)
         };
+    }
+
+    private string ToTitleCase(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return input;
+        return System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(input.ToLower());
     }
 }

@@ -37,12 +37,14 @@ public class DashboardService : IDashboardService
         var totalUsers = await _userManager.Users.CountAsync();
         var totalAccounts = await _context.Accounts.CountAsync();
         var totalTransactions = await _context.Transactions.CountAsync();
+        var totalAmount = await _context.Transactions.SumAsync(t => Math.Abs(t.Amount));
 
         return Result.Success(new PublicStatsDto
         {
             TotalUsers = totalUsers,
             TotalAccounts = totalAccounts,
-            TotalTransactions = totalTransactions
+            TotalTransactions = totalTransactions,
+            TotalTransactionVolume = totalAmount
         });
     }
 
@@ -58,8 +60,14 @@ public class DashboardService : IDashboardService
             return Result.Success(cached);
 
         var netWorth = await _context.Accounts
-            .Where(a => a.UserId == userId)
+            .Where(a => a.UserId == userId && 
+                       a.AccountCategory.Name != "Credit Card" && 
+                       a.AccountCategory.Name != "Loan")
             .SumAsync(a => a.Balance);
+
+        var broughtForward = await _context.Transactions
+            .Where(t => t.Account.UserId == userId && t.Date < startFilter)
+            .SumAsync(t => t.Type == TransactionType.Income ? t.Amount : -t.Amount);
 
         var monthlyTransactions = _context.Transactions
             .Where(t => t.Account.UserId == userId && t.Date >= startFilter && t.Date <= endFilter);
@@ -76,7 +84,8 @@ public class DashboardService : IDashboardService
         {
             NetWorth = netWorth,
             MonthlyIncome = monthlyIncome,
-            MonthlyExpenses = monthlyExpenses
+            MonthlyExpenses = monthlyExpenses,
+            BroughtForwardAmount = broughtForward
         };
 
         await _cache.SetAsync(cacheKey, summary, TimeSpan.FromMinutes(5));
@@ -134,11 +143,16 @@ public class DashboardService : IDashboardService
             .Where(t => t.Type == TransactionType.Expense)
             .SumAsync(t => t.Amount);
 
+        var broughtForward = await _context.Transactions
+            .Where(t => t.AccountId == accountId && t.Date < startFilter)
+            .SumAsync(t => t.Type == TransactionType.Income ? t.Amount : -t.Amount);
+
         var summary = new AccountSummaryDto
         {
             CurrentBalance = account.Balance,
             TotalIncome = totalIncome,
-            TotalExpenses = totalExpenses
+            TotalExpenses = totalExpenses,
+            BroughtForwardAmount = broughtForward
         };
 
         return Result.Success(summary);

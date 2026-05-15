@@ -22,4 +22,16 @@ public class QueryParameters
     public string? GlobalSearch { get; set; }
 
     public Dictionary<string, string> Filters { get; set; } = new Dictionary<string, string>();
+
+    [FromQuery(Name = "month")]
+    public int? Month { get; set; }
+
+    [FromQuery(Name = "year")]
+    public int? Year { get; set; }
+
+    [FromQuery(Name = "accountCategoryId")]
+    public int? AccountCategoryId { get; set; }
+
+    [FromQuery(Name = "transactionCategoryId")]
+    public int? TransactionCategoryId { get; set; }
 }

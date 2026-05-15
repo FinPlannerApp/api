@@ -37,8 +37,16 @@ public static class InfrastructureServiceExtensions
             var connectionString = configuration.GetConnectionString("Redis") ?? "localhost";
             var options = ConfigurationOptions.Parse(connectionString);
             options.AbortOnConnectFail = false;
-            options.ConnectRetry = 1;
-            options.ConnectTimeout = 2000;
+            options.ConnectRetry = 3;
+            if (options.ConnectTimeout < 10000)
+            {
+                options.ConnectTimeout = 10000;
+            }
+            if (options.SyncTimeout < 10000)
+            {
+                options.SyncTimeout = 10000;
+                options.AsyncTimeout = 10000;
+            }
             return ConnectionMultiplexer.Connect(options);
         });
 
@@ -47,9 +55,11 @@ public static class InfrastructureServiceExtensions
         services.AddMemoryCache();
         services.AddSingleton<ICacheService, RedisCacheService>();
 
-        // 2.3 Register Email Service & Worker
+        // 2.3 Register Email Services & Workers
+        services.AddSingleton<IDirectEmailSender, DirectEmailSender>();
         services.AddScoped<IEmailService, RedisEmailService>();
         services.AddHostedService<EmailQueueWorker>();
+        services.AddHostedService<InfrastructureMonitorWorker>();
 
         // 2.4 Register Hangfire
         services.AddHangfire(config => config

@@ -315,6 +315,7 @@ public class AuthService : IAuthService
         var user = await _userManager.FindByEmailAsync(email);
         if (user == null)
         {
+            _logger.LogInformation("Forgot password requested for non-existent email: {Email}", email);
             // Don't reveal that the user does not exist
             return Result.Success("If an account exists, a password reset email has been sent.");
         }

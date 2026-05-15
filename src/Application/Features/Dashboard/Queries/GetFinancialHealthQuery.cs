@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Application.Features.Dashboard.Queries;
 
-public record GetFinancialHealthQuery(string UserId) : IRequest<Result<FinancialHealthDto>>;
+public record GetFinancialHealthQuery(string UserId, int Month, int Year) : IRequest<Result<FinancialHealthDto>>;
 
 public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealthQuery, Result<FinancialHealthDto>>
 {
@@ -20,8 +20,8 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
 
     public async Task<Result<FinancialHealthDto>> Handle(GetFinancialHealthQuery request, CancellationToken cancellationToken)
     {
-        var now = DateTime.UtcNow;
-        var currentMonthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var currentMonthStart = new DateTime(request.Year, request.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var now = currentMonthStart.AddMonths(1).AddTicks(-1); // End of selected month
         var lastMonthStart = currentMonthStart.AddMonths(-1);
         var lastMonthEnd = currentMonthStart.AddTicks(-1);
 
@@ -98,17 +98,17 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
         // Insight: Savings Rate
         if (savingsRate > 0.15m)
         {
-            dto.Insights.Add(new FinancialInsightDto { Message = "Excellent savings rate! You are saving over 15% of your income.", Type = "success" });
+            dto.Insights.Add(new FinancialHealthInsightDto { Message = "Excellent savings rate! You are saving over 15% of your income.", Type = "success" });
         }
         else if (savingsRate < 0)
         {
-            dto.Insights.Add(new FinancialInsightDto { Message = "Your spending exceeds your income this month. Consider reviewing your variable expenses.", Type = "warning" });
+            dto.Insights.Add(new FinancialHealthInsightDto { Message = "Your spending exceeds your income this month. Consider reviewing your variable expenses.", Type = "warning" });
         }
 
         // Insight: Budget
         if (budgetScore < 30 && activeBudgets.Any())
         {
-            dto.Insights.Add(new FinancialInsightDto { Message = "You've exceeded several budgets. Check your 'Budgets' tab for details.", Type = "warning" });
+            dto.Insights.Add(new FinancialHealthInsightDto { Message = "You've exceeded several budgets. Check your 'Budgets' tab for details.", Type = "warning" });
         }
 
         // Insight: Category Trends (Last month vs current)
@@ -132,7 +132,7 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
                     .Select(c => c.Name)
                     .FirstOrDefaultAsync(cancellationToken);
 
-                dto.Insights.Add(new FinancialInsightDto 
+                dto.Insights.Add(new FinancialHealthInsightDto 
                 { 
                     Message = $"Spending in '{categoryName}' is up by more than 20% compared to last month.", 
                     Type = "info",

@@ -11,12 +11,17 @@ public class RedisEmailService : IEmailService
 {
     private readonly IConnectionMultiplexer _redis;
     private readonly ILogger<RedisEmailService> _logger;
+    private readonly IDirectEmailSender _directEmailSender;
     private const string QueueName = "MailQueue";
 
-    public RedisEmailService(IConnectionMultiplexer redis, ILogger<RedisEmailService> logger)
+    public RedisEmailService(
+        IConnectionMultiplexer redis, 
+        ILogger<RedisEmailService> logger,
+        IDirectEmailSender directEmailSender)
     {
         _redis = redis;
         _logger = logger;
+        _directEmailSender = directEmailSender;
     }
 
     public async Task SendEmailAsync(MailRequest mailRequest)
@@ -28,9 +33,15 @@ public class RedisEmailService : IEmailService
             await db.ListRightPushAsync(QueueName, json);
             _logger.LogInformation("Email to {To} queued into Redis.", mailRequest.To);
         }
-        catch (RedisConnectionException)
+        catch (Exception ex) when (ex is RedisConnectionException or RedisTimeoutException or ObjectDisposedException)
         {
-            _logger.LogWarning("Redis is unavailable. Email to {To} was logged instead of queued: {Subject}", mailRequest.To, mailRequest.Subject);
+            _logger.LogWarning("Redis is unavailable. Falling back to direct email sending for {To}.", mailRequest.To);
+            await _directEmailSender.SendEmailAsync(mailRequest);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error queuing email for {To}. Falling back to direct email.", mailRequest.To);
+            await _directEmailSender.SendEmailAsync(mailRequest);
         }
     }
 }

@@ -14,16 +14,17 @@ public class EmailQueueWorker : BackgroundService
 {
     private readonly IConnectionMultiplexer _redis;
     private readonly ILogger<EmailQueueWorker> _logger;
-    private readonly IConfiguration _configuration;
-    private readonly HttpClient _httpClient;
+    private readonly IDirectEmailSender _directEmailSender;
     private const string QueueName = "MailQueue";
 
-    public EmailQueueWorker(IConnectionMultiplexer redis, ILogger<EmailQueueWorker> logger, IConfiguration configuration)
+    public EmailQueueWorker(
+        IConnectionMultiplexer redis, 
+        ILogger<EmailQueueWorker> logger, 
+        IDirectEmailSender directEmailSender)
     {
         _redis = redis;
         _logger = logger;
-        _configuration = configuration;
-        _httpClient = new HttpClient();
+        _directEmailSender = directEmailSender;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -35,109 +36,35 @@ public class EmailQueueWorker : BackgroundService
             try
             {
                 var db = _redis.GetDatabase();
-                // Use LPop to check for messages. If nil, wait.
-                // Using a simple polling mechanism with delay to avoid blocking the connection excessively if not supported.
                 var message = await db.ListLeftPopAsync(QueueName);
 
                 if (message.HasValue)
                 {
-                    await ProcessEmailAsync(message.ToString());
+                    var mailRequest = JsonSerializer.Deserialize<MailRequest>(message.ToString());
+                    if (mailRequest != null)
+                    {
+                        await _directEmailSender.SendEmailAsync(mailRequest);
+                    }
                 }
                 else
                 {
-                    await Task.Delay(1000, stoppingToken); // Poll every second
+                    await Task.Delay(1000, stoppingToken);
                 }
             }
             catch (OperationCanceledException)
             {
-                // Task was canceled due to application shutdown
                 break;
             }
-            catch (RedisConnectionException ex)
+            catch (Exception ex) when (ex is RedisConnectionException or RedisTimeoutException)
             {
-                _logger.LogWarning("Redis is not available at {Endpoint}. EmailWorker will wait 30 seconds before retrying. Local dev can continue without Redis.", _redis.Configuration);
-                try { await Task.Delay(30000, stoppingToken); } catch (OperationCanceledException) { break; }
+                _logger.LogWarning("Redis is unavailable. EmailQueueWorker waiting 30s...");
+                try { await Task.Delay(30000, stoppingToken); } catch { break; }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error processing email queue.");
-                try { await Task.Delay(5000, stoppingToken); } catch (OperationCanceledException) { break; }
+                _logger.LogError(ex, "Error in EmailQueueWorker.");
+                try { await Task.Delay(5000, stoppingToken); } catch { break; }
             }
-        }
-        
-        _logger.LogInformation("EmailQueueWorker stopping.");
-    }
-
-    public async Task SendEmailAsync(MailRequest mailRequest)
-    {
-        var json = JsonSerializer.Serialize(mailRequest);
-        try 
-        {
-            var db = _redis.GetDatabase();
-            await db.ListRightPushAsync(QueueName, json);
-            _logger.LogInformation("Email to {To} queued into Redis.", mailRequest.To);
-        }
-        catch (RedisConnectionException)
-        {
-            _logger.LogWarning("Redis is unavailable. Email to {To} was logged instead of queued: {Body}", mailRequest.To, mailRequest.Body);
-        }
-    }
-    private async Task ProcessEmailAsync(string message)
-    {
-        try
-        {
-            var mailRequest = JsonSerializer.Deserialize<MailRequest>(message);
-            if (mailRequest == null) return;
-
-            // 1. Always log the body in development so the developer can see the Magic Token!
-            _logger.LogInformation("Email to {To}: {Subject}\n--- BODY ---\n{Body}\n--- END BODY ---", 
-                mailRequest.To, mailRequest.Subject, mailRequest.Body);
-            
-            // 2. Try to use Brevo API if configured 
-            var apiKey = _configuration["Brevo:ApiKey"];
-            
-            if (!string.IsNullOrEmpty(apiKey) && apiKey != "YOUR_BREVO_API_KEY")
-            {
-                var senderName = _configuration["Brevo:SenderName"] ?? "Financial Planner App";
-                var senderEmail = _configuration["Brevo:SenderEmail"] ?? "no-reply@localhost";
-
-                var brevoPayload = new
-                {
-                    sender = new { name = senderName, email = senderEmail },
-                    to = new[] { new { email = mailRequest.To } },
-                    subject = mailRequest.Subject,
-                    htmlContent = mailRequest.Body // Upgraded to HTML content
-                };
-
-                var requestContent = new StringContent(JsonSerializer.Serialize(brevoPayload), Encoding.UTF8, "application/json");
-                
-                using var requestMessage = new HttpRequestMessage(HttpMethod.Post, "https://api.brevo.com/v3/smtp/email");
-                requestMessage.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-                requestMessage.Headers.Add("api-key", apiKey);
-                requestMessage.Content = requestContent;
-
-                var response = await _httpClient.SendAsync(requestMessage);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    _logger.LogInformation("Actual email sent successfully to {To} via Brevo API.", mailRequest.To);
-                }
-                else
-                {
-                    var errorResponse = await response.Content.ReadAsStringAsync();
-                    _logger.LogError("Brevo API failed. Status: {StatusCode}, Error: {Error}", response.StatusCode, errorResponse);
-                }
-            }
-            else
-            {
-                // Artificial delay to simulate email if no config provided
-                await Task.Delay(500); 
-                _logger.LogWarning("No valid Brevo API key found. Email was simulated and printed to logs only.");
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to send email.");
         }
     }
 }

@@ -81,14 +81,14 @@ public class TransactionCategoryService : ICategoryService<TransactionCategoryDt
             if (category == null || category.UserId != userId)
                 return Result.Failure<TransactionCategoryDto>(new Error("Category.NotFound", "Category not found."));
 
-            category.Name = dto.Name;
+            category.Name = ToTitleCase(dto.Name);
             _context.TransactionCategories.Update(category);
         }
         else
         {
             category = new TransactionCategory
             {
-                Name = dto.Name,
+                Name = ToTitleCase(dto.Name),
                 UserId = userId
             };
             _context.TransactionCategories.Add(category);
@@ -128,5 +128,11 @@ public class TransactionCategoryService : ICategoryService<TransactionCategoryDt
             Id = c.Id,
             Name = c.Name
         };
+    }
+
+    private string ToTitleCase(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return input;
+        return System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(input.ToLower());
     }
 }

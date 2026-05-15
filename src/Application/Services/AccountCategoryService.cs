@@ -81,14 +81,14 @@ public class AccountCategoryService : ICategoryService<AccountCategoryDto, Upser
             if (category == null || category.UserId != userId)
                 return Result.Failure<AccountCategoryDto>(new Error("Category.NotFound", "Category not found."));
 
-            category.Name = dto.Name;
+            category.Name = ToTitleCase(dto.Name);
             _context.AccountCategories.Update(category);
         }
         else
         {
             category = new AccountCategory
             {
-                Name = dto.Name,
+                Name = ToTitleCase(dto.Name),
                 UserId = userId
             };
             _context.AccountCategories.Add(category);
@@ -128,5 +128,11 @@ public class AccountCategoryService : ICategoryService<AccountCategoryDto, Upser
             Id = c.Id,
             Name = c.Name
         };
+    }
+
+    private string ToTitleCase(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return input;
+        return System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(input.ToLower());
     }
 }

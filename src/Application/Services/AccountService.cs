@@ -33,15 +33,20 @@ public class AccountService : IAccountService
                 (a.AccountCategory != null && a.AccountCategory.Name.ToLower().Contains(search)));
         }
 
+        if (queryParams.AccountCategoryId.HasValue)
+        {
+            queryable = queryable.Where(a => a.AccountCategoryId == queryParams.AccountCategoryId.Value);
+        }
+
         var totalRecords = await queryable.CountAsync();
 
         // Apply sorting
         queryable = queryParams.SortBy?.ToLower() switch
         {
-            "name" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(a => a.Name) : queryable.OrderBy(a => a.Name),
-            "balance" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(a => a.Balance) : queryable.OrderBy(a => a.Balance),
-            "category" or "accountcategoryname" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(a => a.AccountCategory.Name) : queryable.OrderBy(a => a.AccountCategory.Name),
-            _ => queryable.OrderBy(a => a.Name)
+            "name" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(a => a.Name.ToLower()).ThenByDescending(a => a.Id) : queryable.OrderBy(a => a.Name.ToLower()).ThenByDescending(a => a.Id),
+            "balance" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(a => a.Balance).ThenByDescending(a => a.Id) : queryable.OrderBy(a => a.Balance).ThenByDescending(a => a.Id),
+            "category" or "accountcategoryname" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(a => a.AccountCategory != null ? a.AccountCategory.Name.ToLower() : "").ThenByDescending(a => a.Id) : queryable.OrderBy(a => a.AccountCategory != null ? a.AccountCategory.Name.ToLower() : "").ThenByDescending(a => a.Id),
+            _ => queryable.OrderBy(a => a.Name.ToLower()).ThenByDescending(a => a.Id)
         };
 
         var items = await queryable
@@ -70,6 +75,7 @@ public class AccountService : IAccountService
 
     public async Task<Result<AccountDto>> UpsertAccountAsync(string userId, UpsertAccountDto dto)
     {
+        dto.Name = ToTitleCase(dto.Name);
         Account? account = null;
         var normalizedName = dto.Name.Trim().ToLower();
 
@@ -144,5 +150,11 @@ public class AccountService : IAccountService
             Balance = a.Balance,
             AccountCategoryName = a.AccountCategory?.Name ?? ""
         };
+    }
+
+    private string ToTitleCase(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return input;
+        return System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(input.ToLower());
     }
 }
