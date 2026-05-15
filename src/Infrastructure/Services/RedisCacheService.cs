@@ -64,6 +64,11 @@ public sealed class RedisCacheService : ICacheService
         }
 
         // ── L2 check (1 Upstash command) ──────────────────────────────────
+        if (_db.Multiplexer.IsConnected == false)
+        {
+            return default;
+        }
+
         try
         {
             var compressed = await _db.StringGetAsync(key);
@@ -98,6 +103,11 @@ public sealed class RedisCacheService : ICacheService
         _l1.Set(key, value, l1Ttl);
 
         // ── L2 write — gzip compress to save Upstash storage (1 command) ──
+        if (_db.Multiplexer.IsConnected == false)
+        {
+            return;
+        }
+
         try
         {
             var json = JsonSerializer.Serialize(value, _json);
