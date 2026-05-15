@@ -1,0 +1,252 @@
+﻿using System;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+
+#nullable disable
+
+namespace Infrastructure.Persistence.Migrations
+{
+    /// <inheritdoc />
+    public partial class AddUserIdToTransaction : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.EnsureSchema(
+                name: "issue");
+
+            migrationBuilder.AddColumn<string>(
+                name: "UserId",
+                schema: "transactions",
+                table: "Transactions",
+                type: "text",
+                nullable: false,
+                defaultValue: "");
+
+            migrationBuilder.CreateTable(
+                name: "IssueTaxonomies",
+                schema: "issue",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    Name = table.Column<string>(type: "text", nullable: false),
+                    Description = table.Column<string>(type: "text", nullable: true),
+                    Type = table.Column<string>(type: "text", nullable: false),
+                    ParentId = table.Column<int>(type: "integer", nullable: true),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false),
+                    DeletedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_IssueTaxonomies", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_IssueTaxonomies_IssueTaxonomies_ParentId",
+                        column: x => x.ParentId,
+                        principalSchema: "issue",
+                        principalTable: "IssueTaxonomies",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "Subscriptions",
+                schema: "transactions",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    UserId = table.Column<string>(type: "text", nullable: false),
+                    Name = table.Column<string>(type: "text", nullable: false),
+                    Tag = table.Column<string>(type: "text", nullable: true),
+                    CancellationUrl = table.Column<string>(type: "text", nullable: true),
+                    RecurringTransactionId = table.Column<int>(type: "integer", nullable: false),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false),
+                    DeletedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Subscriptions", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_Subscriptions_RecurringTransactions_RecurringTransactionId",
+                        column: x => x.RecurringTransactionId,
+                        principalSchema: "transactions",
+                        principalTable: "RecurringTransactions",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "Issues",
+                schema: "issue",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    Title = table.Column<string>(type: "text", nullable: false),
+                    Description = table.Column<string>(type: "text", nullable: false),
+                    Status = table.Column<string>(type: "text", nullable: false),
+                    Priority = table.Column<string>(type: "text", nullable: false),
+                    CategoryId = table.Column<int>(type: "integer", nullable: true),
+                    SubcategoryId = table.Column<int>(type: "integer", nullable: true),
+                    Severity = table.Column<string>(type: "text", nullable: false),
+                    ImpactsMoney = table.Column<bool>(type: "boolean", nullable: false),
+                    FinancialImpactAmount = table.Column<decimal>(type: "numeric", nullable: true),
+                    Frequency = table.Column<string>(type: "text", nullable: false),
+                    TrustPenalty = table.Column<int>(type: "integer", nullable: false),
+                    Votes = table.Column<int>(type: "integer", nullable: false),
+                    PainScore = table.Column<double>(type: "double precision", nullable: false),
+                    CreatorUserId = table.Column<string>(type: "text", nullable: true),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false),
+                    DeletedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Issues", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_Issues_IssueTaxonomies_CategoryId",
+                        column: x => x.CategoryId,
+                        principalSchema: "issue",
+                        principalTable: "IssueTaxonomies",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_Issues_IssueTaxonomies_SubcategoryId",
+                        column: x => x.SubcategoryId,
+                        principalSchema: "issue",
+                        principalTable: "IssueTaxonomies",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "IssueComments",
+                schema: "issue",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    IssueId = table.Column<int>(type: "integer", nullable: false),
+                    Content = table.Column<string>(type: "text", nullable: false),
+                    CreatorUserId = table.Column<string>(type: "text", nullable: true),
+                    ExpectedBehavior = table.Column<string>(type: "text", nullable: true),
+                    ActualBehavior = table.Column<string>(type: "text", nullable: true),
+                    HasWorkaround = table.Column<bool>(type: "boolean", nullable: false),
+                    StructuredMetadata = table.Column<string>(type: "text", nullable: true),
+                    IsHelpful = table.Column<bool>(type: "boolean", nullable: false),
+                    IsRootCause = table.Column<bool>(type: "boolean", nullable: false),
+                    IsReproConfirmed = table.Column<bool>(type: "boolean", nullable: false),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false),
+                    DeletedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_IssueComments", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_IssueComments_Issues_IssueId",
+                        column: x => x.IssueId,
+                        principalSchema: "issue",
+                        principalTable: "Issues",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Transactions_UserId",
+                schema: "transactions",
+                table: "Transactions",
+                column: "UserId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_IssueComments_IssueId",
+                schema: "issue",
+                table: "IssueComments",
+                column: "IssueId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Issues_CategoryId",
+                schema: "issue",
+                table: "Issues",
+                column: "CategoryId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Issues_SubcategoryId",
+                schema: "issue",
+                table: "Issues",
+                column: "SubcategoryId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_IssueTaxonomies_ParentId",
+                schema: "issue",
+                table: "IssueTaxonomies",
+                column: "ParentId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Subscriptions_RecurringTransactionId",
+                schema: "transactions",
+                table: "Subscriptions",
+                column: "RecurringTransactionId",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Subscriptions_UserId_Name",
+                schema: "transactions",
+                table: "Subscriptions",
+                columns: new[] { "UserId", "Name" },
+                unique: true);
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_Transactions_Users_UserId",
+                schema: "transactions",
+                table: "Transactions",
+                column: "UserId",
+                principalSchema: "identity",
+                principalTable: "Users",
+                principalColumn: "Id",
+                onDelete: ReferentialAction.Cascade);
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropForeignKey(
+                name: "FK_Transactions_Users_UserId",
+                schema: "transactions",
+                table: "Transactions");
+
+            migrationBuilder.DropTable(
+                name: "IssueComments",
+                schema: "issue");
+
+            migrationBuilder.DropTable(
+                name: "Subscriptions",
+                schema: "transactions");
+
+            migrationBuilder.DropTable(
+                name: "Issues",
+                schema: "issue");
+
+            migrationBuilder.DropTable(
+                name: "IssueTaxonomies",
+                schema: "issue");
+
+            migrationBuilder.DropIndex(
+                name: "IX_Transactions_UserId",
+                schema: "transactions",
+                table: "Transactions");
+
+            migrationBuilder.DropColumn(
+                name: "UserId",
+                schema: "transactions",
+                table: "Transactions");
+        }
+    }
+}

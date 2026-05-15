@@ -127,7 +127,8 @@ public class TransactionService : ITransactionService
                 Date = dto.Date,
                 Type = dto.Type,
                 TransactionCategoryId = dto.TransactionCategoryId,
-                AccountId = accountId
+                AccountId = accountId,
+                UserId = userId
             };
             _context.Transactions.Add(transaction);
         }
@@ -196,7 +197,8 @@ public class TransactionService : ITransactionService
             Date = dto.Date,
             Type = TransactionType.Expense,
             AccountId = sourceAccountId,
-            TransactionCategoryId = dto.TransactionCategoryId
+            TransactionCategoryId = dto.TransactionCategoryId,
+            UserId = userId
         };
         sourceAccount.Balance -= dto.Amount;
 
@@ -207,7 +209,8 @@ public class TransactionService : ITransactionService
             Date = dto.Date,
             Type = TransactionType.Income,
             AccountId = dto.DestinationAccountId,
-            TransactionCategoryId = dto.TransactionCategoryId
+            TransactionCategoryId = dto.TransactionCategoryId,
+            UserId = userId
         };
         destinationAccount.Balance += dto.Amount;
 
@@ -450,6 +453,7 @@ public class TransactionService : ITransactionService
         return new TransactionDto
         {
             Id = t.Id,
+            UserId = t.UserId,
             Description = t.Description,
             Amount = t.Amount,
             Date = t.Date,

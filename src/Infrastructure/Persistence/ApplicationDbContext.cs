@@ -203,6 +203,11 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
             e.HasIndex(t => t.TransactionCategoryId);
             // Financial integrity: amounts must always be positive
             e.ToTable(tb => tb.HasCheckConstraint("CK_Transaction_Amount_Positive", "\"Amount\" > 0"));
+            
+            e.HasOne<ApplicationUser>()
+                .WithMany()
+                .HasForeignKey(t => t.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
         builder.Entity<TransactionCategory>(e =>
         {
@@ -283,6 +288,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
                 .OnDelete(DeleteBehavior.Cascade);
                 
             e.HasIndex(s => new { s.UserId, s.Name }).IsUnique();
+        });
+
         // --- ISSUE SCHEMA ---
         builder.Entity<Issue>(e =>
         {

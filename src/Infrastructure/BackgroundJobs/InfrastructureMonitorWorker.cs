@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 using Microsoft.Extensions.Configuration;
+using Infrastructure.Services;
 
 namespace Infrastructure.BackgroundJobs;
 

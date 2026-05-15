@@ -30,7 +30,7 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
             return Result.Failure<RecurringTransactionDto>(new Error("Account.NotFound", "Account not found or access denied."));
         }
 
-        RecurringTransaction entity;
+        RecurringTransaction? entity;
 
         if (request.Id.HasValue && request.Id.Value > 0)
         {
@@ -52,6 +52,7 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
             _context.RecurringTransactions.Add(entity);
         }
 
+        // entity is guaranteed non-null here
         entity.AccountId = request.Dto.AccountId;
         entity.TransactionCategoryId = request.Dto.TransactionCategoryId;
         entity.Description = request.Dto.Description;

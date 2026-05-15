@@ -1,9 +1,10 @@
-﻿using Domain.Enums;
+using Domain.Enums;
 
 namespace Domain.Entities;
 
 public class Transaction : BaseEntity
 {
+    public required string UserId { get; set; }
     public required string Description { get; set; }
     public decimal Amount { get; set; }
     public DateTime Date { get; set; }

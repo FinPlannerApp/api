@@ -8,6 +8,7 @@ using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.CookiePolicy;
 using Serilog;
 using Serilog.Formatting.Compact;
+using Hangfire;
 
 var builder = WebApplication.CreateBuilder(args);
 

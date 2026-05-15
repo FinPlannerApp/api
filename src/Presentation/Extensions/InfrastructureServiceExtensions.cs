@@ -15,7 +15,6 @@ namespace API.Extensions;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Infrastructure.BackgroundJobs;
-using Infrastructure.BackgroundWorkers;
 using StackExchange.Redis;
 
 public static class InfrastructureServiceExtensions
