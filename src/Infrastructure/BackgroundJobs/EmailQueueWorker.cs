@@ -49,7 +49,8 @@ public class EmailQueueWorker : BackgroundService
                 }
                 else
                 {
-                    await Task.Delay(1000, stoppingToken);
+                    // Check for new emails every 1 minute to save Redis quota
+                    await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
                 }
             }
             catch (OperationCanceledException)
