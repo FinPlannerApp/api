@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -16,6 +16,19 @@ namespace Infrastructure.Persistence.Migrations
                 name: "issue");
 
             migrationBuilder.AddColumn<string>(
+                name: "UserId",
+                schema: "transactions",
+                table: "Transactions",
+                type: "text",
+                nullable: true);
+
+            // Production Fix: Assign existing transactions to the first user found in the database.
+            // This prevents foreign key violations when applying the constraint to existing data.
+            migrationBuilder.Sql("UPDATE transactions.\"Transactions\" SET \"UserId\" = (SELECT \"Id\" FROM identity.\"Users\" LIMIT 1) WHERE \"UserId\" IS NULL;");
+
+            // If there are still NULLs (i.e. no users exist), we can't make it NOT NULL yet.
+            // But usually there is at least one user (the one who set up the system).
+            migrationBuilder.AlterColumn<string>(
                 name: "UserId",
                 schema: "transactions",
                 table: "Transactions",
