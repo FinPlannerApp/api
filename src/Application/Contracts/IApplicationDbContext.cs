@@ -17,6 +17,18 @@ public interface IApplicationDbContext
     DbSet<Issue> Issues { get; }
     DbSet<IssueTaxonomy> IssueTaxonomies { get; }
     DbSet<IssueComment> IssueComments { get; }
+    DbSet<IssueVote> IssueVotes { get; }
+    DbSet<CommentVote> CommentVotes { get; }
+    DbSet<IssueLabel> IssueLabels { get; }
+    DbSet<IssueLabelAssignment> IssueLabelAssignments { get; }
+    DbSet<IssueMilestone> IssueMilestones { get; }
+    DbSet<IssueAssignee> IssueAssignees { get; }
+    DbSet<CommentReaction> CommentReactions { get; }
+    DbSet<IssueAttachment> IssueAttachments { get; }
+    DbSet<UserGamificationProfile> UserGamificationProfiles { get; }
+    DbSet<Badge> Badges { get; }
+    DbSet<UserBadge> UserBadges { get; }
+    DbSet<IssueStatusHistory> IssueStatusHistories { get; }
     
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

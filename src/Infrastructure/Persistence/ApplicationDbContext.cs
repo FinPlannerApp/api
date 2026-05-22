@@ -35,6 +35,18 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<Issue> Issues { get; set; }
     public DbSet<IssueTaxonomy> IssueTaxonomies { get; set; }
     public DbSet<IssueComment> IssueComments { get; set; }
+    public DbSet<IssueVote> IssueVotes { get; set; }
+    public DbSet<CommentVote> CommentVotes { get; set; }
+    public DbSet<IssueLabel> IssueLabels { get; set; }
+    public DbSet<IssueLabelAssignment> IssueLabelAssignments { get; set; }
+    public DbSet<IssueMilestone> IssueMilestones { get; set; }
+    public DbSet<IssueAssignee> IssueAssignees { get; set; }
+    public DbSet<CommentReaction> CommentReactions { get; set; }
+    public DbSet<IssueAttachment> IssueAttachments { get; set; }
+    public DbSet<UserGamificationProfile> UserGamificationProfiles { get; set; }
+    public DbSet<Badge> Badges { get; set; }
+    public DbSet<UserBadge> UserBadges { get; set; }
+    public DbSet<IssueStatusHistory> IssueStatusHistories { get; set; }
 
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IHttpContextAccessor httpContextAccessor) : base(options)
     {
@@ -308,6 +320,97 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         {
             e.ToTable("IssueComments", "issue");
             e.HasOne(c => c.Issue).WithMany(i => i.Comments).HasForeignKey(c => c.IssueId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(c => c.ParentComment).WithMany(p => p.Replies).HasForeignKey(c => c.ParentCommentId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<IssueVote>(e =>
+        {
+            e.ToTable("IssueVotes", "issue");
+            e.HasKey(v => new { v.IssueId, v.UserId });
+        });
+
+        builder.Entity<CommentVote>(e =>
+        {
+            e.ToTable("CommentVotes", "issue");
+            e.HasKey(v => new { v.CommentId, v.UserId });
+        });
+
+        // --- Phase 2: Labels ---
+        builder.Entity<IssueLabel>(e =>
+        {
+            e.ToTable("IssueLabels", "issue");
+            e.HasIndex(l => l.Name).IsUnique();
+        });
+
+        builder.Entity<IssueLabelAssignment>(e =>
+        {
+            e.ToTable("IssueLabelAssignments", "issue");
+            e.HasKey(la => new { la.IssueId, la.LabelId });
+            e.HasOne(la => la.Issue).WithMany(i => i.Labels).HasForeignKey(la => la.IssueId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(la => la.Label).WithMany(l => l.Issues).HasForeignKey(la => la.LabelId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // --- Phase 2: Milestones ---
+        builder.Entity<IssueMilestone>(e =>
+        {
+            e.ToTable("IssueMilestones", "issue");
+        });
+
+        builder.Entity<Issue>()
+            .HasOne(i => i.Milestone)
+            .WithMany(m => m.Issues)
+            .HasForeignKey(i => i.MilestoneId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        // --- Phase 2: Assignees ---
+        builder.Entity<IssueAssignee>(e =>
+        {
+            e.ToTable("IssueAssignees", "issue");
+            e.HasKey(a => new { a.IssueId, a.UserId });
+            e.HasOne(a => a.Issue).WithMany(i => i.Assignees).HasForeignKey(a => a.IssueId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // --- Phase 2: Comment Reactions ---
+        builder.Entity<CommentReaction>(e =>
+        {
+            e.ToTable("CommentReactions", "issue");
+            e.HasKey(r => new { r.CommentId, r.UserId, r.Emoji });
+            e.HasOne(r => r.Comment).WithMany(c => c.Reactions).HasForeignKey(r => r.CommentId).OnDelete(DeleteBehavior.Cascade);
+        });
+        // --- Phase 3: Attachments ---
+        builder.Entity<IssueAttachment>(e =>
+        {
+            e.ToTable("IssueAttachments", "issue");
+            e.HasOne(a => a.Issue).WithMany(i => i.Attachments).HasForeignKey(a => a.IssueId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // --- Phase 3: Gamification ---
+        builder.Entity<UserGamificationProfile>(e =>
+        {
+            e.ToTable("UserGamificationProfiles", "issue");
+            e.HasKey(g => g.UserId);
+        });
+
+        builder.Entity<Badge>(e =>
+        {
+            e.ToTable("Badges", "issue");
+            e.HasIndex(b => b.Name).IsUnique();
+        });
+
+        builder.Entity<UserBadge>(e =>
+        {
+            e.ToTable("UserBadges", "issue");
+            e.HasKey(ub => new { ub.UserId, ub.BadgeId });
+            e.HasOne(ub => ub.Badge).WithMany().HasForeignKey(ub => ub.BadgeId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<IssueStatusHistory>(e =>
+        {
+            e.ToTable("IssueStatusHistories", "issue");
+            e.HasOne(h => h.Issue)
+             .WithMany(i => i.StatusHistory)
+             .HasForeignKey(h => h.IssueId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

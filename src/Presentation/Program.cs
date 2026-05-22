@@ -98,6 +98,9 @@ else
 
 app.UseHttpsRedirection();
 
+// Serve static files from wwwroot (e.g. uploaded issue attachments)
+app.UseStaticFiles();
+
 app.UseCookiePolicy(new CookiePolicyOptions
 {
     MinimumSameSitePolicy = SameSiteMode.Strict,
@@ -115,11 +118,20 @@ using (var scope = app.Services.CreateScope())
     {
         var db = services.GetRequiredService<ApplicationDbContext>();
         // db.Database.Migrate(); // Disabled for least-privilege user support
+        var seeder = services.GetRequiredService<Application.Services.TaxonomySeederService>();
+        await seeder.SeedAsync();
+
+        // Seed Admin role
+        var roleManager = services.GetRequiredService<Microsoft.AspNetCore.Identity.RoleManager<Microsoft.AspNetCore.Identity.IdentityRole>>();
+        if (!await roleManager.RoleExistsAsync("Admin"))
+        {
+            await roleManager.CreateAsync(new Microsoft.AspNetCore.Identity.IdentityRole("Admin"));
+        }
     }
     catch (Exception ex)
     {
         var logger = services.GetRequiredService<ILogger<Program>>();
-        logger.LogError(ex, "An error occurred while migrating the database.");
+        logger.LogError(ex, "An error occurred while seeding the database.");
     }
 }
 app.UseCors("AllowSpecificOrigins");

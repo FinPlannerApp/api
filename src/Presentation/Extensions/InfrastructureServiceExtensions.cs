@@ -112,6 +112,8 @@ public static class InfrastructureServiceExtensions
             options.Lockout.MaxFailedAccessAttempts = 5;
             options.Lockout.AllowedForNewUsers = true;
         })
+        .AddRoles<IdentityRole>()
+        .AddRoleManager<RoleManager<IdentityRole>>()
         .AddEntityFrameworkStores<ApplicationDbContext>();
 
         // 4. Register JWT Authentication

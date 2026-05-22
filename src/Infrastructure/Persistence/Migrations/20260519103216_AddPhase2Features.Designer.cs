@@ -3,6 +3,7 @@ using System;
 using Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260519103216_AddPhase2Features")]
+    partial class AddPhase2Features
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -269,48 +272,6 @@ namespace Infrastructure.Persistence.Migrations
                     b.ToTable("Users", "identity");
                 });
 
-            modelBuilder.Entity("Domain.Entities.Badge", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Color")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("IconUrl")
-                        .HasColumnType("text");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Name")
-                        .IsUnique();
-
-                    b.ToTable("Badges", "issue");
-                });
-
             modelBuilder.Entity("Domain.Entities.Budget", b =>
                 {
                     b.Property<int>("Id")
@@ -480,9 +441,6 @@ namespace Infrastructure.Persistence.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<DateTime?>("AcknowledgedAt")
-                        .HasColumnType("timestamp with time zone");
-
                     b.Property<int?>("CategoryId")
                         .HasColumnType("integer");
 
@@ -534,9 +492,6 @@ namespace Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<DateTime?>("ResolvedAt")
-                        .HasColumnType("timestamp with time zone");
-
                     b.Property<string>("Severity")
                         .IsRequired()
                         .HasColumnType("text");
@@ -586,55 +541,6 @@ namespace Infrastructure.Persistence.Migrations
                     b.HasKey("IssueId", "UserId");
 
                     b.ToTable("IssueAssignees", "issue");
-                });
-
-            modelBuilder.Entity("Domain.Entities.IssueAttachment", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("ContentType")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("FileName")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("FilePath")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<long>("FileSizeBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<int>("IssueId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("UploadedByUserId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("IssueId");
-
-                    b.ToTable("IssueAttachments", "issue");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueComment", b =>
@@ -793,50 +699,6 @@ namespace Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("IssueMilestones", "issue");
-                });
-
-            modelBuilder.Entity("Domain.Entities.IssueStatusHistory", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("ChangedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("ChangedByUserId")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<int>("IssueId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("NewStatus")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("OldStatus")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("IssueId");
-
-                    b.ToTable("IssueStatusHistories", "issue");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueTaxonomy", b =>
@@ -1190,40 +1052,6 @@ namespace Infrastructure.Persistence.Migrations
                     b.ToTable("TransactionLogs", "transactions");
                 });
 
-            modelBuilder.Entity("Domain.Entities.UserBadge", b =>
-                {
-                    b.Property<string>("UserId")
-                        .HasColumnType("text");
-
-                    b.Property<int>("BadgeId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("AwardedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("UserId", "BadgeId");
-
-                    b.HasIndex("BadgeId");
-
-                    b.ToTable("UserBadges", "issue");
-                });
-
-            modelBuilder.Entity("Domain.Entities.UserGamificationProfile", b =>
-                {
-                    b.Property<string>("UserId")
-                        .HasColumnType("text");
-
-                    b.Property<string>("ContributorTag")
-                        .HasColumnType("text");
-
-                    b.Property<int>("KarmaScore")
-                        .HasColumnType("integer");
-
-                    b.HasKey("UserId");
-
-                    b.ToTable("UserGamificationProfiles", "issue");
-                });
-
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole", b =>
                 {
                     b.Property<string>("Id")
@@ -1486,17 +1314,6 @@ namespace Infrastructure.Persistence.Migrations
                     b.Navigation("Issue");
                 });
 
-            modelBuilder.Entity("Domain.Entities.IssueAttachment", b =>
-                {
-                    b.HasOne("Domain.Entities.Issue", "Issue")
-                        .WithMany("Attachments")
-                        .HasForeignKey("IssueId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Issue");
-                });
-
             modelBuilder.Entity("Domain.Entities.IssueComment", b =>
                 {
                     b.HasOne("Domain.Entities.Issue", "Issue")
@@ -1532,17 +1349,6 @@ namespace Infrastructure.Persistence.Migrations
                     b.Navigation("Issue");
 
                     b.Navigation("Label");
-                });
-
-            modelBuilder.Entity("Domain.Entities.IssueStatusHistory", b =>
-                {
-                    b.HasOne("Domain.Entities.Issue", "Issue")
-                        .WithMany("StatusHistory")
-                        .HasForeignKey("IssueId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Issue");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueTaxonomy", b =>
@@ -1618,17 +1424,6 @@ namespace Infrastructure.Persistence.Migrations
                     b.Navigation("TransactionCategory");
                 });
 
-            modelBuilder.Entity("Domain.Entities.UserBadge", b =>
-                {
-                    b.HasOne("Domain.Entities.Badge", "Badge")
-                        .WithMany()
-                        .HasForeignKey("BadgeId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Badge");
-                });
-
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>
                 {
                     b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole", null)
@@ -1689,15 +1484,11 @@ namespace Infrastructure.Persistence.Migrations
                 {
                     b.Navigation("Assignees");
 
-                    b.Navigation("Attachments");
-
                     b.Navigation("Comments");
 
                     b.Navigation("IssueVotes");
 
                     b.Navigation("Labels");
-
-                    b.Navigation("StatusHistory");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueComment", b =>

@@ -1,4 +1,4 @@
-﻿using Application.Common.Models;
+using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Auth;
 using Domain.Entities;
@@ -209,7 +209,7 @@ public class AuthService : IAuthService
         user.LastKnownIp = ipAddress;
         user.LastKnownUserAgent = userAgent;
 
-        var accessToken = GenerateJwtToken(user, sessionId);
+        var accessToken = await GenerateJwtToken(user, sessionId);
         var refreshToken = GenerateRefreshToken(ipAddress);
 
         // Enforce One Token Per IP: Remove any existing active tokens for this IP
@@ -261,7 +261,7 @@ public class AuthService : IAuthService
         refreshToken.RevokedByIp = ipAddress;
 
         // Generate new tokens
-        var newAccessToken = GenerateJwtToken(user, user.CurrentSessionId ?? "");
+        var newAccessToken = await GenerateJwtToken(user, user.CurrentSessionId ?? "");
         var newRefreshToken = GenerateRefreshToken(ipAddress);
 
         // Enforce One Token Per IP (for the new token)
@@ -437,19 +437,26 @@ public class AuthService : IAuthService
         return Result.Success(true);
     }
 
-    private string GenerateJwtToken(ApplicationUser user, string sessionId)
+    private async Task<string> GenerateJwtToken(ApplicationUser user, string sessionId)
     {
         var jwtKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.Key));
         var credentials = new SigningCredentials(jwtKey, SecurityAlgorithms.HmacSha256);
 
-        var claims = new[]
+        var claims = new List<Claim>
         {
             new Claim(ClaimTypes.NameIdentifier, user.Id),
             new Claim(JwtRegisteredClaimNames.Sub, user.UserName!),
             new Claim(JwtRegisteredClaimNames.Email, user.Email!),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new Claim("SessionId", sessionId) // Add SessionId claim
+            new Claim("SessionId", sessionId)
         };
+
+        // Add role claims so [Authorize(Roles = "Admin")] works
+        var roles = await _userManager.GetRolesAsync(user);
+        foreach (var role in roles)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, role));
+        }
 
         var token = new JwtSecurityToken(
             issuer: _jwtSettings.Issuer,
