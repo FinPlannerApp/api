@@ -121,8 +121,8 @@ public class IssueStatusHistory : BaseEntity
     public int IssueId { get; set; }
     public Issue? Issue { get; set; }
     
-    public required string OldStatus { get; set; }
-    public required string NewStatus { get; set; }
+    public required IssueStatus OldStatus { get; set; }
+    public required IssueStatus NewStatus { get; set; }
     
     public string? ChangedByUserId { get; set; }
     public DateTime ChangedAt { get; set; } = DateTime.UtcNow;

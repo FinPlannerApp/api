@@ -93,6 +93,7 @@ public static class InfrastructureServiceExtensions
         services.AddHangfireServer();
         
         services.AddScoped<RecurringTransactionJob>();
+        services.AddScoped<UpdatePainVelocityJob>();
 
         // 3. Register Identity with STRONG password requirements (dev AND production)
         services.AddIdentityCore<ApplicationUser>(options =>

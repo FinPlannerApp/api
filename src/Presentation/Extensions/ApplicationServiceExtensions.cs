@@ -34,6 +34,12 @@ public static class ApplicationServiceExtensions
         services.AddScoped<IssueSimilarityService>();
         services.AddScoped<TaxonomySeederService>();
         services.AddScoped<GamificationService>();
+        services.AddScoped<IssueWorkflowService>();
+        services.AddScoped<VoteService>();
+        services.AddScoped<CommentService>();
+        services.AddScoped<ReactionService>();
+        services.AddScoped<IssueActivityService>();
+        services.AddScoped<IssueRelationService>();
 
         return services;
     }

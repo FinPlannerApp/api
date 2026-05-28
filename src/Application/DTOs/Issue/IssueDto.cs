@@ -13,6 +13,7 @@ public class IssueDto
     public DateTime? ClosedAt { get; set; }
     public string? ClosedByName { get; set; }
     public double PainScore { get; set; }
+    public double PainVelocity { get; set; }
     
     public required string CategoryName { get; set; }
     public string? SubcategoryName { get; set; }

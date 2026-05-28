@@ -1,15 +1,13 @@
 namespace Domain.Entities;
 
-public enum IssueType { Bug, Feature, Question }
-
 public class Issue : BaseEntity
 {
     public required string Title { get; set; }
     public required string Description { get; set; }
     
     // Status & Lifecycle
-    public string Status { get; set; } = "New"; // Open, Closed + sub-statuses
-    public string Priority { get; set; } = "Medium"; // Low, Medium, High
+    public IssueStatus Status { get; set; } = IssueStatus.New;
+    public IssuePriority Priority { get; set; } = IssuePriority.Medium;
     public IssueType Type { get; set; } = IssueType.Bug; // Bug, Feature, Question
     public bool IsClosed { get; set; } // GitHub-style open/closed
     public DateTime? ClosedAt { get; set; }
@@ -23,15 +21,16 @@ public class Issue : BaseEntity
     public IssueTaxonomy? Subcategory { get; set; }
 
     // Ranking Logic Inputs
-    public string Severity { get; set; } = "Minor"; // Minor, Major, Critical
+    public IssueSeverity Severity { get; set; } = IssueSeverity.Minor;
     public bool ImpactsMoney { get; set; }
     public decimal? FinancialImpactAmount { get; set; }
-    public string Frequency { get; set; } = "Rare"; // Rare, Frequent, Always
+    public IssueFrequency Frequency { get; set; } = IssueFrequency.Rare;
     
     public int TrustPenalty { get; set; } = 0;
     public int Votes { get; set; } = 0;
     
     public double PainScore { get; set; } = 0; // Computed ranking score
+    public double PainVelocity { get; set; } = 0; // Calculated pain score per day
 
     // User Info
     public string? CreatorUserId { get; set; }
@@ -54,4 +53,5 @@ public class Issue : BaseEntity
     public ICollection<IssueAssignee> Assignees { get; set; } = new List<IssueAssignee>();
     public ICollection<IssueAttachment> Attachments { get; set; } = new List<IssueAttachment>();
     public ICollection<IssueStatusHistory> StatusHistory { get; set; } = new List<IssueStatusHistory>();
+    public ICollection<IssueRelation> Relations { get; set; } = new List<IssueRelation>();
 }

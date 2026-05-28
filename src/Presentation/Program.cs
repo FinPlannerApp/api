@@ -96,7 +96,10 @@ else
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 // Serve static files from wwwroot (e.g. uploaded issue attachments)
 app.UseStaticFiles();
@@ -142,7 +145,7 @@ app.Use(async (context, next) =>
     context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
     context.Response.Headers.Append("X-Frame-Options", "DENY");
     context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
-    context.Response.Headers.Append("Content-Security-Policy", "default-src 'self' https://finplanner.ska97homelab.uk; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://static.cloudflareinsights.com https://finplanner.ska97homelab.uk; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://finplanner.ska97homelab.uk; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https: https://www.google-analytics.com https://www.googletagmanager.com https://cloudflareinsights.com https://finplanner.ska97homelab.uk; object-src 'none'; base-uri 'self';");
+    context.Response.Headers.Append("Content-Security-Policy", "default-src 'self' https://finplanner.ska97homelab.uk; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://static.cloudflareinsights.com https://finplanner.ska97homelab.uk; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://finplanner.ska97homelab.uk; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https: http://localhost:5018 https://localhost:7123 https://www.google-analytics.com https://www.googletagmanager.com https://cloudflareinsights.com https://finplanner.ska97homelab.uk; object-src 'none'; base-uri 'self';");
     await next();
 });
 
@@ -156,6 +159,11 @@ app.UseHangfireDashboard();
 Hangfire.RecurringJob.AddOrUpdate<Infrastructure.BackgroundJobs.RecurringTransactionJob>(
     "process-recurring-transactions",
     job => job.ProcessRecurringTransactionsAsync(),
+    Hangfire.Cron.Hourly());
+
+Hangfire.RecurringJob.AddOrUpdate<Infrastructure.BackgroundJobs.UpdatePainVelocityJob>(
+    "update-pain-velocities",
+    job => job.UpdateVelocitiesAsync(),
     Hangfire.Cron.Hourly());
 
 app.MapControllers();

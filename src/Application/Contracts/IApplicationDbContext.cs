@@ -29,6 +29,8 @@ public interface IApplicationDbContext
     DbSet<Badge> Badges { get; }
     DbSet<UserBadge> UserBadges { get; }
     DbSet<IssueStatusHistory> IssueStatusHistories { get; }
+    DbSet<IssueRelation> IssueRelations { get; }
+    DbSet<IssueActivity> IssueActivities { get; }
     
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

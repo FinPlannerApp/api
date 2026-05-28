@@ -9,6 +9,7 @@ public class IssueComment : BaseEntity
     public string? CreatorUserId { get; set; } // Should link to User logically
     
     // Structured Data (JSON serialized or columns)
+    public CommentType Type { get; set; } = CommentType.General;
     public string? ExpectedBehavior { get; set; }
     public string? ActualBehavior { get; set; }
     public bool HasWorkaround { get; set; }

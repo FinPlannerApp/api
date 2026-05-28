@@ -36,7 +36,28 @@ public class GamificationService
         // Number of issues created
         var issueCount = issueIds.Count;
 
-        var karma = (issueUpvotes * 5) - (issueDownvotes * 3) + (commentUpvotes * 2) + issueCount;
+        // Resolved issues (Verified or Released)
+        var resolvedIssueCount = await _context.Issues
+            .CountAsync(i => i.CreatorUserId == userId && (i.Status == IssueStatus.Verified || i.Status == IssueStatus.Released));
+
+        // Quality comment counts
+        var helpfulCommentCount = await _context.IssueComments
+            .CountAsync(c => c.CreatorUserId == userId && c.IsHelpful);
+
+        var rootCauseCommentCount = await _context.IssueComments
+            .CountAsync(c => c.CreatorUserId == userId && c.IsRootCause);
+
+        var reproConfirmedCommentCount = await _context.IssueComments
+            .CountAsync(c => c.CreatorUserId == userId && c.IsReproConfirmed);
+
+        var karma = (issueUpvotes * 5) 
+                    - (issueDownvotes * 3) 
+                    + (commentUpvotes * 2) 
+                    + issueCount
+                    + (resolvedIssueCount * 10)
+                    + (helpfulCommentCount * 5)
+                    + (rootCauseCommentCount * 10)
+                    + (reproConfirmedCommentCount * 5);
 
         // Get or create profile
         var profile = await _context.UserGamificationProfiles.FindAsync(userId);

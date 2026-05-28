@@ -47,6 +47,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<Badge> Badges { get; set; }
     public DbSet<UserBadge> UserBadges { get; set; }
     public DbSet<IssueStatusHistory> IssueStatusHistories { get; set; }
+    public DbSet<IssueRelation> IssueRelations { get; set; }
+    public DbSet<IssueActivity> IssueActivities { get; set; }
 
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IHttpContextAccessor httpContextAccessor) : base(options)
     {
@@ -242,6 +244,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<Budget>().HasQueryFilter(b => !b.IsDeleted);
         builder.Entity<RecurringTransaction>().HasQueryFilter(rt => !rt.IsDeleted);
         builder.Entity<Subscription>().HasQueryFilter(s => !s.IsDeleted);
+        builder.Entity<Issue>().HasQueryFilter(i => !i.IsDeleted);
+        builder.Entity<IssueComment>().HasQueryFilter(c => !c.IsDeleted);
 
         // --- Budget Configuration ---
         builder.Entity<Budget>()
@@ -308,6 +312,24 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
             e.ToTable("Issues", "issue");
             e.HasOne(i => i.Category).WithMany().HasForeignKey(i => i.CategoryId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(i => i.Subcategory).WithMany().HasForeignKey(i => i.SubcategoryId).OnDelete(DeleteBehavior.Restrict);
+            
+            // Enum → string conversions for backward compatibility with existing data
+            e.Property(i => i.Status).HasConversion<string>().HasMaxLength(20);
+            e.Property(i => i.Severity).HasConversion<string>().HasMaxLength(20);
+            e.Property(i => i.Frequency).HasConversion<string>().HasMaxLength(20);
+            e.Property(i => i.Priority).HasConversion<string>().HasMaxLength(20);
+            e.Property(i => i.Type).HasConversion<string>().HasMaxLength(20);
+
+            // Performance indexes
+            e.HasIndex(i => i.Status);
+            e.HasIndex(i => i.PainScore);
+            e.HasIndex(i => i.PainVelocity);
+            e.HasIndex(i => i.CreatedAt);
+            e.HasIndex(i => i.Type);
+            e.HasIndex(i => i.CategoryId);
+            e.HasIndex(i => i.CreatorUserId);
+            e.HasIndex(i => new { i.Status, i.PainScore }); // Composite for sorted listing
+            e.HasIndex(i => new { i.Status, i.PainVelocity }); // Composite for sorted listing by velocity
         });
 
         builder.Entity<IssueTaxonomy>(e =>
@@ -411,6 +433,50 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
              .WithMany(i => i.StatusHistory)
              .HasForeignKey(h => h.IssueId)
              .OnDelete(DeleteBehavior.Cascade);
+            
+            // Enum → string conversions
+            e.Property(h => h.OldStatus).HasConversion<string>().HasMaxLength(20);
+            e.Property(h => h.NewStatus).HasConversion<string>().HasMaxLength(20);
+        });
+
+        // --- IssueComment performance indexes and conversions ---
+        builder.Entity<IssueComment>(e =>
+        {
+            e.HasIndex(c => c.IssueId);
+            e.HasIndex(c => c.ParentCommentId);
+            e.Property(c => c.Type).HasConversion<string>().HasMaxLength(20);
+        });
+
+        // --- Issue Relations ---
+        builder.Entity<IssueRelation>(e =>
+        {
+            e.ToTable("IssueRelations", "issue");
+            e.HasOne(r => r.Issue)
+             .WithMany(i => i.Relations)
+             .HasForeignKey(r => r.IssueId)
+             .OnDelete(DeleteBehavior.Cascade);
+             
+            e.HasOne(r => r.TargetIssue)
+             .WithMany()
+             .HasForeignKey(r => r.TargetIssueId)
+             .OnDelete(DeleteBehavior.Cascade);
+             
+            e.Property(r => r.RelationType).HasConversion<string>().HasMaxLength(20);
+            
+            e.HasIndex(r => new { r.IssueId, r.TargetIssueId, r.RelationType }).IsUnique();
+        });
+
+        // --- Issue Activities ---
+        builder.Entity<IssueActivity>(e =>
+        {
+            e.ToTable("IssueActivities", "issue");
+            e.HasOne(a => a.Issue)
+             .WithMany()
+             .HasForeignKey(a => a.IssueId)
+             .OnDelete(DeleteBehavior.Cascade);
+             
+            e.HasIndex(a => a.IssueId);
+            e.HasIndex(a => a.CreatedAt);
         });
     }
 }
