@@ -204,6 +204,45 @@ public class AdminController : ControllerBase
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = @"
+                        -- 1. Create public history table
+                        CREATE TABLE IF NOT EXISTS public.""__EFMigrationsHistory"" (
+                            ""MigrationId"" character varying(150) NOT NULL,
+                            ""ProductVersion"" character varying(32) NOT NULL,
+                            CONSTRAINT ""PK___EFMigrationsHistory"" PRIMARY KEY (""MigrationId"")
+                        );
+
+                        -- 2. Copy the 12 older applied migrations from identity to public history table
+                        INSERT INTO public.""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+                        SELECT ""MigrationId"", ""ProductVersion""
+                        FROM identity.""__EFMigrationsHistory""
+                        WHERE ""MigrationId"" NOT IN (
+                            '20260515074348_AddUserIdToTransaction',
+                            '20260519074920_AddIssueTrackingSystem',
+                            '20260519080424_AddIssueVotes',
+                            '20260519095253_AddCommentVotesAndReplies',
+                            '20260519102104_AddIssueTypeField',
+                            '20260519103216_AddPhase2Features',
+                            '20260519111416_AddPhase3Infrastructure',
+                            '20260522045614_AddIssueStatusHistory',
+                            '20260522123237_Phase2OperationalIntelligence'
+                        )
+                        ON CONFLICT (""MigrationId"") DO NOTHING;
+
+                        -- 3. Delete any of the 9 new migration records from public history table
+                        DELETE FROM public.""__EFMigrationsHistory"" 
+                        WHERE ""MigrationId"" IN (
+                            '20260515074348_AddUserIdToTransaction',
+                            '20260519074920_AddIssueTrackingSystem',
+                            '20260519080424_AddIssueVotes',
+                            '20260519095253_AddCommentVotesAndReplies',
+                            '20260519102104_AddIssueTypeField',
+                            '20260519103216_AddPhase2Features',
+                            '20260519111416_AddPhase3Infrastructure',
+                            '20260522045614_AddIssueStatusHistory',
+                            '20260522123237_Phase2OperationalIntelligence'
+                        );
+
+                        -- 4. Delete the 9 new migration records from identity history table (cleanup)
                         DELETE FROM identity.""__EFMigrationsHistory"" 
                         WHERE ""MigrationId"" IN (
                             '20260515074348_AddUserIdToTransaction',
@@ -217,7 +256,7 @@ public class AdminController : ControllerBase
                             '20260522123237_Phase2OperationalIntelligence'
                         );";
                     rowsDeleted = await cmd.ExecuteNonQueryAsync();
-                    results.Add($"Cleaned up {rowsDeleted} bad migration history record(s) from __EFMigrationsHistory.");
+                    results.Add("Successfully migrated applied migration history records from identity schema to public schema, and deleted v5 pending migrations from history.");
                 }
             }
             finally

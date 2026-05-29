@@ -28,7 +28,7 @@ public static class InfrastructureServiceExtensions
         // 2. Register the DbContext
         services.AddDbContext<ApplicationDbContext>(options =>
             options.UseNpgsql(configuration.GetConnectionString("DefaultConnection"),
-            o => o.MigrationsHistoryTable("__EFMigrationsHistory", "identity")));
+            o => o.MigrationsHistoryTable("__EFMigrationsHistory")));
 
         // 2.1 Register Redis connection
         // 2.1 Register Redis connection with AbortOnConnectFail=false for local dev resilience
