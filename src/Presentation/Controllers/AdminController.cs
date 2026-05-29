@@ -82,17 +82,17 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Get database diagnostic info including applied/pending migrations, schemas, and tables.
     /// Protected by the bootstrap secret key.
-    /// GET /api/admin/diagnose?secretKey=your-secret
+    /// POST /api/admin/diagnose { "secretKey": "your-secret" }
     /// </summary>
-    [HttpGet("diagnose")]
+    [HttpPost("diagnose")]
     [AllowAnonymous]
     public async Task<ActionResult> DiagnoseDb(
-        [FromQuery] string secretKey,
+        [FromBody] MigrateDto input,
         [FromServices] IConfiguration config,
         [FromServices] ApplicationDbContext db)
     {
         var expectedKey = config["AdminBootstrapKey"] ?? "admin-setup-key-2026";
-        if (secretKey != expectedKey)
+        if (input.SecretKey != expectedKey)
             return Unauthorized(new { message = "Invalid secret key." });
 
         try
