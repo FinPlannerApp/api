@@ -174,6 +174,82 @@ public class AdminController : ControllerBase
     }
 
     /// <summary>
+    /// Repair database migration state by cleaning up v5.0.0 migration history records 
+    /// that were imported but not actually created, and then re-running migrations.
+    /// POST /api/admin/repair-db { "secretKey": "your-secret" }
+    /// </summary>
+    [HttpPost("repair-db")]
+    [AllowAnonymous]
+    public async Task<ActionResult> RepairDb(
+        [FromBody] MigrateDto input,
+        [FromServices] IConfiguration config,
+        [FromServices] ApplicationDbContext db,
+        [FromServices] TaxonomySeederService seeder)
+    {
+        var expectedKey = config["AdminBootstrapKey"] ?? "admin-setup-key-2026";
+        if (input.SecretKey != expectedKey)
+            return Unauthorized(new { message = "Invalid secret key." });
+
+        var results = new List<string>();
+
+        try
+        {
+            var conn = db.Database.GetDbConnection();
+            var wasClosed = conn.State == System.Data.ConnectionState.Closed;
+            if (wasClosed) await conn.OpenAsync();
+
+            int rowsDeleted = 0;
+            try
+            {
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+                        DELETE FROM ""__EFMigrationsHistory"" 
+                        WHERE ""MigrationId"" IN (
+                            '20260515074348_AddUserIdToTransaction',
+                            '20260519074920_AddIssueTrackingSystem',
+                            '20260519080424_AddIssueVotes',
+                            '20260519095253_AddCommentVotesAndReplies',
+                            '20260519102104_AddIssueTypeField',
+                            '20260519103216_AddPhase2Features',
+                            '20260519111416_AddPhase3Infrastructure',
+                            '20260522045614_AddIssueStatusHistory',
+                            '20260522123237_Phase2OperationalIntelligence'
+                        );";
+                    rowsDeleted = await cmd.ExecuteNonQueryAsync();
+                    results.Add($"Cleaned up {rowsDeleted} bad migration history record(s) from __EFMigrationsHistory.");
+                }
+            }
+            finally
+            {
+                if (wasClosed) await conn.CloseAsync();
+            }
+
+            // 2. Re-apply migrations
+            var pendingMigrations = (await db.Database.GetPendingMigrationsAsync()).ToList();
+            if (pendingMigrations.Count > 0)
+            {
+                await db.Database.MigrateAsync();
+                results.Add($"Successfully applied {pendingMigrations.Count} pending migration(s): {string.Join(", ", pendingMigrations)}");
+            }
+            else
+            {
+                results.Add("No pending migrations found after cleanup.");
+            }
+
+            // 3. Seed database
+            await seeder.SeedAsync();
+            results.Add("Seeding completed successfully.");
+
+            return Ok(new { success = true, results });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Repair failed.", error = ex.Message, innerError = ex.InnerException?.Message, results });
+        }
+    }
+
+    /// <summary>
     /// Apply pending EF Core migrations and seed taxonomy/roadmap data.
     /// Protected by the bootstrap secret key — call after deploy to set up production DB.
     /// POST /api/admin/migrate-and-seed { "secretKey": "your-secret" }
