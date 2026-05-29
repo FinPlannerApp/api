@@ -12,7 +12,7 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.AddColumn<int>(
                 name: "Type",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "integer",
                 nullable: false,
@@ -24,7 +24,7 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.DropColumn(
                 name: "Type",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
         }
     }

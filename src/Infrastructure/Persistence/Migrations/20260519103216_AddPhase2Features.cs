@@ -14,28 +14,28 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.AddColumn<DateTime>(
                 name: "ClosedAt",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "timestamp with time zone",
                 nullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "ClosedByUserId",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "text",
                 nullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "GitHubIssueUrl",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "text",
                 nullable: true);
 
             migrationBuilder.AddColumn<bool>(
                 name: "IsClosed",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "boolean",
                 nullable: false,
@@ -43,14 +43,14 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AddColumn<int>(
                 name: "MilestoneId",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "integer",
                 nullable: true);
 
             migrationBuilder.CreateTable(
                 name: "CommentReactions",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     CommentId = table.Column<int>(type: "integer", nullable: false),
@@ -63,7 +63,7 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_CommentReactions_IssueComments_CommentId",
                         column: x => x.CommentId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "IssueComments",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -71,7 +71,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "IssueAssignees",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     IssueId = table.Column<int>(type: "integer", nullable: false),
@@ -83,7 +83,7 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_IssueAssignees_Issues_IssueId",
                         column: x => x.IssueId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "Issues",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -91,7 +91,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "IssueLabels",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
@@ -111,7 +111,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "IssueMilestones",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
@@ -132,7 +132,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "IssueLabelAssignments",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     IssueId = table.Column<int>(type: "integer", nullable: false),
@@ -144,14 +144,14 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_IssueLabelAssignments_IssueLabels_LabelId",
                         column: x => x.LabelId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "IssueLabels",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
                     table.ForeignKey(
                         name: "FK_IssueLabelAssignments_Issues_IssueId",
                         column: x => x.IssueId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "Issues",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -159,29 +159,29 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateIndex(
                 name: "IX_Issues_MilestoneId",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 column: "MilestoneId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_IssueLabelAssignments_LabelId",
-                schema: "issue",
+                schema: null,
                 table: "IssueLabelAssignments",
                 column: "LabelId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_IssueLabels_Name",
-                schema: "issue",
+                schema: null,
                 table: "IssueLabels",
                 column: "Name",
                 unique: true);
 
             migrationBuilder.AddForeignKey(
                 name: "FK_Issues_IssueMilestones_MilestoneId",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 column: "MilestoneId",
-                principalSchema: "issue",
+                principalSchema: null,
                 principalTable: "IssueMilestones",
                 principalColumn: "Id",
                 onDelete: ReferentialAction.SetNull);
@@ -192,57 +192,57 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.DropForeignKey(
                 name: "FK_Issues_IssueMilestones_MilestoneId",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropTable(
                 name: "CommentReactions",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropTable(
                 name: "IssueAssignees",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropTable(
                 name: "IssueLabelAssignments",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropTable(
                 name: "IssueMilestones",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropTable(
                 name: "IssueLabels",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropIndex(
                 name: "IX_Issues_MilestoneId",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropColumn(
                 name: "ClosedAt",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropColumn(
                 name: "ClosedByUserId",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropColumn(
                 name: "GitHubIssueUrl",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropColumn(
                 name: "IsClosed",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropColumn(
                 name: "MilestoneId",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
         }
     }

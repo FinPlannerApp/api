@@ -309,7 +309,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         // --- ISSUE SCHEMA ---
         builder.Entity<Issue>(e =>
         {
-            e.ToTable("Issues", "issue");
+            e.ToTable("Issues");
             e.HasOne(i => i.Category).WithMany().HasForeignKey(i => i.CategoryId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(i => i.Subcategory).WithMany().HasForeignKey(i => i.SubcategoryId).OnDelete(DeleteBehavior.Restrict);
             
@@ -334,39 +334,39 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
 
         builder.Entity<IssueTaxonomy>(e =>
         {
-            e.ToTable("IssueTaxonomies", "issue");
+            e.ToTable("IssueTaxonomies");
             e.HasOne(t => t.Parent).WithMany(p => p.Children).HasForeignKey(t => t.ParentId).OnDelete(DeleteBehavior.Restrict);
         });
 
         builder.Entity<IssueComment>(e =>
         {
-            e.ToTable("IssueComments", "issue");
+            e.ToTable("IssueComments");
             e.HasOne(c => c.Issue).WithMany(i => i.Comments).HasForeignKey(c => c.IssueId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(c => c.ParentComment).WithMany(p => p.Replies).HasForeignKey(c => c.ParentCommentId).OnDelete(DeleteBehavior.Restrict);
         });
 
         builder.Entity<IssueVote>(e =>
         {
-            e.ToTable("IssueVotes", "issue");
+            e.ToTable("IssueVotes");
             e.HasKey(v => new { v.IssueId, v.UserId });
         });
 
         builder.Entity<CommentVote>(e =>
         {
-            e.ToTable("CommentVotes", "issue");
+            e.ToTable("CommentVotes");
             e.HasKey(v => new { v.CommentId, v.UserId });
         });
 
         // --- Phase 2: Labels ---
         builder.Entity<IssueLabel>(e =>
         {
-            e.ToTable("IssueLabels", "issue");
+            e.ToTable("IssueLabels");
             e.HasIndex(l => l.Name).IsUnique();
         });
 
         builder.Entity<IssueLabelAssignment>(e =>
         {
-            e.ToTable("IssueLabelAssignments", "issue");
+            e.ToTable("IssueLabelAssignments");
             e.HasKey(la => new { la.IssueId, la.LabelId });
             e.HasOne(la => la.Issue).WithMany(i => i.Labels).HasForeignKey(la => la.IssueId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(la => la.Label).WithMany(l => l.Issues).HasForeignKey(la => la.LabelId).OnDelete(DeleteBehavior.Cascade);
@@ -375,7 +375,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         // --- Phase 2: Milestones ---
         builder.Entity<IssueMilestone>(e =>
         {
-            e.ToTable("IssueMilestones", "issue");
+            e.ToTable("IssueMilestones");
         });
 
         builder.Entity<Issue>()
@@ -387,7 +387,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         // --- Phase 2: Assignees ---
         builder.Entity<IssueAssignee>(e =>
         {
-            e.ToTable("IssueAssignees", "issue");
+            e.ToTable("IssueAssignees");
             e.HasKey(a => new { a.IssueId, a.UserId });
             e.HasOne(a => a.Issue).WithMany(i => i.Assignees).HasForeignKey(a => a.IssueId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -395,40 +395,40 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         // --- Phase 2: Comment Reactions ---
         builder.Entity<CommentReaction>(e =>
         {
-            e.ToTable("CommentReactions", "issue");
+            e.ToTable("CommentReactions");
             e.HasKey(r => new { r.CommentId, r.UserId, r.Emoji });
             e.HasOne(r => r.Comment).WithMany(c => c.Reactions).HasForeignKey(r => r.CommentId).OnDelete(DeleteBehavior.Cascade);
         });
         // --- Phase 3: Attachments ---
         builder.Entity<IssueAttachment>(e =>
         {
-            e.ToTable("IssueAttachments", "issue");
+            e.ToTable("IssueAttachments");
             e.HasOne(a => a.Issue).WithMany(i => i.Attachments).HasForeignKey(a => a.IssueId).OnDelete(DeleteBehavior.Cascade);
         });
 
         // --- Phase 3: Gamification ---
         builder.Entity<UserGamificationProfile>(e =>
         {
-            e.ToTable("UserGamificationProfiles", "issue");
+            e.ToTable("UserGamificationProfiles");
             e.HasKey(g => g.UserId);
         });
 
         builder.Entity<Badge>(e =>
         {
-            e.ToTable("Badges", "issue");
+            e.ToTable("Badges");
             e.HasIndex(b => b.Name).IsUnique();
         });
 
         builder.Entity<UserBadge>(e =>
         {
-            e.ToTable("UserBadges", "issue");
+            e.ToTable("UserBadges");
             e.HasKey(ub => new { ub.UserId, ub.BadgeId });
             e.HasOne(ub => ub.Badge).WithMany().HasForeignKey(ub => ub.BadgeId).OnDelete(DeleteBehavior.Cascade);
         });
 
         builder.Entity<IssueStatusHistory>(e =>
         {
-            e.ToTable("IssueStatusHistories", "issue");
+            e.ToTable("IssueStatusHistories");
             e.HasOne(h => h.Issue)
              .WithMany(i => i.StatusHistory)
              .HasForeignKey(h => h.IssueId)
@@ -450,7 +450,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         // --- Issue Relations ---
         builder.Entity<IssueRelation>(e =>
         {
-            e.ToTable("IssueRelations", "issue");
+            e.ToTable("IssueRelations");
             e.HasOne(r => r.Issue)
              .WithMany(i => i.Relations)
              .HasForeignKey(r => r.IssueId)
@@ -469,7 +469,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         // --- Issue Activities ---
         builder.Entity<IssueActivity>(e =>
         {
-            e.ToTable("IssueActivities", "issue");
+            e.ToTable("IssueActivities");
             e.HasOne(a => a.Issue)
              .WithMany()
              .HasForeignKey(a => a.IssueId)

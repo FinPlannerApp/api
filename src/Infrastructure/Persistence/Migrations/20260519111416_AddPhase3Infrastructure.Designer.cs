@@ -311,7 +311,7 @@ namespace Infrastructure.Persistence.Migrations
                     b.HasIndex("Name")
                         .IsUnique();
 
-                    b.ToTable("Badges", "issue");
+                    b.ToTable("Badges");
                 });
 
             modelBuilder.Entity("Domain.Entities.Budget", b =>
@@ -378,7 +378,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasKey("CommentId", "UserId", "Emoji");
 
-                    b.ToTable("CommentReactions", "issue");
+                    b.ToTable("CommentReactions");
                 });
 
             modelBuilder.Entity("Domain.Entities.CommentVote", b =>
@@ -394,7 +394,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasKey("CommentId", "UserId");
 
-                    b.ToTable("CommentVotes", "issue");
+                    b.ToTable("CommentVotes");
                 });
 
             modelBuilder.Entity("Domain.Entities.Feedback", b =>
@@ -575,7 +575,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasIndex("SubcategoryId");
 
-                    b.ToTable("Issues", "issue");
+                    b.ToTable("Issues");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueAssignee", b =>
@@ -588,7 +588,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasKey("IssueId", "UserId");
 
-                    b.ToTable("IssueAssignees", "issue");
+                    b.ToTable("IssueAssignees");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueAttachment", b =>
@@ -637,7 +637,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasIndex("IssueId");
 
-                    b.ToTable("IssueAttachments", "issue");
+                    b.ToTable("IssueAttachments");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueComment", b =>
@@ -703,7 +703,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasIndex("ParentCommentId");
 
-                    b.ToTable("IssueComments", "issue");
+                    b.ToTable("IssueComments");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueLabel", b =>
@@ -742,7 +742,7 @@ namespace Infrastructure.Persistence.Migrations
                     b.HasIndex("Name")
                         .IsUnique();
 
-                    b.ToTable("IssueLabels", "issue");
+                    b.ToTable("IssueLabels");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueLabelAssignment", b =>
@@ -757,7 +757,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasIndex("LabelId");
 
-                    b.ToTable("IssueLabelAssignments", "issue");
+                    b.ToTable("IssueLabelAssignments");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueMilestone", b =>
@@ -795,7 +795,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("IssueMilestones", "issue");
+                    b.ToTable("IssueMilestones");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueTaxonomy", b =>
@@ -836,7 +836,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasIndex("ParentId");
 
-                    b.ToTable("IssueTaxonomies", "issue");
+                    b.ToTable("IssueTaxonomies");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueVote", b =>
@@ -852,7 +852,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasKey("IssueId", "UserId");
 
-                    b.ToTable("IssueVotes", "issue");
+                    b.ToTable("IssueVotes");
                 });
 
             modelBuilder.Entity("Domain.Entities.RecurringTransaction", b =>
@@ -1164,7 +1164,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasIndex("BadgeId");
 
-                    b.ToTable("UserBadges", "issue");
+                    b.ToTable("UserBadges");
                 });
 
             modelBuilder.Entity("Domain.Entities.UserGamificationProfile", b =>
@@ -1180,7 +1180,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasKey("UserId");
 
-                    b.ToTable("UserGamificationProfiles", "issue");
+                    b.ToTable("UserGamificationProfiles");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole", b =>

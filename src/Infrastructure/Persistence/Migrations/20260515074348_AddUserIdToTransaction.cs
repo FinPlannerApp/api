@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -12,8 +12,7 @@ namespace Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.EnsureSchema(
-                name: "issue");
+            
 
             migrationBuilder.AddColumn<string>(
                 name: "UserId",
@@ -38,7 +37,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "IssueTaxonomies",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
@@ -58,7 +57,7 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_IssueTaxonomies_IssueTaxonomies_ParentId",
                         column: x => x.ParentId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "IssueTaxonomies",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Restrict);
@@ -95,7 +94,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "Issues",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
@@ -125,14 +124,14 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_Issues_IssueTaxonomies_CategoryId",
                         column: x => x.CategoryId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "IssueTaxonomies",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
                         name: "FK_Issues_IssueTaxonomies_SubcategoryId",
                         column: x => x.SubcategoryId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "IssueTaxonomies",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Restrict);
@@ -140,7 +139,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "IssueComments",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
@@ -166,7 +165,7 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_IssueComments_Issues_IssueId",
                         column: x => x.IssueId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "Issues",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -180,25 +179,25 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateIndex(
                 name: "IX_IssueComments_IssueId",
-                schema: "issue",
+                schema: null,
                 table: "IssueComments",
                 column: "IssueId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Issues_CategoryId",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 column: "CategoryId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Issues_SubcategoryId",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 column: "SubcategoryId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_IssueTaxonomies_ParentId",
-                schema: "issue",
+                schema: null,
                 table: "IssueTaxonomies",
                 column: "ParentId");
 
@@ -237,7 +236,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.DropTable(
                 name: "IssueComments",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropTable(
                 name: "Subscriptions",
@@ -245,11 +244,11 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.DropTable(
                 name: "Issues",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropTable(
                 name: "IssueTaxonomies",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropIndex(
                 name: "IX_Transactions_UserId",

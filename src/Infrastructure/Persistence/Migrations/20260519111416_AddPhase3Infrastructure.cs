@@ -14,21 +14,21 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.AddColumn<DateTime>(
                 name: "AcknowledgedAt",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "timestamp with time zone",
                 nullable: true);
 
             migrationBuilder.AddColumn<DateTime>(
                 name: "ResolvedAt",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "timestamp with time zone",
                 nullable: true);
 
             migrationBuilder.CreateTable(
                 name: "Badges",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
@@ -49,7 +49,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "IssueAttachments",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
@@ -71,7 +71,7 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_IssueAttachments_Issues_IssueId",
                         column: x => x.IssueId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "Issues",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -79,7 +79,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "UserGamificationProfiles",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     UserId = table.Column<string>(type: "text", nullable: false),
@@ -93,7 +93,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "UserBadges",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     UserId = table.Column<string>(type: "text", nullable: false),
@@ -106,7 +106,7 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_UserBadges_Badges_BadgeId",
                         column: x => x.BadgeId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "Badges",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -114,20 +114,20 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateIndex(
                 name: "IX_Badges_Name",
-                schema: "issue",
+                schema: null,
                 table: "Badges",
                 column: "Name",
                 unique: true);
 
             migrationBuilder.CreateIndex(
                 name: "IX_IssueAttachments_IssueId",
-                schema: "issue",
+                schema: null,
                 table: "IssueAttachments",
                 column: "IssueId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_UserBadges_BadgeId",
-                schema: "issue",
+                schema: null,
                 table: "UserBadges",
                 column: "BadgeId");
         }
@@ -137,28 +137,28 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.DropTable(
                 name: "IssueAttachments",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropTable(
                 name: "UserBadges",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropTable(
                 name: "UserGamificationProfiles",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropTable(
                 name: "Badges",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropColumn(
                 name: "AcknowledgedAt",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropColumn(
                 name: "ResolvedAt",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
         }
     }

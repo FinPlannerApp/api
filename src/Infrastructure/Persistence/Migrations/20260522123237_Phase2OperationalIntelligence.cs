@@ -14,7 +14,7 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.AlterColumn<string>(
                 name: "OldStatus",
-                schema: "issue",
+                schema: null,
                 table: "IssueStatusHistories",
                 type: "character varying(20)",
                 maxLength: 20,
@@ -24,7 +24,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AlterColumn<string>(
                 name: "NewStatus",
-                schema: "issue",
+                schema: null,
                 table: "IssueStatusHistories",
                 type: "character varying(20)",
                 maxLength: 20,
@@ -34,7 +34,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AlterColumn<string>(
                 name: "Type",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "character varying(20)",
                 maxLength: 20,
@@ -44,7 +44,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AlterColumn<string>(
                 name: "Status",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "character varying(20)",
                 maxLength: 20,
@@ -54,7 +54,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AlterColumn<string>(
                 name: "Severity",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "character varying(20)",
                 maxLength: 20,
@@ -64,7 +64,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AlterColumn<string>(
                 name: "Priority",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "character varying(20)",
                 maxLength: 20,
@@ -74,7 +74,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AlterColumn<string>(
                 name: "Frequency",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "character varying(20)",
                 maxLength: 20,
@@ -84,7 +84,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AddColumn<double>(
                 name: "PainVelocity",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "double precision",
                 nullable: false,
@@ -92,7 +92,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AddColumn<string>(
                 name: "Type",
-                schema: "issue",
+                schema: null,
                 table: "IssueComments",
                 type: "character varying(20)",
                 maxLength: 20,
@@ -101,7 +101,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "IssueActivities",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
@@ -122,7 +122,7 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_IssueActivities_Issues_IssueId",
                         column: x => x.IssueId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "Issues",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -130,7 +130,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "IssueRelations",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
@@ -149,14 +149,14 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_IssueRelations_Issues_IssueId",
                         column: x => x.IssueId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "Issues",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
                     table.ForeignKey(
                         name: "FK_IssueRelations_Issues_TargetIssueId",
                         column: x => x.TargetIssueId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "Issues",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -164,74 +164,74 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateIndex(
                 name: "IX_Issues_CreatedAt",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 column: "CreatedAt");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Issues_CreatorUserId",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 column: "CreatorUserId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Issues_PainScore",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 column: "PainScore");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Issues_PainVelocity",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 column: "PainVelocity");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Issues_Status",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 column: "Status");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Issues_Status_PainScore",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 columns: new[] { "Status", "PainScore" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_Issues_Status_PainVelocity",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 columns: new[] { "Status", "PainVelocity" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_Issues_Type",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 column: "Type");
 
             migrationBuilder.CreateIndex(
                 name: "IX_IssueActivities_CreatedAt",
-                schema: "issue",
+                schema: null,
                 table: "IssueActivities",
                 column: "CreatedAt");
 
             migrationBuilder.CreateIndex(
                 name: "IX_IssueActivities_IssueId",
-                schema: "issue",
+                schema: null,
                 table: "IssueActivities",
                 column: "IssueId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_IssueRelations_IssueId_TargetIssueId_RelationType",
-                schema: "issue",
+                schema: null,
                 table: "IssueRelations",
                 columns: new[] { "IssueId", "TargetIssueId", "RelationType" },
                 unique: true);
 
             migrationBuilder.CreateIndex(
                 name: "IX_IssueRelations_TargetIssueId",
-                schema: "issue",
+                schema: null,
                 table: "IssueRelations",
                 column: "TargetIssueId");
         }
@@ -241,65 +241,65 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.DropTable(
                 name: "IssueActivities",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropTable(
                 name: "IssueRelations",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropIndex(
                 name: "IX_Issues_CreatedAt",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropIndex(
                 name: "IX_Issues_CreatorUserId",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropIndex(
                 name: "IX_Issues_PainScore",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropIndex(
                 name: "IX_Issues_PainVelocity",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropIndex(
                 name: "IX_Issues_Status",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropIndex(
                 name: "IX_Issues_Status_PainScore",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropIndex(
                 name: "IX_Issues_Status_PainVelocity",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropIndex(
                 name: "IX_Issues_Type",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropColumn(
                 name: "PainVelocity",
-                schema: "issue",
+                schema: null,
                 table: "Issues");
 
             migrationBuilder.DropColumn(
                 name: "Type",
-                schema: "issue",
+                schema: null,
                 table: "IssueComments");
 
             migrationBuilder.AlterColumn<string>(
                 name: "OldStatus",
-                schema: "issue",
+                schema: null,
                 table: "IssueStatusHistories",
                 type: "text",
                 nullable: false,
@@ -309,7 +309,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AlterColumn<string>(
                 name: "NewStatus",
-                schema: "issue",
+                schema: null,
                 table: "IssueStatusHistories",
                 type: "text",
                 nullable: false,
@@ -319,7 +319,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AlterColumn<int>(
                 name: "Type",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "integer",
                 nullable: false,
@@ -329,7 +329,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AlterColumn<string>(
                 name: "Status",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "text",
                 nullable: false,
@@ -339,7 +339,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AlterColumn<string>(
                 name: "Severity",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "text",
                 nullable: false,
@@ -349,7 +349,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AlterColumn<string>(
                 name: "Priority",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "text",
                 nullable: false,
@@ -359,7 +359,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AlterColumn<string>(
                 name: "Frequency",
-                schema: "issue",
+                schema: null,
                 table: "Issues",
                 type: "text",
                 nullable: false,

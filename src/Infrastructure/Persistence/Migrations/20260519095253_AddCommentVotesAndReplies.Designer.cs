@@ -336,7 +336,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasKey("CommentId", "UserId");
 
-                    b.ToTable("CommentVotes", "issue");
+                    b.ToTable("CommentVotes");
                 });
 
             modelBuilder.Entity("Domain.Entities.Feedback", b =>
@@ -491,7 +491,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasIndex("SubcategoryId");
 
-                    b.ToTable("Issues", "issue");
+                    b.ToTable("Issues");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueComment", b =>
@@ -557,7 +557,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasIndex("ParentCommentId");
 
-                    b.ToTable("IssueComments", "issue");
+                    b.ToTable("IssueComments");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueTaxonomy", b =>
@@ -598,7 +598,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasIndex("ParentId");
 
-                    b.ToTable("IssueTaxonomies", "issue");
+                    b.ToTable("IssueTaxonomies");
                 });
 
             modelBuilder.Entity("Domain.Entities.IssueVote", b =>
@@ -614,7 +614,7 @@ namespace Infrastructure.Persistence.Migrations
 
                     b.HasKey("IssueId", "UserId");
 
-                    b.ToTable("IssueVotes", "issue");
+                    b.ToTable("IssueVotes");
                 });
 
             modelBuilder.Entity("Domain.Entities.RecurringTransaction", b =>

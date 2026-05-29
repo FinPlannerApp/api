@@ -14,7 +14,7 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.CreateTable(
                 name: "IssueStatusHistories",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
@@ -35,7 +35,7 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_IssueStatusHistories_Issues_IssueId",
                         column: x => x.IssueId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "Issues",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -43,7 +43,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateIndex(
                 name: "IX_IssueStatusHistories_IssueId",
-                schema: "issue",
+                schema: null,
                 table: "IssueStatusHistories",
                 column: "IssueId");
         }
@@ -53,7 +53,7 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.DropTable(
                 name: "IssueStatusHistories",
-                schema: "issue");
+                schema: null);
         }
     }
 }

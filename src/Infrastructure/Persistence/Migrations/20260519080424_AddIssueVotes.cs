@@ -12,7 +12,7 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.CreateTable(
                 name: "IssueVotes",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     IssueId = table.Column<int>(type: "integer", nullable: false),
@@ -24,7 +24,7 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_IssueVotes_Issues_IssueId",
                         column: x => x.IssueId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "Issues",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -36,7 +36,7 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.DropTable(
                 name: "IssueVotes",
-                schema: "issue");
+                schema: null);
         }
     }
 }

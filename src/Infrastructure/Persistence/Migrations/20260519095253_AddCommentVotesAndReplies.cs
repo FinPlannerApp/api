@@ -12,7 +12,7 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.AddColumn<int>(
                 name: "Value",
-                schema: "issue",
+                schema: null,
                 table: "IssueVotes",
                 type: "integer",
                 nullable: false,
@@ -20,14 +20,14 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.AddColumn<int>(
                 name: "ParentCommentId",
-                schema: "issue",
+                schema: null,
                 table: "IssueComments",
                 type: "integer",
                 nullable: true);
 
             migrationBuilder.AddColumn<int>(
                 name: "Score",
-                schema: "issue",
+                schema: null,
                 table: "IssueComments",
                 type: "integer",
                 nullable: false,
@@ -35,7 +35,7 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateTable(
                 name: "CommentVotes",
-                schema: "issue",
+                schema: null,
                 columns: table => new
                 {
                     CommentId = table.Column<int>(type: "integer", nullable: false),
@@ -48,7 +48,7 @@ namespace Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_CommentVotes_IssueComments_CommentId",
                         column: x => x.CommentId,
-                        principalSchema: "issue",
+                        principalSchema: null,
                         principalTable: "IssueComments",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -56,16 +56,16 @@ namespace Infrastructure.Persistence.Migrations
 
             migrationBuilder.CreateIndex(
                 name: "IX_IssueComments_ParentCommentId",
-                schema: "issue",
+                schema: null,
                 table: "IssueComments",
                 column: "ParentCommentId");
 
             migrationBuilder.AddForeignKey(
                 name: "FK_IssueComments_IssueComments_ParentCommentId",
-                schema: "issue",
+                schema: null,
                 table: "IssueComments",
                 column: "ParentCommentId",
-                principalSchema: "issue",
+                principalSchema: null,
                 principalTable: "IssueComments",
                 principalColumn: "Id",
                 onDelete: ReferentialAction.Restrict);
@@ -76,31 +76,31 @@ namespace Infrastructure.Persistence.Migrations
         {
             migrationBuilder.DropForeignKey(
                 name: "FK_IssueComments_IssueComments_ParentCommentId",
-                schema: "issue",
+                schema: null,
                 table: "IssueComments");
 
             migrationBuilder.DropTable(
                 name: "CommentVotes",
-                schema: "issue");
+                schema: null);
 
             migrationBuilder.DropIndex(
                 name: "IX_IssueComments_ParentCommentId",
-                schema: "issue",
+                schema: null,
                 table: "IssueComments");
 
             migrationBuilder.DropColumn(
                 name: "Value",
-                schema: "issue",
+                schema: null,
                 table: "IssueVotes");
 
             migrationBuilder.DropColumn(
                 name: "ParentCommentId",
-                schema: "issue",
+                schema: null,
                 table: "IssueComments");
 
             migrationBuilder.DropColumn(
                 name: "Score",
-                schema: "issue",
+                schema: null,
                 table: "IssueComments");
         }
     }
