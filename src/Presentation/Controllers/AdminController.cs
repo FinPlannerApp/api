@@ -80,6 +80,100 @@ public class AdminController : ControllerBase
     }
 
     /// <summary>
+    /// Get database diagnostic info including applied/pending migrations, schemas, and tables.
+    /// Protected by the bootstrap secret key.
+    /// GET /api/admin/diagnose?secretKey=your-secret
+    /// </summary>
+    [HttpGet("diagnose")]
+    [AllowAnonymous]
+    public async Task<ActionResult> DiagnoseDb(
+        [FromQuery] string secretKey,
+        [FromServices] IConfiguration config,
+        [FromServices] ApplicationDbContext db)
+    {
+        var expectedKey = config["AdminBootstrapKey"] ?? "admin-setup-key-2026";
+        if (secretKey != expectedKey)
+            return Unauthorized(new { message = "Invalid secret key." });
+
+        try
+        {
+            var pending = (await db.Database.GetPendingMigrationsAsync()).ToList();
+            var applied = (await db.Database.GetAppliedMigrationsAsync()).ToList();
+
+            var schemas = new List<string>();
+            var publicTables = new List<string>();
+            var issueTables = new List<string>();
+
+            var conn = db.Database.GetDbConnection();
+            var wasClosed = conn.State == System.Data.ConnectionState.Closed;
+            if (wasClosed) await conn.OpenAsync();
+
+            try
+            {
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name;";
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            schemas.Add(reader.GetString(0));
+                        }
+                    }
+                }
+
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;";
+                    using (var reader = await cmd.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            publicTables.Add(reader.GetString(0));
+                        }
+                    }
+                }
+
+                if (schemas.Contains("issue"))
+                {
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'issue' ORDER BY table_name;";
+                        using (var reader = await cmd.ExecuteReaderAsync())
+                        {
+                            while (await reader.ReadAsync())
+                            {
+                                issueTables.Add(reader.GetString(0));
+                            }
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                if (wasClosed) await conn.CloseAsync();
+            }
+
+            return Ok(new
+            {
+                appliedMigrationsCount = applied.Count,
+                appliedMigrations = applied,
+                pendingMigrationsCount = pending.Count,
+                pendingMigrations = pending,
+                schemas,
+                publicTablesCount = publicTables.Count,
+                publicTables,
+                issueTablesCount = issueTables.Count,
+                issueTables
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Diagnostics failed.", error = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// Apply pending EF Core migrations and seed taxonomy/roadmap data.
     /// Protected by the bootstrap secret key — call after deploy to set up production DB.
     /// POST /api/admin/migrate-and-seed { "secretKey": "your-secret" }
