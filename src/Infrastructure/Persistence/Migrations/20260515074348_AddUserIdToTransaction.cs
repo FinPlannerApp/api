@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -214,26 +214,11 @@ namespace Infrastructure.Persistence.Migrations
                 table: "Subscriptions",
                 columns: new[] { "UserId", "Name" },
                 unique: true);
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_Transactions_Users_UserId",
-                schema: "transactions",
-                table: "Transactions",
-                column: "UserId",
-                principalSchema: "identity",
-                principalTable: "Users",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Cascade);
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropForeignKey(
-                name: "FK_Transactions_Users_UserId",
-                schema: "transactions",
-                table: "Transactions");
-
             migrationBuilder.DropTable(
                 name: "IssueComments",
                 schema: null);
