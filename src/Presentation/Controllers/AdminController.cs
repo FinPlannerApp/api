@@ -291,7 +291,7 @@ public class AdminController : ControllerBase
     /// <summary>
     /// Apply pending EF Core migrations and seed taxonomy/roadmap data.
     /// Protected by the bootstrap secret key — call after deploy to set up production DB.
-    /// POST /api/admin/migrate-and-seed { "secretKey": "your-secret" }
+    /// POST /api/admin/migrate-and-seed { "secretKey": "your-secret", "bypassMigration": true }
     /// </summary>
     [HttpPost("migrate-and-seed")]
     [AllowAnonymous]
@@ -309,16 +309,23 @@ public class AdminController : ControllerBase
 
         try
         {
-            // 1. Apply pending migrations
-            var pendingMigrations = (await db.Database.GetPendingMigrationsAsync()).ToList();
-            if (pendingMigrations.Count > 0)
+            // 1. Apply pending migrations (unless explicitly bypassed)
+            if (input.BypassMigration != true)
             {
-                await db.Database.MigrateAsync();
-                results.Add($"Applied {pendingMigrations.Count} migration(s): {string.Join(", ", pendingMigrations)}");
+                var pendingMigrations = (await db.Database.GetPendingMigrationsAsync()).ToList();
+                if (pendingMigrations.Count > 0)
+                {
+                    await db.Database.MigrateAsync();
+                    results.Add($"Applied {pendingMigrations.Count} migration(s): {string.Join(", ", pendingMigrations)}");
+                }
+                else
+                {
+                    results.Add("No pending migrations.");
+                }
             }
             else
             {
-                results.Add("No pending migrations.");
+                results.Add("Bypassed EF Core DDL migration because bypassMigration was set to true.");
             }
 
             // 2. Seed taxonomy categories and roadmap items
@@ -348,4 +355,5 @@ public class BootstrapAdminDto
 public class MigrateDto
 {
     public required string SecretKey { get; set; }
+    public bool? BypassMigration { get; set; }
 }
