@@ -204,7 +204,7 @@ public class AdminController : ControllerBase
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = @"
-                        DELETE FROM ""__EFMigrationsHistory"" 
+                        DELETE FROM identity.""__EFMigrationsHistory"" 
                         WHERE ""MigrationId"" IN (
                             '20260515074348_AddUserIdToTransaction',
                             '20260519074920_AddIssueTrackingSystem',
