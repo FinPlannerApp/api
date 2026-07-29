@@ -1,58 +1,92 @@
 name: Keep Render API Alive
 
-# ── Why this exists ────────────────────────────────────────────────────────────
-# Render.com free tier spins down after 15 minutes of HTTP inactivity.
-# This workflow pings the /healthz endpoint every 14 minutes so the container
-# stays warm, Hangfire recurring jobs don't miss their window, and first-request
-# latency stays low for real users.
+# ──────────────────────────────────────────────────────────────────────────────
+# Purpose
+# ------------------------------------------------------------------------------
+# Render Free services spin down after ~15 minutes of inactivity.
+# This workflow periodically calls the API's /healthz endpoint to keep the
+# service warm and reduce cold starts.
 #
-# Cost: each run takes ~5s → ~5 min/day → ~150 min/month out of 2000 free min.
+# Setup
+# ------------------------------------------------------------------------------
+# 1. Go to:
+#      GitHub → Repository → Settings → Secrets and variables → Actions
 #
-# Setup:
-#   1. Add a GitHub Actions secret named RENDER_API_URL
-#      Value: https://your-app-name.onrender.com   (no trailing slash)
-#   2. Place this file at: .github/workflows/keep-alive.yml
+# 2. Create a Repository Secret:
+#      Name : RENDER_API_URL
+#      Value: https://your-app-name.onrender.com
+#      (Do NOT include a trailing slash)
+#
+# 3. Save this file as:
+#      .github/workflows/keep-render-alive.yml
+#
+# Notes
+# ------------------------------------------------------------------------------
+# • GitHub Actions schedules are not guaranteed to execute exactly on time.
+# • Using a 10-minute interval provides a safe buffer before Render's
+#   15-minute inactivity timeout.
+# • This workflow is intentionally non-blocking. Temporary API failures won't
+#   fail the workflow because the next scheduled ping will retry.
 # ──────────────────────────────────────────────────────────────────────────────
 
 on:
   schedule:
-    - cron: '*/14 * * * *'   # every 14 minutes, all day every day
-  workflow_dispatch:           # allow manual trigger from GitHub UI
+    - cron: "*/10 * * * *" # Every 10 minutes (UTC)
+  workflow_dispatch:
+
+concurrency:
+  group: keep-render-alive
+  cancel-in-progress: true
 
 jobs:
   ping:
-    name: Ping API
+    name: Ping Render API
     runs-on: ubuntu-latest
     timeout-minutes: 2
 
     steps:
-      - name: Ping /healthz
+      - name: Validate configuration
         env:
           API_URL: ${{ secrets.RENDER_API_URL }}
         run: |
           if [ -z "$API_URL" ]; then
-            echo "ERROR: RENDER_API_URL secret is not set."
+            echo "❌ ERROR: Repository secret 'RENDER_API_URL' is missing."
             exit 1
           fi
 
-          echo "Pinging $API_URL/healthz ..."
+      - name: Ping Health Endpoint
+        env:
+          API_URL: ${{ secrets.RENDER_API_URL }}
+        run: |
+          echo "----------------------------------------"
+          echo "Starting keep-alive ping..."
+          echo "Target: $API_URL/healthz"
+          echo "UTC Time: $(date -u)"
+          echo "----------------------------------------"
 
-          HTTP_STATUS=$(curl \
+          RESULT=$(curl \
             --silent \
             --output /dev/null \
-            --write-out "%{http_code}" \
+            --write-out "%{http_code} %{time_total}" \
             --max-time 40 \
             --retry 2 \
             --retry-delay 5 \
             --retry-connrefused \
+            --user-agent "github-actions-render-keepalive/1.0" \
             "$API_URL/healthz")
 
-          echo "Response: $HTTP_STATUS"
+          HTTP_STATUS=$(echo "$RESULT" | awk '{print $1}')
+          RESPONSE_TIME=$(echo "$RESULT" | awk '{print $2}')
+
+          echo ""
+          echo "HTTP Status : $HTTP_STATUS"
+          echo "Response    : ${RESPONSE_TIME}s"
+          echo ""
 
           if [ "$HTTP_STATUS" = "200" ]; then
-            echo "API is alive."
+            echo "✅ Render API is healthy."
           else
-            echo "WARNING: API returned HTTP $HTTP_STATUS"
-            # Don't fail the workflow on non-200 — the next ping will retry.
-            # Failing here would spam GitHub notifications unnecessarily.
+            echo "⚠️ Warning: API returned HTTP $HTTP_STATUS"
+            echo "The workflow will continue."
+            echo "The next scheduled ping will retry automatically."
           fi
