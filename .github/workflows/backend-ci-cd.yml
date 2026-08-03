@@ -38,6 +38,22 @@ jobs:
       - name: Build
         run: dotnet build src/Presentation/API.csproj -c Release --no-restore
 
+      - name: DEBUG - Flyway info (verbose)
+        env:
+          FLYWAY_URL: ${{ secrets.FLYWAY_DB_URL }}
+          FLYWAY_USER: ${{ secrets.FLYWAY_DB_USER }}
+          FLYWAY_PASSWORD: ${{ secrets.FLYWAY_DB_PASSWORD }}
+        run: |
+          docker run --rm \
+            -e FLYWAY_URL \
+            -e FLYWAY_USER \
+            -e FLYWAY_PASSWORD \
+            -v ${{ github.workspace }}/db/migrations:/flyway/sql \
+            -v ${{ github.workspace }}/flyway.conf:/flyway/conf/flyway.conf \
+            flyway/flyway:11 \
+            -X \
+            info
+
       # Run migrations on production database when pushing to main
       - name: Run Flyway Migrations (Production)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
