@@ -38,22 +38,6 @@ jobs:
       - name: Build
         run: dotnet build src/Presentation/API.csproj -c Release --no-restore
 
-      - name: DEBUG - Flyway info (verbose)
-        env:
-          FLYWAY_URL: ${{ secrets.FLYWAY_DB_URL }}
-          FLYWAY_USER: ${{ secrets.FLYWAY_DB_USER }}
-          FLYWAY_PASSWORD: ${{ secrets.FLYWAY_DB_PASSWORD }}
-        run: |
-          docker run --rm \
-            -e FLYWAY_URL \
-            -e FLYWAY_USER \
-            -e FLYWAY_PASSWORD \
-            -v ${{ github.workspace }}/db/migrations:/flyway/sql \
-            -v ${{ github.workspace }}/flyway.conf:/flyway/conf/flyway.conf \
-            flyway/flyway:11 \
-            -X \
-            info
-
       # Run migrations on production database when pushing to main
       - name: Run Flyway Migrations (Production)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -91,7 +75,11 @@ jobs:
       - name: Trigger Render Deploy Hook (main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
+          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK }}" ]; then
+            echo "::error::RENDER_DEPLOY_HOOK secret is empty or not set. Check https://github.com/${{ github.repository }}/settings/secrets/actions"
+            exit 1
+          fi
+          curl -f -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
           echo "Triggered Render deployment for main branch."
 
       - name: Login to GitHub Container Registry (devel)
@@ -114,5 +102,9 @@ jobs:
       - name: Trigger Homelab Deploy Hook (devel)
         if: github.event_name == 'push' && github.ref == 'refs/heads/devel'
         run: |
-          curl -X POST "${{ secrets.HOMELAB_DEPLOY_HOOK }}"
+          if [ -z "${{ secrets.HOMELAB_DEPLOY_HOOK }}" ]; then
+            echo "::error::HOMELAB_DEPLOY_HOOK secret is empty or not set. Check https://github.com/${{ github.repository }}/settings/secrets/actions"
+            exit 1
+          fi
+          curl -f -X POST "${{ secrets.HOMELAB_DEPLOY_HOOK }}"
           echo "Triggered Homelab deployment for devel branch."
