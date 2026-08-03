@@ -1,5 +1,16 @@
 ﻿START TRANSACTION;
 
+-- Restored: EF Core's idempotent script wraps every single statement below
+-- in a check against this table. It must exist (even empty) for those
+-- guards to evaluate correctly on a database that has never seen any of
+-- these migrations before. Safe to run against production too --
+-- CREATE TABLE IF NOT EXISTS is a no-op there since it already exists.
+CREATE TABLE IF NOT EXISTS "__EFMigrationsHistory" (
+    "MigrationId" character varying(150) NOT NULL,
+    "ProductVersion" character varying(32) NOT NULL,
+    CONSTRAINT "PK___EFMigrationsHistory" PRIMARY KEY ("MigrationId")
+);
+
 DO $EF$
 BEGIN
     IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20260803152434_AddIsLiabilityToAccountCategories') THEN
