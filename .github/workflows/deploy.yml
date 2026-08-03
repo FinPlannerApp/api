@@ -35,15 +35,16 @@ jobs:
       - name: Build
         run: dotnet build ./src/Presentation/API.csproj -c Release --no-restore
 
-      - name: Apply Neon Database Migrations
-        env:
-          DB_CONNECTION_STRING: ${{ secrets.NEON_DATABASE_URL }}
+      - name: Run Flyway Migrations
         run: |
-          dotnet tool install --global dotnet-ef || true
-          dotnet ef database update \
-            --project ./src/Infrastructure/Infrastructure.csproj \
-            --startup-project ./src/Presentation/API.csproj \
-            --connection "$DB_CONNECTION_STRING" || echo "Migration command executed."
+          docker run --rm \
+            -v ${{ github.workspace }}/backend/db/migrations:/flyway/sql \
+            -v ${{ github.workspace }}/backend/flyway.conf:/flyway/conf/flyway.conf \
+            flyway/flyway:11 \
+            -url="${{ secrets.FLYWAY_DB_URL }}" \
+            -user="${{ secrets.FLYWAY_DB_USER }}" \
+            -password="${{ secrets.FLYWAY_DB_PASSWORD }}" \
+            migrate
 
       - name: Trigger Render Deploy Hook (main)
         if: github.ref == 'refs/heads/main'

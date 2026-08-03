@@ -5,11 +5,13 @@ on:
     branches: ["main"]
     paths:
       - "src/**"
+      - "db/migrations/**"
       - ".github/workflows/backend-ci.yml"
   pull_request:
     branches: ["main"]
     paths:
       - "src/**"
+      - "db/migrations/**"
 
 jobs:
   build:
@@ -26,18 +28,30 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore src/Presentation/API.csproj
 
-      - name: Install EF Core CLI Tool
-        run: dotnet tool install --global dotnet-ef
-
       - name: Build
         run: |
           cd src/Presentation
           dotnet build API.csproj --no-restore -c Release
 
-      - name: Apply Database Migrations
+      # ─────────────────────────────────────────────────────────────────
+      # Replaces the old "Apply Database Migrations" step (dotnet ef
+      # database update). That step is GONE — dotnet-ef is no longer
+      # installed or invoked anywhere in this pipeline.
+      #
+      # IMPORTANT: FLYWAY_DB_URL must be the DIRECT Neon connection
+      # (no "-pooler" in the hostname). The pooled endpoint uses PgBouncer
+      # in transaction mode, which doesn't support the prepared statements
+      # Flyway (and EF Core migrations, which is what was failing before)
+      # relies on. Get the direct URL from Neon dashboard → Connection
+      # Details → toggle OFF "Pooled connection".
+      # ─────────────────────────────────────────────────────────────────
+      - name: Run Flyway Migrations
         run: |
-          export PATH="$PATH:$HOME/.dotnet/tools"
-          dotnet ef database update \
-            --project src/Infrastructure/Infrastructure.csproj \
-            --startup-project src/Presentation/API.csproj \
-            --connection "${{ secrets.DB_ADMIN_CONNECTION_STRING }}"
+          docker run --rm \
+            -v ${{ github.workspace }}/db/migrations:/flyway/sql \
+            -v ${{ github.workspace }}/flyway.conf:/flyway/conf/flyway.conf \
+            flyway/flyway:11 \
+            -url="${{ secrets.FLYWAY_DB_URL }}" \
+            -user="${{ secrets.FLYWAY_DB_USER }}" \
+            -password="${{ secrets.FLYWAY_DB_PASSWORD }}" \
+            migrate
