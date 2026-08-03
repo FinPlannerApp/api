@@ -18,6 +18,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Debug secret length (temporary - remove after)
+        env:
+          FLYWAY_PASSWORD: ${{ secrets.FLYWAY_DB_PASSWORD }}
+        run: echo "Password is ${#FLYWAY_PASSWORD} characters"
+
       - uses: actions/checkout@v4
 
       - name: Setup .NET 10
