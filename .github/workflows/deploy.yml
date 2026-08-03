@@ -36,14 +36,18 @@ jobs:
         run: dotnet build ./src/Presentation/API.csproj -c Release --no-restore
 
       - name: Run Flyway Migrations
+        env:
+          FLYWAY_URL: ${{ secrets.FLYWAY_DB_URL }}
+          FLYWAY_USER: ${{ secrets.FLYWAY_DB_USER }}
+          FLYWAY_PASSWORD: ${{ secrets.FLYWAY_DB_PASSWORD }}
         run: |
           docker run --rm \
+            -e FLYWAY_URL \
+            -e FLYWAY_USER \
+            -e FLYWAY_PASSWORD \
             -v ${{ github.workspace }}/backend/db/migrations:/flyway/sql \
             -v ${{ github.workspace }}/backend/flyway.conf:/flyway/conf/flyway.conf \
             flyway/flyway:11 \
-            -url="${{ secrets.FLYWAY_DB_URL }}" \
-            -user="${{ secrets.FLYWAY_DB_USER }}" \
-            -password="${{ secrets.FLYWAY_DB_PASSWORD }}" \
             migrate
 
       - name: Trigger Render Deploy Hook (main)

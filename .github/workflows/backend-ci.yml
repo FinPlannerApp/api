@@ -46,12 +46,16 @@ jobs:
       # Details → toggle OFF "Pooled connection".
       # ─────────────────────────────────────────────────────────────────
       - name: Run Flyway Migrations
+        env:
+          FLYWAY_URL: ${{ secrets.FLYWAY_DB_URL }}
+          FLYWAY_USER: ${{ secrets.FLYWAY_DB_USER }}
+          FLYWAY_PASSWORD: ${{ secrets.FLYWAY_DB_PASSWORD }}
         run: |
           docker run --rm \
-            -v ${{ github.workspace }}/db/migrations:/flyway/sql \
-            -v ${{ github.workspace }}/flyway.conf:/flyway/conf/flyway.conf \
+            -e FLYWAY_URL \
+            -e FLYWAY_USER \
+            -e FLYWAY_PASSWORD \
+            -v ${{ github.workspace }}/backend/db/migrations:/flyway/sql \
+            -v ${{ github.workspace }}/backend/flyway.conf:/flyway/conf/flyway.conf \
             flyway/flyway:11 \
-            -url="${{ secrets.FLYWAY_DB_URL }}" \
-            -user="${{ secrets.FLYWAY_DB_USER }}" \
-            -password="${{ secrets.FLYWAY_DB_PASSWORD }}" \
             migrate
