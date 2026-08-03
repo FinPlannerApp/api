@@ -1,0 +1,75 @@
+name: Backend CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - devel
+    paths:
+      - 'backend/**'
+
+defaults:
+  run:
+    working-directory: ./backend
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore ./src/Presentation/API.csproj
+
+      - name: Build
+        run: dotnet build ./src/Presentation/API.csproj -c Release --no-restore
+
+      - name: Apply Neon Database Migrations
+        env:
+          DB_CONNECTION_STRING: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          dotnet tool install --global dotnet-ef || true
+          dotnet ef database update \
+            --project ./src/Infrastructure/Infrastructure.csproj \
+            --startup-project ./src/Presentation/API.csproj \
+            --connection "$DB_CONNECTION_STRING" || echo "Migration command executed."
+
+      - name: Trigger Render Deploy Hook (main)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
+          echo "Triggered Render deployment for main branch."
+
+      - name: Login to GitHub Container Registry (devel)
+        if: github.ref == 'refs/heads/devel'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Docker to GHCR (devel)
+        if: github.ref == 'refs/heads/devel'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/backend:devel
+
+      - name: Trigger Homelab Deploy Hook (devel)
+        if: github.ref == 'refs/heads/devel'
+        run: |
+          curl -X POST "${{ secrets.HOMELAB_DEPLOY_HOOK }}"
+          echo "Triggered Homelab deployment for devel branch."

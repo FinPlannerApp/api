@@ -14,26 +14,26 @@ namespace Infrastructure.Persistence.Migrations
         {
             
 
-            migrationBuilder.AddColumn<string>(
-                name: "UserId",
-                schema: "transactions",
-                table: "Transactions",
-                type: "text",
-                nullable: true);
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='transactions' AND table_name='Transactions' AND column_name='UserId') THEN
+                        ALTER TABLE transactions.""Transactions"" ADD COLUMN ""UserId"" text;
+                    END IF;
+                END $$;");
 
             // Production Fix: Assign existing transactions to a default 'system' user.
             // This prevents null column violations when applying the NOT NULL constraint to existing data.
             migrationBuilder.Sql("UPDATE transactions.\"Transactions\" SET \"UserId\" = 'system' WHERE \"UserId\" IS NULL;");
 
-            // If there are still NULLs (i.e. no users exist), we can't make it NOT NULL yet.
-            // But usually there is at least one user (the one who set up the system).
-            migrationBuilder.AlterColumn<string>(
-                name: "UserId",
-                schema: "transactions",
-                table: "Transactions",
-                type: "text",
-                nullable: false,
-                defaultValue: "");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    ALTER TABLE transactions.""Transactions"" ALTER COLUMN ""UserId"" SET NOT NULL;
+                    ALTER TABLE transactions.""Transactions"" ALTER COLUMN ""UserId"" SET DEFAULT '';
+                EXCEPTION WHEN OTHERS THEN
+                    -- Ignore if already configured
+                END $$;");
 
             migrationBuilder.CreateTable(
                 name: "IssueTaxonomies",
@@ -171,11 +171,7 @@ namespace Infrastructure.Persistence.Migrations
                         onDelete: ReferentialAction.Cascade);
                 });
 
-            migrationBuilder.CreateIndex(
-                name: "IX_Transactions_UserId",
-                schema: "transactions",
-                table: "Transactions",
-                column: "UserId");
+            migrationBuilder.Sql(@"CREATE INDEX IF NOT EXISTS ""IX_Transactions_UserId"" ON transactions.""Transactions"" (""UserId"");");
 
             migrationBuilder.CreateIndex(
                 name: "IX_IssueComments_IssueId",

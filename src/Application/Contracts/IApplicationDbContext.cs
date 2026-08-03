@@ -14,6 +14,8 @@ public interface IApplicationDbContext
     DbSet<RecurringTransaction> RecurringTransactions { get; }
     DbSet<Subscription> Subscriptions { get; }
 
+    DbSet<ApplicationUser> Users { get; }
+
     DbSet<Issue> Issues { get; }
     DbSet<IssueTaxonomy> IssueTaxonomies { get; }
     DbSet<IssueComment> IssueComments { get; }
@@ -32,5 +34,9 @@ public interface IApplicationDbContext
     DbSet<IssueRelation> IssueRelations { get; }
     DbSet<IssueActivity> IssueActivities { get; }
     
+    DbSet<ChallengeDay> ChallengeDays { get; }
+    DbSet<UserChallengeEnrollment> UserChallengeEnrollments { get; }
+    DbSet<UserChallengeProgress> UserChallengeProgresses { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

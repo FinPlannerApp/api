@@ -10,6 +10,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using Hangfire.PostgreSql;
 
 namespace API.Extensions;
 
@@ -88,12 +89,13 @@ public static class InfrastructureServiceExtensions
             .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
             .UseSimpleAssemblyNameTypeSerializer()
             .UseRecommendedSerializerSettings()
-            .UseMemoryStorage());
+            .UsePostgreSqlStorage(o => o.UseNpgsqlConnection(configuration.GetConnectionString("DefaultConnection")!)));
         
         services.AddHangfireServer();
         
         services.AddScoped<RecurringTransactionJob>();
         services.AddScoped<UpdatePainVelocityJob>();
+        services.AddScoped<RefreshTokenCleanupJob>();
 
         // 3. Register Identity with STRONG password requirements (dev AND production)
         services.AddIdentityCore<ApplicationUser>(options =>

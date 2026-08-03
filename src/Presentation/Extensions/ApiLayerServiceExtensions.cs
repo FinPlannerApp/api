@@ -1,4 +1,4 @@
-﻿using API.Filters;
+using API.Filters;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.OpenApi.Models;
@@ -63,11 +63,7 @@ public static class ApiLayerServiceExtensions
             options.AddPolicy(name: "AllowSpecificOrigins",
                               policy =>
                               {
-                                  policy.WithOrigins(
-                                            "http://localhost:4200",
-                                            "https://financialplanner.pages.dev",
-                                            "https://finplanner.ska97homelab.uk"
-                                        )
+                                  policy.SetIsOriginAllowed(origin => true)
                                         .AllowAnyHeader()
                                         .AllowAnyMethod()
                                         .AllowCredentials();

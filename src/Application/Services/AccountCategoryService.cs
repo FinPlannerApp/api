@@ -81,15 +81,17 @@ public class AccountCategoryService : ICategoryService<AccountCategoryDto, Upser
             if (category == null || category.UserId != userId)
                 return Result.Failure<AccountCategoryDto>(new Error("Category.NotFound", "Category not found."));
 
-            category.Name = ToTitleCase(dto.Name);
+            category.Name        = ToTitleCase(dto.Name);
+            category.IsLiability = dto.IsLiability;
             _context.AccountCategories.Update(category);
         }
         else
         {
             category = new AccountCategory
             {
-                Name = ToTitleCase(dto.Name),
-                UserId = userId
+                Name        = ToTitleCase(dto.Name),
+                UserId      = userId,
+                IsLiability = dto.IsLiability
             };
             _context.AccountCategories.Add(category);
         }
@@ -125,8 +127,9 @@ public class AccountCategoryService : ICategoryService<AccountCategoryDto, Upser
     {
         return new AccountCategoryDto
         {
-            Id = c.Id,
-            Name = c.Name
+            Id          = c.Id,
+            Name        = c.Name,
+            IsLiability = c.IsLiability
         };
     }
 

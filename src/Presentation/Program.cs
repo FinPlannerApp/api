@@ -124,6 +124,9 @@ using (var scope = app.Services.CreateScope())
         var seeder = services.GetRequiredService<Application.Services.TaxonomySeederService>();
         await seeder.SeedAsync();
 
+        var challengeSeeder = services.GetRequiredService<Application.Services.ChallengeSeederService>();
+        await challengeSeeder.SeedAsync();
+
         // Seed Admin role
         var roleManager = services.GetRequiredService<Microsoft.AspNetCore.Identity.RoleManager<Microsoft.AspNetCore.Identity.IdentityRole>>();
         if (!await roleManager.RoleExistsAsync("Admin"))
@@ -145,7 +148,29 @@ app.Use(async (context, next) =>
     context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
     context.Response.Headers.Append("X-Frame-Options", "DENY");
     context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
-    context.Response.Headers.Append("Content-Security-Policy", "default-src 'self' https://finplanner.ska97homelab.uk; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://static.cloudflareinsights.com https://finplanner.ska97homelab.uk; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://finplanner.ska97homelab.uk; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https: http://localhost:5018 https://localhost:7123 https://www.google-analytics.com https://www.googletagmanager.com https://cloudflareinsights.com https://finplanner.ska97homelab.uk; object-src 'none'; base-uri 'self';");
+
+    // Dynamically allow the request's origin and host in connect-src (crucial for local network/IP hosting)
+    var origin = context.Request.Headers.Origin.ToString();
+    var host = context.Request.Host.Value;
+    var dynamicConnectSrc = "";
+    if (!string.IsNullOrEmpty(origin))
+    {
+        dynamicConnectSrc += $" {origin}";
+    }
+    if (!string.IsNullOrEmpty(host))
+    {
+        dynamicConnectSrc += $" http://{host} https://{host}";
+    }
+
+    context.Response.Headers.Append("Content-Security-Policy", 
+        $"default-src 'self' https://finplanner.ska97homelab.uk; " +
+        $"script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://static.cloudflareinsights.com https://finplanner.ska97homelab.uk; " +
+        $"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://finplanner.ska97homelab.uk; " +
+        $"img-src 'self' data: https:; " +
+        $"font-src 'self' data: https://fonts.gstatic.com; " +
+        $"connect-src 'self' https: http://localhost:5018 https://localhost:7123{dynamicConnectSrc} https://www.google-analytics.com https://www.googletagmanager.com https://cloudflareinsights.com https://finplanner.ska97homelab.uk; " +
+        $"object-src 'none'; base-uri 'self';");
+
     await next();
 });
 
@@ -154,7 +179,11 @@ app.UseAuthorization();
 app.UseMiddleware<SessionValidationMiddleware>();
 app.UseMiddleware<UpdateLastSeenMiddleware>();
 
-app.UseHangfireDashboard();
+app.UseHangfireDashboard("/hangfire", new DashboardOptions
+{
+    Authorization = new[] { new HangfireAdminAuthFilter() }
+});
+
 
 Hangfire.RecurringJob.AddOrUpdate<Infrastructure.BackgroundJobs.RecurringTransactionJob>(
     "process-recurring-transactions",
@@ -165,6 +194,14 @@ Hangfire.RecurringJob.AddOrUpdate<Infrastructure.BackgroundJobs.UpdatePainVeloci
     "update-pain-velocities",
     job => job.UpdateVelocitiesAsync(),
     Hangfire.Cron.Hourly());
+
+// Daily at 02:00 UTC — prune expired/revoked refresh tokens
+Hangfire.RecurringJob.AddOrUpdate<Infrastructure.BackgroundJobs.RefreshTokenCleanupJob>(
+    "cleanup-refresh-tokens",
+    job => job.CleanupAsync(),
+    "0 2 * * *");
+
+
 
 app.MapControllers();
 

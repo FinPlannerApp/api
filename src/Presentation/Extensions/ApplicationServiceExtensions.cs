@@ -33,6 +33,8 @@ public static class ApplicationServiceExtensions
         services.AddScoped<IssueRankingService>();
         services.AddScoped<IssueSimilarityService>();
         services.AddScoped<TaxonomySeederService>();
+        services.AddScoped<IChallengeService, ChallengeService>();
+        services.AddScoped<ChallengeSeederService>();
         services.AddScoped<GamificationService>();
         services.AddScoped<IssueWorkflowService>();
         services.AddScoped<VoteService>();

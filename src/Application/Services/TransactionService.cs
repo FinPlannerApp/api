@@ -7,16 +7,22 @@ using Application.DTOs.Transactions;
 using Domain.Entities;
 using Domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 public class TransactionService : ITransactionService
 {
     private readonly IApplicationDbContext _context;
     private readonly ICacheService _cache;
+    private readonly ILogger<TransactionService> _logger;
 
-    public TransactionService(IApplicationDbContext context, ICacheService cache)
+    public TransactionService(
+        IApplicationDbContext context,
+        ICacheService cache,
+        ILogger<TransactionService> logger)
     {
         _context = context;
         _cache = cache;
+        _logger = logger;
     }
 
     public async Task<Result<PaginatedResult<TransactionDto>>> GetTransactionsAsync(string userId, int accountId, QueryParameters queryParams)
@@ -89,6 +95,84 @@ public class TransactionService : ITransactionService
         );
         return Result.Success(pagedDto);
     }
+
+    public async Task<Result<BulkInsertResponseDto>> BulkUpsertTransactionsAsync(string userId, BulkTransactionPayloadDto payload)
+    {
+        var response = new BulkInsertResponseDto();
+
+        using var dbTransaction = await ((DbContext)_context).Database.BeginTransactionAsync();
+
+        try
+        {
+            for (int i = 0; i < payload.Transactions.Count; i++)
+            {
+                var entry      = payload.Transactions[i];
+                bool rowOk     = false;
+                string rowErr  = string.Empty;
+
+                if (entry.DestinationAccountId.HasValue)
+                {
+                    var transferDto = new CreateTransferDto
+                    {
+                        Amount                = entry.Transaction.Amount,
+                        Date                  = entry.Transaction.Date,
+                        DestinationAccountId  = entry.DestinationAccountId.Value,
+                        Description           = entry.Transaction.Description ?? "Transfer",
+                        TransactionCategoryId = entry.Transaction.TransactionCategoryId
+                    };
+                    var result = await CreateTransferAsync(userId, entry.AccountId, transferDto);
+                    rowOk  = result.IsSuccess;
+                    if (!rowOk) rowErr = result.Error.Description;
+                }
+                else
+                {
+                    var result = await UpsertTransactionAsync(userId, entry.AccountId, entry.Transaction);
+                    rowOk  = result.IsSuccess;
+                    if (!rowOk) rowErr = result.Error.Description;
+                }
+
+                if (rowOk)
+                {
+                    response.SuccessfulCount++;
+                }
+                else
+                {
+                    response.FailedCount++;
+                    response.FailedTransactions.Add(new BulkInsertFailureDto
+                    {
+                        Index  = i,
+                        Errors = new List<string> { rowErr }
+                    });
+                }
+            }
+
+            // ── FIX: only commit when EVERY row succeeded ─────────────────────
+            if (response.FailedCount == 0)
+            {
+                await dbTransaction.CommitAsync();
+                await _cache.RemoveByPrefixAsync($"dash::{userId}:");
+            }
+            else
+            {
+                // Roll back everything — no partial financial state
+                await dbTransaction.RollbackAsync();
+                response.SuccessfulCount = 0; // none were actually committed
+                _logger.LogWarning(
+                    "BulkUpsert rolled back for user {UserId}. {Failed}/{Total} rows failed.",
+                    userId, response.FailedCount, payload.Transactions.Count);
+            }
+
+            return Result.Success(response);
+        }
+        catch (Exception ex)
+        {
+            await dbTransaction.RollbackAsync();
+            _logger.LogError(ex, "BulkUpsert threw unexpectedly for user {UserId}", userId);
+            return Result.Failure<BulkInsertResponseDto>(
+                new Error("BulkInsert.Error", "An unexpected error occurred during bulk insert."));
+        }
+    }
+
 
     public async Task<Result<TransactionDto>> UpsertTransactionAsync(string userId, int accountId, UpsertTransactionDto dto)
     {
@@ -179,7 +263,11 @@ public class TransactionService : ITransactionService
 
     public async Task<Result<bool>> CreateTransferAsync(string userId, int sourceAccountId, CreateTransferDto dto)
     {
-        var sourceAccount = await _context.Accounts.FindAsync(sourceAccountId);
+        // ── Load source account ────────────────────────────────────────────────
+        var sourceAccount = await _context.Accounts
+            .Include(a => a.AccountCategory)          // needed for credit/loan check
+            .FirstOrDefaultAsync(a => a.Id == sourceAccountId);
+
         if (sourceAccount == null || sourceAccount.UserId != userId)
             return Result.Failure<bool>(new Error("Account.NotFound", "Source account not found."));
 
@@ -190,27 +278,41 @@ public class TransactionService : ITransactionService
         if (sourceAccountId == dto.DestinationAccountId)
             return Result.Failure<bool>(new Error("Transfer.SameAccount", "Cannot transfer to the same account."));
 
+        // ── Balance check (skip for Credit Card / Loan accounts) ──────────────
+        var categoryName = sourceAccount.AccountCategory?.Name ?? string.Empty;
+        bool isCreditLiability = categoryName.Equals("Credit Card", StringComparison.OrdinalIgnoreCase)
+                              || categoryName.Equals("Loan",         StringComparison.OrdinalIgnoreCase)
+                              || categoryName.Equals("Credit",       StringComparison.OrdinalIgnoreCase);
+
+        if (!isCreditLiability && sourceAccount.Balance < dto.Amount)
+        {
+            return Result.Failure<bool>(new Error(
+                "Transfer.InsufficientFunds",
+                $"Insufficient balance. Available: {sourceAccount.Balance:F2}, Requested: {dto.Amount:F2}."));
+        }
+
+        // ── Create the two transaction legs ───────────────────────────────────
         var expenseTransaction = new Transaction
         {
-            Description = $"Transfer to {destinationAccount.Name}",
-            Amount = dto.Amount,
-            Date = dto.Date,
-            Type = TransactionType.Expense,
-            AccountId = sourceAccountId,
+            Description           = $"Transfer to {destinationAccount.Name}",
+            Amount                = dto.Amount,
+            Date                  = dto.Date,
+            Type                  = TransactionType.Expense,
+            AccountId             = sourceAccountId,
             TransactionCategoryId = dto.TransactionCategoryId,
-            UserId = userId
+            UserId                = userId
         };
         sourceAccount.Balance -= dto.Amount;
 
         var incomeTransaction = new Transaction
         {
-            Description = $"Transfer from {sourceAccount.Name}",
-            Amount = dto.Amount,
-            Date = dto.Date,
-            Type = TransactionType.Income,
-            AccountId = dto.DestinationAccountId,
+            Description           = $"Transfer from {sourceAccount.Name}",
+            Amount                = dto.Amount,
+            Date                  = dto.Date,
+            Type                  = TransactionType.Income,
+            AccountId             = dto.DestinationAccountId,
             TransactionCategoryId = dto.TransactionCategoryId,
-            UserId = userId
+            UserId                = userId
         };
         destinationAccount.Balance += dto.Amount;
 
@@ -219,7 +321,7 @@ public class TransactionService : ITransactionService
         _context.Accounts.Update(sourceAccount);
         _context.Accounts.Update(destinationAccount);
 
-        await _context.SaveChangesAsync(); // Transactional by default
+        await _context.SaveChangesAsync();
         await _cache.RemoveByPrefixAsync($"dash::{userId}:");
 
         return Result.Success(true);
@@ -257,77 +359,6 @@ public class TransactionService : ITransactionService
         await _cache.RemoveByPrefixAsync($"dash::{userId}:"); // In case we track transfers on dashboard later
 
         return Result.Success(true);
-    }
-
-    public async Task<Result<BulkInsertResponseDto>> BulkUpsertTransactionsAsync(string userId, BulkTransactionPayloadDto payload)
-    {
-        var response = new BulkInsertResponseDto();
-        
-        // Use casting to access Database since IApplicationDbContext might not expose it, 
-        // to avoid touching Infrastructure layer if it explicitly implements interface.
-        using var transaction = await ((DbContext)_context).Database.BeginTransactionAsync();
-
-        try
-        {
-            for (int i = 0; i < payload.Transactions.Count; i++)
-            {
-                var entry = payload.Transactions[i];
-                bool isRowSuccess = false;
-                string rowError = string.Empty;
-
-                if (entry.DestinationAccountId.HasValue)
-                {
-                    var transferDto = new CreateTransferDto
-                    {
-                        Amount = entry.Transaction.Amount,
-                        Date = entry.Transaction.Date,
-                        DestinationAccountId = entry.DestinationAccountId.Value,
-                        Description = entry.Transaction.Description ?? "Transfer",
-                        TransactionCategoryId = entry.Transaction.TransactionCategoryId
-                    };
-                    var result = await CreateTransferAsync(userId, entry.AccountId, transferDto);
-                    isRowSuccess = result.IsSuccess;
-                    if (!isRowSuccess) rowError = result.Error.Description;
-                }
-                else
-                {
-                    var result = await UpsertTransactionAsync(userId, entry.AccountId, entry.Transaction);
-                    isRowSuccess = result.IsSuccess;
-                    if (!isRowSuccess) rowError = result.Error.Description;
-                }
-                
-                if (isRowSuccess)
-                {
-                    response.SuccessfulCount++;
-                }
-                else
-                {
-                    response.FailedCount++;
-                    response.FailedTransactions.Add(new BulkInsertFailureDto
-                    {
-                        Index = i,
-                        Errors = new List<string> { rowError }
-                    });
-                }
-            }
-
-            if (response.FailedCount == 0 || response.SuccessfulCount > 0)
-            {
-               await transaction.CommitAsync();
-               await _cache.RemoveByPrefixAsync($"dash::{userId}:");
-            }
-            else
-            {
-               await transaction.RollbackAsync();
-            }
-
-            return Result.Success(response);
-        }
-        catch (Exception)
-        {
-            await transaction.RollbackAsync();
-            return Result.Failure<BulkInsertResponseDto>(new Error("BulkInsert.Error", "An unexpected error occurred during bulk insert."));
-        }
     }
 
     public async Task<Result<TransactionPageResultDto>> GetAllTransactionsAsync(string userId, QueryParameters queryParams)

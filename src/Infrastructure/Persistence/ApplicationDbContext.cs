@@ -50,6 +50,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<IssueRelation> IssueRelations { get; set; }
     public DbSet<IssueActivity> IssueActivities { get; set; }
 
+    public DbSet<ChallengeDay> ChallengeDays { get; set; }
+    public DbSet<UserChallengeEnrollment> UserChallengeEnrollments { get; set; }
+    public DbSet<UserChallengeProgress> UserChallengeProgresses { get; set; }
+
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IHttpContextAccessor httpContextAccessor) : base(options)
     {
         _httpContextAccessor = httpContextAccessor;
@@ -236,6 +240,28 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<Feedback>(e => e.ToTable("Feedbacks", "feedback"));
         builder.Entity<FeedbackLog>(e => e.ToTable("FeedbackLogs", "feedback"));
 
+        // --- CHALLENGE SCHEMA ---
+        builder.Entity<ChallengeDay>(e =>
+        {
+            e.ToTable("ChallengeDays", "challenges");
+            e.HasIndex(cd => cd.DayNumber).IsUnique();
+        });
+        builder.Entity<UserChallengeEnrollment>(e =>
+        {
+            e.ToTable("UserChallengeEnrollments", "challenges");
+            e.HasIndex(uce => uce.UserId).IsUnique();
+        });
+        builder.Entity<UserChallengeProgress>(e =>
+        {
+            e.ToTable("UserChallengeProgresses", "challenges");
+            e.HasIndex(ucp => new { ucp.UserId, ucp.ChallengeDayId }).IsUnique();
+
+            e.HasOne(ucp => ucp.ChallengeDay)
+                .WithMany()
+                .HasForeignKey(ucp => ucp.ChallengeDayId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         // --- Soft Delete Global Filters ---
         builder.Entity<Transaction>().HasQueryFilter(t => !t.IsDeleted);
         builder.Entity<Account>().HasQueryFilter(a => !a.IsDeleted);
@@ -246,6 +272,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<Subscription>().HasQueryFilter(s => !s.IsDeleted);
         builder.Entity<Issue>().HasQueryFilter(i => !i.IsDeleted);
         builder.Entity<IssueComment>().HasQueryFilter(c => !c.IsDeleted);
+        builder.Entity<ChallengeDay>().HasQueryFilter(cd => !cd.IsDeleted);
+        builder.Entity<UserChallengeEnrollment>().HasQueryFilter(uce => !uce.IsDeleted);
+        builder.Entity<UserChallengeProgress>().HasQueryFilter(ucp => !ucp.IsDeleted);
 
         // --- Budget Configuration ---
         builder.Entity<Budget>()

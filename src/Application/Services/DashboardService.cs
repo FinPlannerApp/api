@@ -60,9 +60,7 @@ public class DashboardService : IDashboardService
             return Result.Success(cached);
 
         var netWorth = await _context.Accounts
-            .Where(a => a.UserId == userId && 
-                       a.AccountCategory.Name != "Credit Card" && 
-                       a.AccountCategory.Name != "Loan")
+            .Where(a => a.UserId == userId && !a.AccountCategory.IsLiability)
             .SumAsync(a => a.Balance);
 
         var broughtForward = await _context.Transactions
