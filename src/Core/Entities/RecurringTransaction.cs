@@ -17,6 +17,13 @@ public class RecurringTransaction : BaseEntity
     public TransactionType Type { get; set; }
     
     public RecurrenceFrequency Frequency { get; set; }
+
+    /// <summary>
+    /// Bitmask of selected weekdays, only meaningful when Frequency == Custom
+    /// (e.g. Monday | Wednesday | Friday). Null/None for all other frequencies.
+    /// </summary>
+    public RecurrenceDayOfWeek? CustomDays { get; set; }
+
     public DateTime StartDate { get; set; }
     public DateTime? EndDate { get; set; }
     

@@ -59,6 +59,9 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
         entity.Amount = request.Dto.Amount;
         entity.Type = request.Dto.Type;
         entity.Frequency = request.Dto.Frequency;
+        entity.CustomDays = request.Dto.Frequency == RecurrenceFrequency.Custom
+            ? request.Dto.CustomDays
+            : null; // clear stale CustomDays if frequency changed away from Custom
         entity.StartDate = request.Dto.StartDate;
         entity.EndDate = request.Dto.EndDate;
         entity.IsActive = request.Dto.IsActive;
@@ -98,6 +101,7 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
             Amount = entity.Amount,
             Type = entity.Type,
             Frequency = entity.Frequency,
+            CustomDays = entity.CustomDays,
             StartDate = entity.StartDate,
             EndDate = entity.EndDate,
             NextProcessDate = entity.NextProcessDate,

@@ -13,6 +13,7 @@ public class RecurringTransactionDto
     public decimal Amount { get; set; }
     public TransactionType Type { get; set; }
     public RecurrenceFrequency Frequency { get; set; }
+    public RecurrenceDayOfWeek? CustomDays { get; set; }
     public DateTime StartDate { get; set; }
     public DateTime? EndDate { get; set; }
     public DateTime NextProcessDate { get; set; }

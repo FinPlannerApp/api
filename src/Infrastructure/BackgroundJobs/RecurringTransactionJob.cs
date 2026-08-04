@@ -1,3 +1,4 @@
+using Application.Common.Helpers;
 using Application.Contracts;
 using Application.DTOs.Transactions;
 using Domain.Entities;
@@ -10,17 +11,14 @@ namespace Infrastructure.BackgroundJobs;
 /// <summary>
 /// Hangfire job: processes all recurring transactions that are due.
 ///
-/// KEY FIX over original:
-///   Original re-threw inside the foreach, which aborted the entire loop the moment
-///   one transaction failed — meaning transactions #3..#10 never ran if #2 failed.
-///   
-///   New behaviour: iterate ALL due transactions, collect failures, then throw
-///   an AggregateException at the end if any failed. This gives Hangfire the
-///   failed signal it needs for retry, while ensuring every other transaction
-///   that CAN succeed does succeed.
+/// KEY FIX (earlier): continues past individual failures instead of
+/// aborting the whole loop, collects them, throws AggregateException at
+/// the end so Hangfire still gets a retry signal.
 ///
-///   SaveChangesAsync is called per-transaction (not once at the end) so
-///   successful ones are persisted immediately and not rolled back by a later failure.
+/// NEW: Custom frequency support (e.g. every Mon/Wed/Fri), timezone-aware
+/// via AppTimeZone — the day-of-week walk happens in local time, same
+/// reasoning as the month-boundary fixes elsewhere: a UTC-stored timestamp
+/// near local midnight can read as the wrong day-of-week in UTC terms.
 /// </summary>
 public class RecurringTransactionJob
 {
@@ -56,7 +54,6 @@ public class RecurringTransactionJob
 
         _logger.LogInformation("Found {Count} due recurring transactions.", dueTransactions.Count);
 
-        // ── Collect failures; don't abort the loop on first error ─────────────
         var failures = new List<(int Id, string Desc, Exception Ex)>();
 
         foreach (var rt in dueTransactions)
@@ -77,9 +74,8 @@ public class RecurringTransactionJob
                 if (result.IsSuccess)
                 {
                     rt.LastProcessedDate = rt.NextProcessDate;
-                    rt.NextProcessDate   = CalculateNextDate(rt.NextProcessDate, rt.Frequency);
+                    rt.NextProcessDate   = CalculateNextDate(rt.NextProcessDate, rt.Frequency, rt.CustomDays);
 
-                    // Deactivate if end date has passed
                     if (rt.EndDate.HasValue && rt.NextProcessDate > rt.EndDate.Value)
                     {
                         rt.IsActive = false;
@@ -89,8 +85,6 @@ public class RecurringTransactionJob
                     }
 
                     _context.RecurringTransactions.Update(rt);
-
-                    // Save per-transaction so successes are persisted independently
                     await _context.SaveChangesAsync(default);
 
                     _logger.LogInformation(
@@ -99,7 +93,6 @@ public class RecurringTransactionJob
                 }
                 else
                 {
-                    // Application-level failure (e.g. account deleted, insufficient funds)
                     var ex = new InvalidOperationException(
                         $"Application error for recurring tx {rt.Id}: {result.Error.Description}");
                     failures.Add((rt.Id, rt.Description ?? "", ex));
@@ -108,17 +101,11 @@ public class RecurringTransactionJob
             }
             catch (Exception ex)
             {
-                // Infrastructure-level failure (DB timeout, etc.)
                 failures.Add((rt.Id, rt.Description ?? "", ex));
                 _logger.LogError(ex, "Exception processing recurring transaction {Id}", rt.Id);
-                // Continue to next — do NOT re-throw here
             }
         }
 
-        // ── If any failed, throw so Hangfire marks this execution as failed ────
-        // Hangfire will apply its configured retry policy (exponential backoff).
-        // The next run will only attempt the STILL-due transactions (since
-        // successful ones already had their NextProcessDate advanced).
         if (failures.Any())
         {
             var failedIds = string.Join(", ", failures.Select(f => f.Id));
@@ -134,13 +121,53 @@ public class RecurringTransactionJob
         _logger.LogInformation("All recurring transactions processed successfully.");
     }
 
-    private static DateTime CalculateNextDate(DateTime current, RecurrenceFrequency frequency)
+    private static DateTime CalculateNextDate(DateTime current, RecurrenceFrequency frequency, RecurrenceDayOfWeek? customDays)
         => frequency switch
         {
             RecurrenceFrequency.Daily   => current.AddDays(1),
             RecurrenceFrequency.Weekly  => current.AddDays(7),
             RecurrenceFrequency.Monthly => current.AddMonths(1),
             RecurrenceFrequency.Yearly  => current.AddYears(1),
+            RecurrenceFrequency.Custom  => CalculateNextCustomDate(current, customDays),
             _ => throw new ArgumentOutOfRangeException(nameof(frequency), frequency, null)
         };
+
+    /// <summary>
+    /// Walks forward from `current` (UTC) day-by-day in LOCAL time until it
+    /// finds one whose local day-of-week is in the selected set, then
+    /// converts that local date back to UTC for storage — same time-of-day
+    /// as the original `current` value, so a recurring transaction that
+    /// always fires at local midnight keeps doing so.
+    /// </summary>
+    private static DateTime CalculateNextCustomDate(DateTime currentUtc, RecurrenceDayOfWeek? customDays)
+    {
+        if (customDays is null or RecurrenceDayOfWeek.None)
+            throw new InvalidOperationException(
+                "Custom recurrence requires at least one day selected — this shouldn't happen if the DTO validator ran, but failing loudly here rather than silently picking a default.");
+
+        var currentLocal = currentUtc.ToLocal();
+
+        for (int i = 1; i <= 7; i++)
+        {
+            var candidateLocal = currentLocal.AddDays(i);
+            if ((customDays.Value & DayOfWeekToFlag(candidateLocal.DayOfWeek)) != 0)
+                return candidateLocal.ToUtc();
+        }
+
+        // Unreachable given the None check above (any non-empty bitmask must
+        // match within 7 days), but the compiler doesn't know that.
+        throw new InvalidOperationException("Could not determine next custom recurrence date.");
+    }
+
+    private static RecurrenceDayOfWeek DayOfWeekToFlag(DayOfWeek day) => day switch
+    {
+        DayOfWeek.Monday    => RecurrenceDayOfWeek.Monday,
+        DayOfWeek.Tuesday   => RecurrenceDayOfWeek.Tuesday,
+        DayOfWeek.Wednesday => RecurrenceDayOfWeek.Wednesday,
+        DayOfWeek.Thursday  => RecurrenceDayOfWeek.Thursday,
+        DayOfWeek.Friday    => RecurrenceDayOfWeek.Friday,
+        DayOfWeek.Saturday  => RecurrenceDayOfWeek.Saturday,
+        DayOfWeek.Sunday    => RecurrenceDayOfWeek.Sunday,
+        _ => throw new ArgumentOutOfRangeException(nameof(day))
+    };
 }

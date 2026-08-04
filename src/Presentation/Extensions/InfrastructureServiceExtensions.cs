@@ -4,6 +4,7 @@ using Application.Contracts;
 using Domain.Entities;
 using Infrastructure.Persistence;
 using Infrastructure.Services;
+using Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -118,6 +119,11 @@ public static class InfrastructureServiceExtensions
         .AddRoles<IdentityRole>()
         .AddRoleManager<RoleManager<IdentityRole>>()
         .AddEntityFrameworkStores<ApplicationDbContext>();
+
+        // Overrides Identity's default PBKDF2-HMAC-SHA256 hasher with Argon2id.
+        // Must be registered AFTER AddIdentityCore(...) — see Argon2PasswordHasher.cs
+        // for the migration-safety details (existing users aren't locked out).
+        services.AddSingleton<IPasswordHasher<ApplicationUser>, Argon2PasswordHasher<ApplicationUser>>();
 
         // 4. Register JWT Authentication
         services.AddAuthentication(options =>

@@ -1,6 +1,7 @@
 namespace Application.Services;
 
 
+using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Transactions;
@@ -35,14 +36,31 @@ public class TransactionService : ITransactionService
             .Where(t => t.AccountId == accountId)
             .AsQueryable();
 
-        // Parse month/year from Filters
-        var now = DateTime.UtcNow;
-        if (queryParams.Filters.TryGetValue("month", out var monthStr) && int.TryParse(monthStr, out var month) && 
-            queryParams.Filters.TryGetValue("year", out var yearStr) && int.TryParse(yearStr, out var year))
+        // ── Month/year filtering — consolidated into one timezone-correct path ──
+        // Both the Filters-dict style and the typed Month/Year style ended up
+        // doing the same job with two different (both buggy) implementations.
+        // One local helper, used by whichever the caller actually sent.
+        int? filterMonth = null;
+        int? filterYear = null;
+
+        if (queryParams.Filters.TryGetValue("month", out var monthStr) && int.TryParse(monthStr, out var m))
+            filterMonth = m;
+        if (queryParams.Filters.TryGetValue("year", out var yearStr) && int.TryParse(yearStr, out var y))
+            filterYear = y;
+
+        // Typed params take precedence if both happen to be sent — arbitrary
+        // but consistent choice, and in practice only one path will be used.
+        if (queryParams.Month.HasValue) filterMonth = queryParams.Month.Value;
+        if (queryParams.Year.HasValue) filterYear = queryParams.Year.Value;
+
+        if (filterMonth.HasValue && filterYear.HasValue)
         {
-            var startOfMonth = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
-            var endOfMonth = startOfMonth.AddMonths(1).AddTicks(-1);
-            queryable = queryable.Where(t => t.Date >= startOfMonth && t.Date <= endOfMonth);
+            var localMonthStart = new DateTime(filterYear.Value, filterMonth.Value, 1, 0, 0, 0, DateTimeKind.Unspecified);
+            var localMonthEnd = localMonthStart.AddMonths(1).AddTicks(-1);
+            var utcMonthStart = localMonthStart.ToUtc();
+            var utcMonthEnd = localMonthEnd.ToUtc();
+
+            queryable = queryable.Where(t => t.Date >= utcMonthStart && t.Date <= utcMonthEnd);
         }
 
         // Category Filter
@@ -56,11 +74,6 @@ public class TransactionService : ITransactionService
             var search = queryParams.GlobalSearch.Trim().ToLower();
             queryable = queryable.Where(t => t.Description.ToLower().Contains(search) ||
                 (t.TransactionCategory != null && t.TransactionCategory.Name.ToLower().Contains(search)));
-        }
-
-        if (queryParams.Month.HasValue && queryParams.Year.HasValue)
-        {
-            queryable = queryable.Where(t => t.Date.Month == queryParams.Month.Value && t.Date.Year == queryParams.Year.Value);
         }
 
         if (queryParams.TransactionCategoryId.HasValue)
