@@ -184,24 +184,38 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
     Authorization = new[] { new HangfireAdminAuthFilter() }
 });
 
+try
+    {
+        Hangfire.RecurringJob.AddOrUpdate<Infrastructure.BackgroundJobs.RecurringTransactionJob>(
+            "process-recurring-transactions",
+            job => job.ProcessRecurringTransactionsAsync(),
+            Hangfire.Cron.Hourly());
 
-Hangfire.RecurringJob.AddOrUpdate<Infrastructure.BackgroundJobs.RecurringTransactionJob>(
-    "process-recurring-transactions",
-    job => job.ProcessRecurringTransactionsAsync(),
-    Hangfire.Cron.Hourly());
+        Hangfire.RecurringJob.AddOrUpdate<Infrastructure.BackgroundJobs.UpdatePainVelocityJob>(
+            "update-pain-velocities",
+            job => job.UpdateVelocitiesAsync(),
+            Hangfire.Cron.Hourly());
 
-Hangfire.RecurringJob.AddOrUpdate<Infrastructure.BackgroundJobs.UpdatePainVelocityJob>(
-    "update-pain-velocities",
-    job => job.UpdateVelocitiesAsync(),
-    Hangfire.Cron.Hourly());
-
-// Daily at 02:00 UTC — prune expired/revoked refresh tokens
-Hangfire.RecurringJob.AddOrUpdate<Infrastructure.BackgroundJobs.RefreshTokenCleanupJob>(
-    "cleanup-refresh-tokens",
-    job => job.CleanupAsync(),
-    "0 2 * * *");
-
-
+        // Daily at 02:00 UTC — prune expired/revoked refresh tokens
+        Hangfire.RecurringJob.AddOrUpdate<Infrastructure.BackgroundJobs.RefreshTokenCleanupJob>(
+            "cleanup-refresh-tokens",
+            job => job.CleanupAsync(),
+            "0 2 * * *");
+ 
+        // ...any other RecurringJob.AddOrUpdate calls here...
+    }
+    catch (Exception ex)
+    {
+        // Log and continue — a failure to REGISTER a recurring job schedule
+        // should not prevent the web application from starting and serving
+        // requests. Worst case: recurring jobs don't run until this is fixed
+        // and the app restarts. That's a real problem, but a far smaller one
+        // than the entire app being down.
+        var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
+        startupLogger.LogError(ex, "Failed to register Hangfire recurring jobs on startup. " +
+            "The app will continue starting, but scheduled jobs (recurring transactions, " +
+            "token cleanup) will not run until this is resolved and the app restarts.");
+    }
 
 app.MapControllers();
 
