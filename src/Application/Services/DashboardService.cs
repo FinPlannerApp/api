@@ -1,3 +1,4 @@
+using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Dashboard;
@@ -48,11 +49,25 @@ public class DashboardService : IDashboardService
         });
     }
 
+    // ── Shared helper: resolves the effective UTC date range for a query ──────
+    // If the caller supplied explicit dates, use them as-is (already UTC, per
+    // existing convention). Otherwise default to "this month" — computed in
+    // LOCAL time first, then converted to UTC. This is the fix for the
+    // reported bug: a transaction saved at local midnight on the 1st no
+    // longer falls outside this range just because its UTC-stored value
+    // technically lands on the previous UTC day.
+    private static (DateTime Start, DateTime End) ResolveMonthRange(DateTime? startDate, DateTime? endDate)
+    {
+        if (startDate.HasValue && endDate.HasValue)
+            return (startDate.Value, endDate.Value);
+
+        var (monthStartUtc, monthEndUtc) = AppTimeZone.MonthBoundsUtc(DateTime.UtcNow);
+        return (startDate ?? monthStartUtc, endDate ?? monthEndUtc);
+    }
+
     public async Task<Result<DashboardSummaryDto>> GetSummaryAsync(string userId, DateTime? startDate = null, DateTime? endDate = null)
     {
-        var now = DateTime.UtcNow;
-        var startFilter = startDate ?? new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var endFilter = endDate ?? startFilter.AddMonths(1).AddDays(-1);
+        var (startFilter, endFilter) = ResolveMonthRange(startDate, endDate);
 
         var cacheKey = SummaryKey(userId, startFilter, endFilter);
         var cached = await _cache.GetAsync<DashboardSummaryDto>(cacheKey);
@@ -92,9 +107,7 @@ public class DashboardService : IDashboardService
 
     public async Task<Result<List<SpendingByCategoryDto>>> GetSpendingByCategoryAsync(string userId, DateTime? startDate = null, DateTime? endDate = null)
     {
-        var now = DateTime.UtcNow;
-        var startFilter = startDate ?? new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var endFilter = endDate ?? startFilter.AddMonths(1).AddDays(-1);
+        var (startFilter, endFilter) = ResolveMonthRange(startDate, endDate);
 
         var cacheKey = CategoryKey(userId, startFilter, endFilter);
         var cached = await _cache.GetAsync<List<SpendingByCategoryDto>>(cacheKey);
@@ -126,9 +139,7 @@ public class DashboardService : IDashboardService
         if (account == null)
             return Result.Failure<AccountSummaryDto>(new Error("Account.NotFound", "Account not found."));
 
-        var now = DateTime.UtcNow;
-        var startFilter = startDate ?? new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var endFilter = endDate ?? startFilter.AddMonths(1).AddTicks(-1);
+        var (startFilter, endFilter) = ResolveMonthRange(startDate, endDate);
 
         var monthlyTransactions = _context.Transactions
             .Where(t => t.AccountId == accountId && t.Date >= startFilter && t.Date <= endFilter);
@@ -158,9 +169,7 @@ public class DashboardService : IDashboardService
 
     public async Task<Result<DashboardInsightsDto>> GetDeepInsightsAsync(string userId, DateTime? startDate = null, DateTime? endDate = null)
     {
-        var now = DateTime.UtcNow;
-        var startFilter = startDate ?? new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var endFilter = endDate ?? startFilter.AddMonths(1).AddDays(-1);
+        var (startFilter, endFilter) = ResolveMonthRange(startDate, endDate);
 
         var cacheKey = InsightsKey(userId, startFilter, endFilter);
         var cached = await _cache.GetAsync<DashboardInsightsDto>(cacheKey);
@@ -174,7 +183,6 @@ public class DashboardService : IDashboardService
 
         var insights = new DashboardInsightsDto();
 
-        // High volume querying logic mapping to BasicTransactionDto
         var baseSet = await query.Select(t => new BasicTransactionDto
         {
             Id = t.Id,
@@ -186,18 +194,15 @@ public class DashboardService : IDashboardService
             AccountName = t.Account.Name
         }).ToListAsync();
 
-        if (!baseSet.Any()) 
+        if (!baseSet.Any())
             return Result.Success(insights);
 
-        // Highest and Lowest
         insights.HighestAmountTransactions = baseSet.OrderByDescending(t => t.Amount).Take(5).ToList();
         insights.LowestAmountTransactions = baseSet.OrderBy(t => t.Amount).Take(5).ToList();
 
-        // Latest and Oldest
         insights.LatestTransactions = baseSet.OrderByDescending(t => t.Date).Take(5).ToList();
         insights.OldestTransactions = baseSet.OrderBy(t => t.Date).Take(5).ToList();
 
-        // Category Extremes
         var categoryGroups = baseSet.GroupBy(t => t.CategoryName);
         foreach (var group in categoryGroups.Where(g => g.Key != null))
         {
@@ -209,7 +214,6 @@ public class DashboardService : IDashboardService
             });
         }
 
-        // Account Extremes
         var accountGroups = baseSet.GroupBy(t => t.AccountName);
         foreach (var group in accountGroups.Where(g => g.Key != null))
         {
@@ -221,7 +225,6 @@ public class DashboardService : IDashboardService
             });
         }
 
-        // --- NEW: Generate Financial Intelligence ---
         var intelligence = await _insightsEngine.GenerateInsightsAsync(userId, endFilter);
         insights.Intelligence = intelligence.Select(r => new FinancialInsightDto
         {

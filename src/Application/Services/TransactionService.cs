@@ -333,14 +333,38 @@ public class TransactionService : ITransactionService
         if (transaction == null)
             return Result.Failure<bool>(new Error("Transaction.NotFound", "Transaction not found."));
 
-        var sourceAccount = await _context.Accounts.FindAsync(transaction.AccountId);
-        var destinationAccount = await _context.Accounts.FindAsync(destinationAccountId);
+        var sourceAccount = await _context.Accounts
+            .Include(a => a.AccountCategory)
+            .FirstOrDefaultAsync(a => a.Id == transaction.AccountId);
+
+        var destinationAccount = await _context.Accounts
+            .Include(a => a.AccountCategory)
+            .FirstOrDefaultAsync(a => a.Id == destinationAccountId);
 
         if (sourceAccount == null || destinationAccount == null || sourceAccount.UserId != userId || destinationAccount.UserId != userId)
             return Result.Failure<bool>(new Error("Account.NotFound", "One or both accounts could not be found."));
 
         if (sourceAccount.Id == destinationAccount.Id)
             return Result.Failure<bool>(new Error("Switch.SameAccount", "Cannot switch to the same account."));
+
+        // ── Balance check — only matters when moving an Expense, since that's
+        // the case that DEBITS the destination account. Moving an Income only
+        // credits the destination, which can never cause a shortfall.
+        // Same credit-card/loan exemption as CreateTransferAsync — those
+        // accounts are allowed to go negative by design (that's what a
+        // liability balance means).
+        if (transaction.Type == TransactionType.Expense)
+        {
+            var destCategoryName = destinationAccount.AccountCategory?.Name ?? string.Empty;
+            bool isDestLiability = destinationAccount.AccountCategory?.IsLiability ?? false;
+
+            if (!isDestLiability && destinationAccount.Balance < transaction.Amount)
+            {
+                return Result.Failure<bool>(new Error(
+                    "Switch.InsufficientFunds",
+                    $"Destination account has insufficient balance. Available: {destinationAccount.Balance:F2}, Required: {transaction.Amount:F2}."));
+            }
+        }
 
         // Revert from source
         sourceAccount.Balance += (transaction.Type == TransactionType.Income ? -transaction.Amount : transaction.Amount);
@@ -356,7 +380,7 @@ public class TransactionService : ITransactionService
         _context.Transactions.Update(transaction);
 
         await _context.SaveChangesAsync();
-        await _cache.RemoveByPrefixAsync($"dash::{userId}:"); // In case we track transfers on dashboard later
+        await _cache.RemoveByPrefixAsync($"dash::{userId}:");
 
         return Result.Success(true);
     }

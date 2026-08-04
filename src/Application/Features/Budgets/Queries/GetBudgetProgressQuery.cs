@@ -1,3 +1,4 @@
+using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Budgets;
@@ -9,23 +10,32 @@ namespace Application.Features.Budgets.Queries;
 public record GetBudgetProgressQuery(string UserId, DateTime RequestDate)
     : IRequest<Result<List<BudgetProgressDto>>>;
 
-/// <summary>Named type for grouped spending results — avoids anonymous-type
-/// incompatibility issues when conditionally building the weekly query.</summary>
 internal record CategorySpend(int? CategoryId, decimal Total);
 
 /// <summary>
 /// Returns budget utilisation progress for the requesting user.
 ///
-/// KEY FIX (earlier): accountIds fetched ONCE before the loop instead of
-/// per-budget, and spending fetched in one grouped query instead of N+1.
+/// KEY FIX (earlier pass): accountIds fetched ONCE before the loop instead
+/// of per-budget, spending fetched in one grouped query instead of N+1.
 ///
-/// NEW: Weekly period support. Monthly/Yearly still use the single grouped
-/// month-level query below (untouched, zero risk to what's already verified
-/// working in production). Weekly budgets can't use that same grouping —
-/// month-level granularity can't tell you what happened within one week —
-/// so they get a small, separate, targeted query that only runs at all if
-/// at least one Weekly-period budget is actually active. No added cost for
-/// users who only use Monthly/Yearly budgets.
+/// KEY FIX (this pass, two parts):
+///   1. Period boundaries (month/year/week) computed in LOCAL time
+///      (AppTimeZone) before conversion to UTC for the DB range filter —
+///      fixes which rows get INCLUDED near a period boundary.
+///   2. The month-bucketing GROUPING KEY itself is no longer computed in
+///      SQL via t.Date.Month (which extracts month from the raw UTC value,
+///      the exact same bug at the grouping level rather than the boundary
+///      level). Instead, raw rows are fetched within the UTC year range,
+///      then grouped in-memory by t.Date.ToLocal().Month. EF Core/Npgsql
+///      generally can't translate timezone conversion into SQL, so this is
+///      the correct, portable way to get local-month grouping right — the
+///      SQL WHERE clause stays a simple, index-friendly UTC range, only the
+///      grouping happens client-side after materializing a year's worth of
+///      a single user's transactions (a few hundred rows at most — no
+///      performance concern at that scale).
+///
+/// Weekly period support: separate small windowed query, only runs if at
+/// least one Weekly budget is active among the user's current budgets.
 /// </summary>
 public class GetBudgetProgressQueryHandler
     : IRequestHandler<GetBudgetProgressQuery, Result<List<BudgetProgressDto>>>
@@ -39,20 +49,13 @@ public class GetBudgetProgressQueryHandler
         GetBudgetProgressQuery request,
         CancellationToken cancellationToken)
     {
-        var monthStart = new DateTime(
-            request.RequestDate.Year, request.RequestDate.Month, 1,
-            0, 0, 0, DateTimeKind.Utc);
-        var monthEnd = monthStart.AddMonths(1).AddTicks(-1);
+        var (monthStart, monthEnd) = AppTimeZone.MonthBoundsUtc(request.RequestDate);
+        var (yearStart, yearEnd)   = AppTimeZone.YearBoundsUtc(request.RequestDate);
+        var (weekStart, weekEnd)   = AppTimeZone.WeekBoundsUtc(request.RequestDate);
 
-        var yearStart = new DateTime(request.RequestDate.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var yearEnd   = yearStart.AddYears(1).AddTicks(-1);
-
-        // ── Week window: Monday–Sunday containing RequestDate (ISO-8601) ──────
-        // DayOfWeek.Sunday = 0 in .NET, so this offset math treats Monday as
-        // the start of the week regardless of locale.
-        int isoDayOfWeek = ((int)request.RequestDate.DayOfWeek + 6) % 7; // Mon=0 .. Sun=6
-        var weekStart = request.RequestDate.Date.AddDays(-isoDayOfWeek);
-        var weekEnd   = weekStart.AddDays(7).AddTicks(-1);
+        var requestLocalMonth = (request.RequestDate.Kind == DateTimeKind.Utc
+            ? request.RequestDate.ToLocal()
+            : request.RequestDate).Month;
 
         // ── 1. Load active budgets ────────────────────────────────────────────
         var activeBudgets = await _context.Budgets
@@ -77,24 +80,30 @@ public class GetBudgetProgressQueryHandler
         if (!accountIds.Any())
             return Result<List<BudgetProgressDto>>.Success(new List<BudgetProgressDto>());
 
-        // ── 3. Single grouped query for Monthly/Yearly spending data ──────────
-        var spendingByCategory = await _context.Transactions
+        // ── 3. Fetch raw yearly expense rows (UTC range — correct boundary) ────
+        // Grouping happens AFTER this, in memory, using local time. Don't group
+        // by t.Date.Month here — that's the same bug at the SQL level.
+        var rawYearExpenses = await _context.Transactions
             .AsNoTracking()
             .Where(t => accountIds.Contains(t.AccountId)
                      && !t.IsDeleted
                      && t.Type == Domain.Enums.TransactionType.Expense
                      && t.Date >= yearStart
                      && t.Date <= yearEnd)
-            .GroupBy(t => new { t.TransactionCategoryId, t.Date.Month })
+            .Select(t => new { t.TransactionCategoryId, t.Date, t.Amount })
+            .ToListAsync(cancellationToken);
+
+        var spendingByCategory = rawYearExpenses
+            .GroupBy(t => new { t.TransactionCategoryId, Month = t.Date.ToLocal().Month })
             .Select(g => new
             {
                 CategoryId = g.Key.TransactionCategoryId,
                 Month      = g.Key.Month,
                 Total      = g.Sum(t => t.Amount)
             })
-            .ToListAsync(cancellationToken);
+            .ToList();
 
-        // ── 3b. Separate query for Weekly spending — only runs if actually needed ──
+        // ── 3b. Weekly spending — separate targeted query, only if needed ─────
         bool hasWeeklyBudgets = activeBudgets.Any(b => b.Period == Domain.Enums.BudgetPeriod.Weekly);
 
         List<CategorySpend> spendingByCategoryWeekly;
@@ -116,7 +125,7 @@ public class GetBudgetProgressQueryHandler
             spendingByCategoryWeekly = new List<CategorySpend>();
         }
 
-        // ── 4. Build progress list from in-memory data ────────────────────────
+        // ── 4. Build progress list ──────────────────────────────────────────────
         var progressList = new List<BudgetProgressDto>();
 
         foreach (var budget in activeBudgets)
@@ -135,7 +144,7 @@ public class GetBudgetProgressQueryHandler
 
                 case Domain.Enums.BudgetPeriod.Monthly:
                     var relevantRows = spendingByCategory
-                        .Where(s => s.Month == request.RequestDate.Month);
+                        .Where(s => s.Month == requestLocalMonth);
 
                     spentAmount = budget.TransactionCategoryId.HasValue
                         ? relevantRows
