@@ -48,6 +48,9 @@ public class TransactionService : ITransactionService
         if (queryParams.Filters.TryGetValue("year", out var yearStr) && int.TryParse(yearStr, out var y))
             filterYear = y;
 
+        _logger.LogWarning("DEPLOY-CHECK-MARKER-{Marker}: filterMonth={Month} utcMonthStart={Start} utcMonthEnd={End}",
+    "v2-timezone-fix", filterMonth, filterMonth.HasValue && filterYear.HasValue ? "computed" : "n/a", DateTime.UtcNow);
+
         // Typed params take precedence if both happen to be sent — arbitrary
         // but consistent choice, and in practice only one path will be used.
         if (queryParams.Month.HasValue) filterMonth = queryParams.Month.Value;
