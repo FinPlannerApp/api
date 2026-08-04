@@ -72,39 +72,39 @@ jobs:
             flyway/flyway:11 \
             migrate
 
-      - name: Trigger Render Deploy Hook (main)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK }}" ]; then
-            echo "::error::RENDER_DEPLOY_HOOK secret is empty or not set. Check https://github.com/${{ github.repository }}/settings/secrets/actions"
-            exit 1
-          fi
-          curl -f -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
-          echo "Triggered Render deployment for main branch."
+      # - name: Trigger Render Deploy Hook (main)
+      #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      #   run: |
+      #     if [ -z "${{ secrets.RENDER_DEPLOY_HOOK }}" ]; then
+      #       echo "::error::RENDER_DEPLOY_HOOK secret is empty or not set. Check https://github.com/${{ github.repository }}/settings/secrets/actions"
+      #       exit 1
+      #     fi
+      #     curl -f -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
+      #     echo "Triggered Render deployment for main branch."
 
-      - name: Login to GitHub Container Registry (devel)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/devel'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      # - name: Login to GitHub Container Registry (devel)
+      #   if: github.event_name == 'push' && github.ref == 'refs/heads/devel'
+      #   uses: docker/login-action@v3
+      #   with:
+      #     registry: ghcr.io
+      #     username: ${{ github.actor }}
+      #     password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push Docker to GHCR (devel)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/devel'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile
-          push: true
-          tags: ghcr.io/${{ github.repository }}/backend:devel
+      # - name: Build and Push Docker to GHCR (devel)
+      #   if: github.event_name == 'push' && github.ref == 'refs/heads/devel'
+      #   uses: docker/build-push-action@v5
+      #   with:
+      #     context: .
+      #     file: Dockerfile
+      #     push: true
+      #     tags: ghcr.io/${{ github.repository }}/backend:devel
 
-      - name: Trigger Homelab Deploy Hook (devel)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/devel'
-        run: |
-          if [ -z "${{ secrets.HOMELAB_DEPLOY_HOOK }}" ]; then
-            echo "::error::HOMELAB_DEPLOY_HOOK secret is empty or not set. Check https://github.com/${{ github.repository }}/settings/secrets/actions"
-            exit 1
-          fi
-          curl -f -X POST "${{ secrets.HOMELAB_DEPLOY_HOOK }}"
-          echo "Triggered Homelab deployment for devel branch."
+      # - name: Trigger Homelab Deploy Hook (devel)
+      #   if: github.event_name == 'push' && github.ref == 'refs/heads/devel'
+      #   run: |
+      #     if [ -z "${{ secrets.HOMELAB_DEPLOY_HOOK }}" ]; then
+      #       echo "::error::HOMELAB_DEPLOY_HOOK secret is empty or not set. Check https://github.com/${{ github.repository }}/settings/secrets/actions"
+      #       exit 1
+      #     fi
+      #     curl -f -X POST "${{ secrets.HOMELAB_DEPLOY_HOOK }}"
+      #     echo "Triggered Homelab deployment for devel branch."
