@@ -323,7 +323,7 @@ public class TransactionService : ITransactionService
     {
         // ── Load source account ────────────────────────────────────────────────
         var sourceAccount = await _context.Accounts
-            .Include(a => a.AccountCategory)          // needed for credit/loan check
+            .Include(a => a.AccountCategory)
             .FirstOrDefaultAsync(a => a.Id == sourceAccountId);
 
         if (sourceAccount == null || sourceAccount.UserId != userId)
@@ -336,20 +336,24 @@ public class TransactionService : ITransactionService
         if (sourceAccountId == dto.DestinationAccountId)
             return Result.Failure<bool>(new Error("Transfer.SameAccount", "Cannot transfer to the same account."));
 
-        // ── Balance check (skip for Credit Card / Loan accounts) ──────────────
-        var categoryName = sourceAccount.AccountCategory?.Name ?? string.Empty;
-        bool isCreditLiability = categoryName.Equals("Credit Card", StringComparison.OrdinalIgnoreCase)
-                              || categoryName.Equals("Loan",         StringComparison.OrdinalIgnoreCase)
-                              || categoryName.Equals("Credit",       StringComparison.OrdinalIgnoreCase);
+        // ── Balance check (skip for liability accounts — Credit Card, Loan, etc.) ──
+        // Was string-matching on category.Name before; now uses the same
+        // IsLiability flag SwitchAccountAsync already correctly uses —
+        // catches any liability category regardless of what it's named
+        // ("Home Loan", "Car EMI", "Visa Card", none of which the old
+        // string match would have caught).
+        bool isLiability = sourceAccount.AccountCategory?.IsLiability ?? false;
 
-        if (!isCreditLiability && sourceAccount.Balance < dto.Amount)
+        if (!isLiability && sourceAccount.Balance < dto.Amount)
         {
             return Result.Failure<bool>(new Error(
                 "Transfer.InsufficientFunds",
                 $"Insufficient balance. Available: {sourceAccount.Balance:F2}, Requested: {dto.Amount:F2}."));
         }
 
-        // ── Create the two transaction legs ───────────────────────────────────
+        // ── Create the two transaction legs, linked by a shared TransferGroupId ──
+        var transferGroupId = Guid.NewGuid();
+
         var expenseTransaction = new Transaction
         {
             Description           = $"Transfer to {destinationAccount.Name}",
@@ -358,7 +362,8 @@ public class TransactionService : ITransactionService
             Type                  = TransactionType.Expense,
             AccountId             = sourceAccountId,
             TransactionCategoryId = dto.TransactionCategoryId,
-            UserId                = userId
+            UserId                = userId,
+            TransferGroupId       = transferGroupId
         };
         sourceAccount.Balance -= dto.Amount;
 
@@ -370,7 +375,8 @@ public class TransactionService : ITransactionService
             Type                  = TransactionType.Income,
             AccountId             = dto.DestinationAccountId,
             TransactionCategoryId = dto.TransactionCategoryId,
-            UserId                = userId
+            UserId                = userId,
+            TransferGroupId       = transferGroupId
         };
         destinationAccount.Balance += dto.Amount;
 
@@ -515,11 +521,11 @@ public class TransactionService : ITransactionService
         }
 
         var totalIncome = await monthlyQuery
-            .Where(t => t.Type == TransactionType.Income)
+            .Where(t => t.Type == TransactionType.Income && t.TransferGroupId == null)
             .SumAsync(t => t.Amount);
 
         var totalExpenses = await monthlyQuery
-            .Where(t => t.Type == TransactionType.Expense)
+            .Where(t => t.Type == TransactionType.Expense && t.TransferGroupId == null)
             .SumAsync(t => t.Amount);
 
         // --- Filtered queryable for the transaction list ---
@@ -573,7 +579,8 @@ public class TransactionService : ITransactionService
             Type = t.Type,
             AccountId = t.AccountId,
             AccountName = t.Account?.Name,
-            CategoryName = t.TransactionCategory?.Name ?? (t.Description.Contains("Transfer") ? "Transfer" : null)
+            CategoryName = t.TransactionCategory?.Name ?? (t.Description.Contains("Transfer") ? "Transfer" : null),
+            TransferGroupId = t.TransferGroupId
         };
     }
 

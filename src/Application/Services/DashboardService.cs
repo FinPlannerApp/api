@@ -86,11 +86,11 @@ public class DashboardService : IDashboardService
             .Where(t => t.Account.UserId == userId && t.Date >= startFilter && t.Date <= endFilter);
 
         var monthlyIncome = await monthlyTransactions
-            .Where(t => t.Type == TransactionType.Income)
+            .Where(t => t.Type == TransactionType.Income && t.TransferGroupId == null)
             .SumAsync(t => t.Amount);
 
         var monthlyExpenses = await monthlyTransactions
-            .Where(t => t.Type == TransactionType.Expense)
+            .Where(t => t.Type == TransactionType.Expense && t.TransferGroupId == null)
             .SumAsync(t => t.Amount);
 
         var summary = new DashboardSummaryDto
@@ -118,6 +118,7 @@ public class DashboardService : IDashboardService
             .Where(t =>
                 t.Account.UserId == userId &&
                 t.Type == TransactionType.Expense &&
+                t.TransferGroupId == null &&
                 t.Date >= startFilter && t.Date <= endFilter)
             .GroupBy(t => t.TransactionCategory != null ? t.TransactionCategory.Name : "Uncategorized")
             .Select(group => new SpendingByCategoryDto

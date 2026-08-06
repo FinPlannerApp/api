@@ -92,6 +92,7 @@ public class GetBudgetProgressQueryHandler
             .Where(t => accountIds.Contains(t.AccountId)
                      && !t.IsDeleted
                      && t.Type == Domain.Enums.TransactionType.Expense
+                     && t.TransferGroupId == null
                      && t.Date >= yearStart
                      && t.Date <= yearEnd)
             .Select(t => new { t.TransactionCategoryId, t.Date, t.Amount })
@@ -118,6 +119,7 @@ public class GetBudgetProgressQueryHandler
                 .Where(t => accountIds.Contains(t.AccountId)
                          && !t.IsDeleted
                          && t.Type == Domain.Enums.TransactionType.Expense
+                         && t.TransferGroupId == null
                          && t.Date >= weekStart
                          && t.Date <= weekEnd)
                 .GroupBy(t => t.TransactionCategoryId)
