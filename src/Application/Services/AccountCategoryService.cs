@@ -83,6 +83,7 @@ public class AccountCategoryService : ICategoryService<AccountCategoryDto, Upser
 
             category.Name        = ToTitleCase(dto.Name);
             category.IsLiability = dto.IsLiability;
+            category.AccountType = dto.AccountType;
             _context.AccountCategories.Update(category);
         }
         else
@@ -91,7 +92,8 @@ public class AccountCategoryService : ICategoryService<AccountCategoryDto, Upser
             {
                 Name        = ToTitleCase(dto.Name),
                 UserId      = userId,
-                IsLiability = dto.IsLiability
+                IsLiability = dto.IsLiability,
+                AccountType = dto.AccountType
             };
             _context.AccountCategories.Add(category);
         }
@@ -129,7 +131,8 @@ public class AccountCategoryService : ICategoryService<AccountCategoryDto, Upser
         {
             Id          = c.Id,
             Name        = c.Name,
-            IsLiability = c.IsLiability
+            IsLiability = c.IsLiability,
+            AccountType = c.AccountType
         };
     }
 

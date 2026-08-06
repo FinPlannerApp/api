@@ -14,4 +14,15 @@ public class AccountCategory : BaseEntity
     /// Defaults to false (asset). User toggles this when creating/editing a category.
     /// </summary>
     public bool IsLiability { get; set; } = false;
+
+    /// <summary>
+    /// Separate from IsLiability, deliberately. Determines which detail
+    /// entity/UI applies to accounts in this category (Bank → interest
+    /// fields, CreditCard → limit/due-date fields, Loan → EMI fields,
+    /// Cash/Other → none). Independently editable from IsLiability rather
+    /// than derived from it — e.g. a secured credit card backed by a
+    /// deposit could reasonably be AccountType.CreditCard with
+    /// IsLiability = false.
+    /// </summary>
+    public Domain.Enums.AccountType AccountType { get; set; } = Domain.Enums.AccountType.Other;
 }

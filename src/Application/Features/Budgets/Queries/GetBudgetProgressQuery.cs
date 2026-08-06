@@ -53,6 +53,10 @@ public class GetBudgetProgressQueryHandler
         var (yearStart, yearEnd)   = AppTimeZone.YearBoundsUtc(request.RequestDate);
         var (weekStart, weekEnd)   = AppTimeZone.WeekBoundsUtc(request.RequestDate);
 
+        var todayLocal = (request.RequestDate.Kind == DateTimeKind.Utc
+            ? request.RequestDate.ToLocal()
+            : request.RequestDate).Date;
+
         var requestLocalMonth = (request.RequestDate.Kind == DateTimeKind.Utc
             ? request.RequestDate.ToLocal()
             : request.RequestDate).Month;
@@ -164,6 +168,25 @@ public class GetBudgetProgressQueryHandler
 
             spentAmount = Math.Abs(spentAmount);
 
+            // Local-date period end for THIS budget's period type — reuses
+            // the same UTC boundaries already computed above, just converted
+            // back to local for human-terms day counting.
+            var periodEndLocal = budget.Period switch
+            {
+                Domain.Enums.BudgetPeriod.Weekly => weekEnd.ToLocal().Date,
+                Domain.Enums.BudgetPeriod.Yearly => yearEnd.ToLocal().Date,
+                _ => monthEnd.ToLocal().Date // Monthly, and the default
+            };
+
+            // +1 makes this inclusive of today — if today IS the last day
+            // of the period, there's still one day of spending room left,
+            // not zero. Floored at 1 so this never divides by zero even if
+            // the period has technically already ended.
+            var daysRemaining = Math.Max(1, (periodEndLocal - todayLocal).Days + 1);
+
+            var remaining = budget.Amount - spentAmount;
+            var dailyAllowance = remaining > 0 ? remaining / daysRemaining : 0m;
+
             progressList.Add(new BudgetProgressDto
             {
                 BudgetId              = budget.Id,
@@ -173,7 +196,9 @@ public class GetBudgetProgressQueryHandler
                 SpentAmount           = spentAmount,
                 Period                = budget.Period,
                 StartDate             = budget.StartDate,
-                EndDate               = budget.EndDate
+                EndDate               = budget.EndDate,
+                DaysRemainingInPeriod = daysRemaining,
+                DailyAllowance        = dailyAllowance
             });
         }
 

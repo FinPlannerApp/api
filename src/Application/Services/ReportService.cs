@@ -142,7 +142,9 @@ public class ReportService : IReportService
             BudgetAmount = b.BudgetAmount,
             SpentAmount = b.SpentAmount,
             RemainingAmount = b.RemainingAmount,
-            PercentageUsed = Math.Round(b.PercentageUsed, 1)
+            PercentageUsed = Math.Round(b.PercentageUsed, 1),
+            DaysRemainingInPeriod = b.DaysRemainingInPeriod,
+            DailyAllowance = Math.Round(b.DailyAllowance, 2)
         });
 
         using var memoryStream = new MemoryStream();
@@ -253,6 +255,8 @@ internal class BudgetVsActualRow
     public decimal SpentAmount { get; set; }
     public decimal RemainingAmount { get; set; }
     public decimal PercentageUsed { get; set; }
+    public int DaysRemainingInPeriod { get; set; }
+    public decimal DailyAllowance { get; set; }
 }
 
 internal class AccountStatementRow

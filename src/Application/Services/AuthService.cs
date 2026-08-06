@@ -320,12 +320,31 @@ public class AuthService : IAuthService
             return Result.Success("If an account exists, a password reset email has been sent.");
         }
 
-        // Generate 6-digit OTP
-        var otp = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
-
-        // Store in Redis: Email -> OTP (TTL 10 mins)
         var db = _redis.GetDatabase();
-        await db.StringSetAsync($"otp:{user.Email}", otp, TimeSpan.FromMinutes(10));
+        var redisKey = $"otp:{user.Email}";
+
+        // If a still-valid OTP already exists (user requesting a resend,
+        // most commonly because the first email is slow to arrive), reuse
+        // it rather than silently invalidating it with a new one. This is
+        // the fix — every email the user has for this reset attempt, old
+        // or new, will contain a code that actually still works.
+        var existingOtp = await db.StringGetAsync(redisKey);
+        string otp;
+
+        if (!existingOtp.IsNullOrEmpty)
+        {
+            otp = existingOtp.ToString();
+            // Refresh the TTL back to the full window so a resend also
+            // buys the user more time, rather than counting down against
+            // however much was left on the original.
+            await db.KeyExpireAsync(redisKey, TimeSpan.FromMinutes(10));
+            _logger.LogInformation("Reusing existing pending OTP for {Email} (resend requested).", user.Email);
+        }
+        else
+        {
+            otp = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
+            await db.StringSetAsync(redisKey, otp, TimeSpan.FromMinutes(10));
+        }
 
         // Generate a beautiful HTML email template
         var htmlBody = $@"

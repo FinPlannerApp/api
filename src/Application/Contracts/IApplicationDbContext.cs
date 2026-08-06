@@ -8,6 +8,9 @@ public interface IApplicationDbContext
     DbSet<Account> Accounts { get; }
     DbSet<Transaction> Transactions { get; }
     DbSet<AccountCategory> AccountCategories { get; }
+    DbSet<CreditCardDetails> CreditCardDetails { get; }
+    DbSet<LoanDetails> LoanDetails { get; }
+    DbSet<BankAccountDetails> BankAccountDetails { get; }
     DbSet<TransactionCategory> TransactionCategories { get; }
     DbSet<Feedback> Feedbacks { get; }
     DbSet<Budget> Budgets { get; }

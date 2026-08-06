@@ -126,7 +126,8 @@ public class TransactionCategoryService : ICategoryService<TransactionCategoryDt
         return new TransactionCategoryDto
         {
             Id = c.Id,
-            Name = c.Name
+            Name = c.Name,
+            IsTransferCategory = c.IsTransferCategory
         };
     }
 

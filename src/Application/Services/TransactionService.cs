@@ -4,6 +4,7 @@ namespace Application.Services;
 using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
+using Application.DTOs.Auth;
 using Application.DTOs.Transactions;
 using Domain.Entities;
 using Domain.Enums;
@@ -15,15 +16,18 @@ public class TransactionService : ITransactionService
     private readonly IApplicationDbContext _context;
     private readonly ICacheService _cache;
     private readonly ILogger<TransactionService> _logger;
+    private readonly IEmailService _emailService;
 
     public TransactionService(
         IApplicationDbContext context,
         ICacheService cache,
-        ILogger<TransactionService> logger)
+        ILogger<TransactionService> logger,
+        IEmailService emailService)
     {
         _context = context;
         _cache = cache;
         _logger = logger;
+        _emailService = emailService;
     }
 
     public async Task<Result<PaginatedResult<TransactionDto>>> GetTransactionsAsync(string userId, int accountId, QueryParameters queryParams)
@@ -82,6 +86,18 @@ public class TransactionService : ITransactionService
         if (queryParams.TransactionCategoryId.HasValue)
         {
             queryable = queryable.Where(t => t.TransactionCategoryId == queryParams.TransactionCategoryId.Value);
+        }
+
+        // FR-03: amount range filtering — confirmed missing during the synopsis
+        // audit, this closes that gap. Inclusive on both bounds, either end
+        // can be omitted independently (e.g. "over ₹5000" with no upper bound).
+        if (queryParams.MinAmount.HasValue)
+        {
+            queryable = queryable.Where(t => t.Amount >= queryParams.MinAmount.Value);
+        }
+        if (queryParams.MaxAmount.HasValue)
+        {
+            queryable = queryable.Where(t => t.Amount <= queryParams.MaxAmount.Value);
         }
 
         var totalRecords = await queryable.CountAsync();
@@ -195,7 +211,9 @@ public class TransactionService : ITransactionService
         if (!string.IsNullOrWhiteSpace(dto.Description))
             dto.Description = ToTitleCase(dto.Description);
 
-        var account = await _context.Accounts.FindAsync(accountId);
+        var account = await _context.Accounts
+            .Include(a => a.AccountCategory)
+            .FirstOrDefaultAsync(a => a.Id == accountId);
         if (account == null || account.UserId != userId)
             return Result.Failure<TransactionDto>(new Error("Account.NotFound", "Account not found."));
 
@@ -233,13 +251,37 @@ public class TransactionService : ITransactionService
             _context.Transactions.Add(transaction);
         }
 
-        // Adjust Account Balance
-        account.Balance += (oldType == TransactionType.Income ? -oldAmount : oldAmount);
-        account.Balance += (transaction.Type == TransactionType.Income ? transaction.Amount : -transaction.Amount);
+        // Adjust Account Balance — compute first, check, THEN apply.
+        var revertedBalance = account.Balance + (oldType == TransactionType.Income ? -oldAmount : oldAmount);
+        var prospectiveBalance = revertedBalance + (transaction.Type == TransactionType.Income ? transaction.Amount : -transaction.Amount);
 
+        bool isLiability = account.AccountCategory?.IsLiability ?? false;
+        if (!isLiability && prospectiveBalance < 0)
+        {
+            return Result.Failure<TransactionDto>(new Error(
+                "Transaction.InsufficientFunds",
+                $"This would take {account.Name} to a negative balance (₹{prospectiveBalance:F2}). Insufficient funds for this expense."));
+        }
+
+        account.Balance = prospectiveBalance;
         _context.Accounts.Update(account);
         
         await _context.SaveChangesAsync();
+
+        // Only check for NEW expense transactions — see design notes above
+        // for why edits are deliberately out of scope for this check.
+        if (!dto.Id.HasValue && transaction.Type == TransactionType.Expense)
+        {
+            try
+            {
+                await CheckAndSendOverspendAlertAsync(userId, transaction);
+            }
+            catch (Exception ex)
+            {
+                // Never let an alert failure fail the transaction save itself.
+                _logger.LogWarning(ex, "Overspend alert check failed for transaction {TransactionId} — transaction itself saved successfully.", transaction.Id);
+            }
+        }
 
         // Reload to include relations for return DTO
         var resultTransactionWithCategory = await _context.Transactions
@@ -539,5 +581,79 @@ public class TransactionService : ITransactionService
     {
         if (string.IsNullOrWhiteSpace(input)) return input;
         return System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(input.ToLower());
+    }
+
+    private async Task CheckAndSendOverspendAlertAsync(string userId, Transaction transaction)
+    {
+        if (transaction.TransactionCategoryId is null)
+            return; // no category, nothing to match against a category budget
+
+        // Matches budgets scoped to this specific category, AND general
+        // "all categories" budgets (TransactionCategoryId == null on the budget).
+        var matchingBudgets = await _context.Budgets
+            .Where(b => b.UserId == userId && !b.IsDeleted &&
+                        (b.TransactionCategoryId == transaction.TransactionCategoryId || b.TransactionCategoryId == null) &&
+                        b.StartDate <= transaction.Date &&
+                        (b.EndDate == null || b.EndDate >= transaction.Date))
+            .ToListAsync();
+
+        if (!matchingBudgets.Any())
+            return;
+
+        var accountIds = await _context.Accounts
+            .Where(a => a.UserId == userId && !a.IsDeleted)
+            .Select(a => a.Id)
+            .ToListAsync();
+
+        string? userEmail = null; // looked up lazily, only if we actually need to send something
+
+        foreach (var budget in matchingBudgets)
+        {
+            var (periodStart, periodEnd) = budget.Period switch
+            {
+                Domain.Enums.BudgetPeriod.Weekly => AppTimeZone.WeekBoundsUtc(transaction.Date),
+                Domain.Enums.BudgetPeriod.Yearly => AppTimeZone.YearBoundsUtc(transaction.Date),
+                _ => AppTimeZone.MonthBoundsUtc(transaction.Date) // Monthly, and the default
+            };
+
+            var spentAfter = await _context.Transactions
+                .Where(t => accountIds.Contains(t.AccountId) && !t.IsDeleted &&
+                            t.Type == TransactionType.Expense &&
+                            t.Date >= periodStart && t.Date <= periodEnd &&
+                            (budget.TransactionCategoryId == null || t.TransactionCategoryId == budget.TransactionCategoryId))
+                .SumAsync(t => t.Amount);
+
+            // transaction.Amount is already included in spentAfter, since it
+            // was just committed via SaveChangesAsync before this method runs.
+            var spentBefore = spentAfter - transaction.Amount;
+
+            bool justCrossedThreshold = spentBefore < budget.Amount && spentAfter >= budget.Amount;
+            if (!justCrossedThreshold)
+                continue; // either already over before this transaction, or still under — no alert either way
+
+            userEmail ??= await _context.Users
+                .Where(u => u.Id == userId)
+                .Select(u => u.Email)
+                .FirstOrDefaultAsync();
+
+            if (string.IsNullOrEmpty(userEmail))
+                continue;
+
+            var categoryName = budget.TransactionCategoryId.HasValue
+                ? (await _context.TransactionCategories.FindAsync(budget.TransactionCategoryId.Value))?.Name ?? "this category"
+                : "your overall budget";
+
+            await _emailService.SendEmailAsync(new MailRequest
+            {
+                To = userEmail,
+                Subject = $"Budget Alert: {categoryName} limit reached",
+                Body = $"<p>You've just crossed your {budget.Period} budget of ₹{budget.Amount:F2} for <strong>{categoryName}</strong>.</p>" +
+                       $"<p>Total spent this period: ₹{spentAfter:F2}</p>"
+            });
+
+            _logger.LogInformation(
+                "Overspend alert sent to {UserId} for category {CategoryId} — budget {BudgetAmount}, spent {SpentAmount}.",
+                userId, budget.TransactionCategoryId, budget.Amount, spentAfter);
+        }
     }
 }

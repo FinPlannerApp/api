@@ -1,8 +1,8 @@
-
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Accounts;
 using Domain.Entities;
+using Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace Application.Services;
@@ -23,6 +23,9 @@ public class AccountService : IAccountService
         var queryable = _context.Accounts
             .Where(a => a.UserId == userId && !a.IsDeleted)
             .Include(a => a.AccountCategory)
+            .Include(a => a.CreditCardDetails)
+            .Include(a => a.LoanDetails)
+            .Include(a => a.BankAccountDetails)
             .AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(queryParams.GlobalSearch))
@@ -40,7 +43,6 @@ public class AccountService : IAccountService
 
         var totalRecords = await queryable.CountAsync();
 
-        // Apply sorting
         queryable = queryParams.SortBy?.ToLower() switch
         {
             "name" => queryParams.SortOrder == "desc" ? queryable.OrderByDescending(a => a.Name.ToLower()).ThenByDescending(a => a.Id) : queryable.OrderBy(a => a.Name.ToLower()).ThenByDescending(a => a.Id),
@@ -55,7 +57,7 @@ public class AccountService : IAccountService
             .ToListAsync();
 
         var pagedDto = new PaginatedResult<AccountDto>(
-            items.Select(MapToDto).ToList(),
+            items.Select(a => MapToDto(a, null)).ToList(),
             totalRecords,
             queryParams.PageNumber,
             queryParams.PageSize
@@ -65,12 +67,21 @@ public class AccountService : IAccountService
 
     public async Task<Result<List<AccountDto>>> GetAllAccountsAsync(string userId)
     {
+        // FIX: was missing .Include(a => a.AccountCategory) entirely — every
+        // account returned by this specific method had AccountCategoryName
+        // silently coming back empty, regardless of what category was
+        // actually set. Found while extending this method for the detail
+        // records; fixed alongside since it's directly adjacent.
         var items = await _context.Accounts
             .Where(a => a.UserId == userId && !a.IsDeleted)
+            .Include(a => a.AccountCategory)
+            .Include(a => a.CreditCardDetails)
+            .Include(a => a.LoanDetails)
+            .Include(a => a.BankAccountDetails)
             .OrderBy(a => a.Name)
             .ToListAsync();
 
-        return Result.Success(items.Select(MapToDto).ToList());
+        return Result.Success(items.Select(a => MapToDto(a, null)).ToList());
     }
 
     public async Task<Result<AccountDto>> UpsertAccountAsync(string userId, UpsertAccountDto dto)
@@ -79,19 +90,27 @@ public class AccountService : IAccountService
         Account? account = null;
         var normalizedName = dto.Name.Trim().ToLower();
 
-        var exists = await _context.Accounts.AnyAsync(a => 
-            a.UserId == userId && 
-            a.Name.ToLower() == normalizedName && 
+        var exists = await _context.Accounts.AnyAsync(a =>
+            a.UserId == userId &&
+            a.Name.ToLower() == normalizedName &&
             (!dto.Id.HasValue || a.Id != dto.Id.Value));
 
         if (exists)
             return Result.Failure<AccountDto>(new Error("Account.Duplicate", $"An account with the name '{dto.Name}' already exists."));
 
+        var category = await _context.AccountCategories.FindAsync(dto.AccountCategoryId);
+        if (category == null || category.UserId != userId)
+            return Result.Failure<AccountDto>(new Error("AccountCategory.NotFound", "Account category not found."));
+
         if (dto.Id.HasValue && dto.Id > 0)
         {
-            // Edit Mode
+            // Edit Mode — load with details included so SyncAccountDetailsAsync
+            // can see what's currently attached and decide what to add/update/remove.
             account = await _context.Accounts
                 .Include(a => a.AccountCategory)
+                .Include(a => a.CreditCardDetails)
+                .Include(a => a.LoanDetails)
+                .Include(a => a.BankAccountDetails)
                 .FirstOrDefaultAsync(a => a.Id == dto.Id);
 
             if (account == null || account.UserId != userId)
@@ -113,17 +132,78 @@ public class AccountService : IAccountService
                 UserId = userId
             };
             _context.Accounts.Add(account);
+            await _context.SaveChangesAsync(); // need account.Id before creating a detail record with an FK to it
         }
 
+        await SyncAccountDetailsAsync(account, category.AccountType, dto);
         await _context.SaveChangesAsync();
 
-        // Reload to get populated fields (like Category name if needed, or DB generated values)
-        // Note: For simple update, memory object is usually enough, but if we need relations:
-        // account = await _context.Accounts.Include(a => a.AccountCategory).FirstAsync(a => a.Id == account.Id); 
-
-        var resultDto = MapToDto(account);
+        var resultDto = MapToDto(account, category);
         await _cache.RemoveByPrefixAsync($"dash::{userId}:"); // Invalidate net worth
         return Result.Success(resultDto);
+    }
+
+    /// <summary>
+    /// Creates/updates the ONE detail record matching categoryType, and
+    /// removes the other two if they exist — handles both "user filled in
+    /// details for the first time" and "user recategorized this account to
+    /// a different AccountType, so the old detail record is now stale."
+    /// </summary>
+    private async Task SyncAccountDetailsAsync(Account account, AccountType categoryType, UpsertAccountDto dto)
+    {
+        // Credit Card
+        if (categoryType == AccountType.CreditCard && dto.CreditCardDetails != null)
+        {
+            if (account.CreditCardDetails == null)
+            {
+                account.CreditCardDetails = new CreditCardDetails { AccountId = account.Id };
+                _context.CreditCardDetails.Add(account.CreditCardDetails);
+            }
+            account.CreditCardDetails.CreditLimit = dto.CreditCardDetails.CreditLimit;
+            account.CreditCardDetails.MinimumDueAmount = dto.CreditCardDetails.MinimumDueAmount;
+            account.CreditCardDetails.DueDate = dto.CreditCardDetails.DueDate;
+            account.CreditCardDetails.StatementClosingDate = dto.CreditCardDetails.StatementClosingDate;
+        }
+        else if (account.CreditCardDetails != null)
+        {
+            _context.CreditCardDetails.Remove(account.CreditCardDetails);
+        }
+
+        // Loan
+        if (categoryType == AccountType.Loan && dto.LoanDetails != null)
+        {
+            if (account.LoanDetails == null)
+            {
+                account.LoanDetails = new LoanDetails { AccountId = account.Id };
+                _context.LoanDetails.Add(account.LoanDetails);
+            }
+            account.LoanDetails.PrincipalAmount = dto.LoanDetails.PrincipalAmount;
+            account.LoanDetails.InterestRate = dto.LoanDetails.InterestRate;
+            account.LoanDetails.EmiAmount = dto.LoanDetails.EmiAmount;
+            account.LoanDetails.TenureMonths = dto.LoanDetails.TenureMonths;
+            account.LoanDetails.NextEmiDueDate = dto.LoanDetails.NextEmiDueDate;
+            account.LoanDetails.StartDate = dto.LoanDetails.StartDate;
+        }
+        else if (account.LoanDetails != null)
+        {
+            _context.LoanDetails.Remove(account.LoanDetails);
+        }
+
+        // Bank
+        if (categoryType == AccountType.Bank && dto.BankAccountDetails != null)
+        {
+            if (account.BankAccountDetails == null)
+            {
+                account.BankAccountDetails = new BankAccountDetails { AccountId = account.Id };
+                _context.BankAccountDetails.Add(account.BankAccountDetails);
+            }
+            account.BankAccountDetails.InterestRate = dto.BankAccountDetails.InterestRate;
+            account.BankAccountDetails.InterestFrequency = dto.BankAccountDetails.InterestFrequency;
+        }
+        else if (account.BankAccountDetails != null)
+        {
+            _context.BankAccountDetails.Remove(account.BankAccountDetails);
+        }
     }
 
     public async Task<Result<bool>> DeleteAccountAsync(string userId, int accountId)
@@ -141,14 +221,39 @@ public class AccountService : IAccountService
         return Result.Success(true);
     }
 
-    private AccountDto MapToDto(Account a)
+    private AccountDto MapToDto(Account a, Domain.Entities.AccountCategory? categoryOverride = null)
     {
+        var category = categoryOverride ?? a.AccountCategory;
+
         return new AccountDto
         {
             Id = a.Id,
             Name = a.Name,
             Balance = a.Balance,
-            AccountCategoryName = a.AccountCategory?.Name ?? ""
+            AccountCategoryName = category?.Name ?? "",
+            IsLiability = category?.IsLiability ?? false,
+            AccountType = category?.AccountType ?? AccountType.Other,
+            CreditCardDetails = a.CreditCardDetails is null ? null : new CreditCardDetailsDto
+            {
+                CreditLimit = a.CreditCardDetails.CreditLimit,
+                MinimumDueAmount = a.CreditCardDetails.MinimumDueAmount,
+                DueDate = a.CreditCardDetails.DueDate,
+                StatementClosingDate = a.CreditCardDetails.StatementClosingDate
+            },
+            LoanDetails = a.LoanDetails is null ? null : new LoanDetailsDto
+            {
+                PrincipalAmount = a.LoanDetails.PrincipalAmount,
+                InterestRate = a.LoanDetails.InterestRate,
+                EmiAmount = a.LoanDetails.EmiAmount,
+                TenureMonths = a.LoanDetails.TenureMonths,
+                NextEmiDueDate = a.LoanDetails.NextEmiDueDate,
+                StartDate = a.LoanDetails.StartDate
+            },
+            BankAccountDetails = a.BankAccountDetails is null ? null : new BankAccountDetailsDto
+            {
+                InterestRate = a.BankAccountDetails.InterestRate,
+                InterestFrequency = a.BankAccountDetails.InterestFrequency
+            }
         };
     }
 

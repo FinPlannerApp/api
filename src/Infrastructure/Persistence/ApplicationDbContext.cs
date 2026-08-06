@@ -18,6 +18,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<Account> Accounts { get; set; }
     public DbSet<AccountCategory> AccountCategories { get; set; }
     public DbSet<Transaction> Transactions { get; set; }
+    public DbSet<CreditCardDetails> CreditCardDetails { get; set; }
+    public DbSet<LoanDetails> LoanDetails { get; set; }
+    public DbSet<BankAccountDetails> BankAccountDetails { get; set; }
     public DbSet<TransactionCategory> TransactionCategories { get; set; }
     public DbSet<Feedback> Feedbacks { get; set; }
     public DbSet<Budget> Budgets { get; set; }
@@ -209,6 +212,34 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         });
         builder.Entity<AccountLog>(e => e.ToTable("AccountLogs", "accounts"));
         builder.Entity<AccountCategoryLog>(e => e.ToTable("AccountCategoryLogs", "accounts"));
+
+        builder.Entity<CreditCardDetails>(e =>
+        {
+            e.ToTable("CreditCardDetails", "accounts");
+            e.HasIndex(d => d.AccountId).IsUnique(); // enforces the 1:1 relationship
+            e.HasOne(d => d.Account)
+                .WithOne(a => a.CreditCardDetails)
+                .HasForeignKey<CreditCardDetails>(d => d.AccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<LoanDetails>(e =>
+        {
+            e.ToTable("LoanDetails", "accounts");
+            e.HasIndex(d => d.AccountId).IsUnique();
+            e.HasOne(d => d.Account)
+                .WithOne(a => a.LoanDetails)
+                .HasForeignKey<LoanDetails>(d => d.AccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<BankAccountDetails>(e =>
+        {
+            e.ToTable("BankAccountDetails", "accounts");
+            e.HasIndex(d => d.AccountId).IsUnique();
+            e.HasOne(d => d.Account)
+                .WithOne(a => a.BankAccountDetails)
+                .HasForeignKey<BankAccountDetails>(d => d.AccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
 
         // --- TRANSACTIONS SCHEMA ---
         builder.Entity<Transaction>(e =>

@@ -34,4 +34,10 @@ public class QueryParameters
 
     [FromQuery(Name = "transactionCategoryId")]
     public int? TransactionCategoryId { get; set; }
+
+    [FromQuery(Name = "minAmount")]
+    public decimal? MinAmount { get; set; }
+
+    [FromQuery(Name = "maxAmount")]
+    public decimal? MaxAmount { get; set; }
 }
