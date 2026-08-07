@@ -1,4 +1,4 @@
-﻿namespace Application.DTOs.Dashboard;
+namespace Application.DTOs.Dashboard;
 
 public class DashboardSummaryDto
 {
@@ -6,4 +6,5 @@ public class DashboardSummaryDto
     public decimal MonthlyIncome { get; set; }
     public decimal MonthlyExpenses { get; set; }
     public decimal BroughtForwardAmount { get; set; }
+    public decimal RealAvailableCash { get; set; }
 }

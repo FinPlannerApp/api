@@ -1,4 +1,4 @@
-﻿using Application;
+using Application;
 using Application.Contracts;
 using Application.DTOs;
 using Application.DTOs.Accounts;
@@ -43,6 +43,27 @@ public class AccountsController : BaseController
     public async Task<IActionResult> Delete([FromBody] DeleteDto dto)
     {
         var result = await _accountService.DeleteAccountAsync(UserId, dto.Id);
+        return HandleResult(result);
+    }
+
+    [HttpPost("merge")]
+    public async Task<IActionResult> Merge([FromBody] MergeAccountsDto dto)
+    {
+        var result = await _accountService.MergeAccountsAsync(UserId, dto);
+        return HandleResult(result);
+    }
+
+    [HttpPost("{id}/archive")]
+    public async Task<IActionResult> Archive(int id)
+    {
+        var result = await _accountService.SetArchivedStatusAsync(UserId, id, true);
+        return HandleResult(result);
+    }
+
+    [HttpPost("{id}/unarchive")]
+    public async Task<IActionResult> Unarchive(int id)
+    {
+        var result = await _accountService.SetArchivedStatusAsync(UserId, id, false);
         return HandleResult(result);
     }
 }

@@ -8,6 +8,9 @@ public class AccountDto
     public string Name { get; set; } = string.Empty;
     public decimal Balance { get; set; }
     public string AccountCategoryName { get; set; } = string.Empty;
+    public int AccountCategoryId { get; set; }
+    public bool IsArchived { get; set; }
+    public string? Purpose { get; set; }
     public bool IsLiability { get; set; }
     public AccountType AccountType { get; set; }
 

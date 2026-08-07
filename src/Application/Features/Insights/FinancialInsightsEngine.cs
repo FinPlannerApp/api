@@ -1,3 +1,4 @@
+using Application.Common.Helpers;
 using Application.Contracts;
 using Domain.Rules;
 using Microsoft.EntityFrameworkCore;
@@ -22,9 +23,14 @@ public class FinancialInsightsEngine : IFinancialInsightsEngine
 
     public async Task<List<FinancialInsight>> GenerateInsightsAsync(string userId, DateTime endDate)
     {
-        var startOfMonth = new DateTime(endDate.Year, endDate.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var previousMonthStart = startOfMonth.AddMonths(-1);
-        
+        // FIX: was constructing month boundaries directly from endDate.Year/Month
+        // with hardcoded DateTimeKind.Utc — the same timezone bug fixed
+        // earlier this project in DashboardService, GetBudgetProgressQuery,
+        // and GetTransactionsAsync. Found while extending this exact file
+        // for the new rules below, fixed in the same pass.
+        var (startOfMonth, _) = AppTimeZone.MonthBoundsUtc(endDate);
+        var (previousMonthStart, previousMonthEnd) = AppTimeZone.MonthBoundsUtc(endDate.AddMonths(-1));
+
         var currentExpenses = await _context.Transactions
             .Where(t => t.UserId == userId && t.Date >= startOfMonth && t.Date <= endDate && t.Type == Domain.Enums.TransactionType.Expense)
             .SumAsync(t => t.Amount);
@@ -34,11 +40,11 @@ public class FinancialInsightsEngine : IFinancialInsightsEngine
             .SumAsync(t => t.Amount);
 
         var previousExpenses = await _context.Transactions
-            .Where(t => t.UserId == userId && t.Date >= previousMonthStart && t.Date < startOfMonth && t.Type == Domain.Enums.TransactionType.Expense)
+            .Where(t => t.UserId == userId && t.Date >= previousMonthStart && t.Date <= previousMonthEnd && t.Type == Domain.Enums.TransactionType.Expense)
             .SumAsync(t => t.Amount);
 
         var previousIncome = await _context.Transactions
-            .Where(t => t.UserId == userId && t.Date >= previousMonthStart && t.Date < startOfMonth && t.Type == Domain.Enums.TransactionType.Income)
+            .Where(t => t.UserId == userId && t.Date >= previousMonthStart && t.Date <= previousMonthEnd && t.Type == Domain.Enums.TransactionType.Income)
             .SumAsync(t => t.Amount);
 
         var activeSubscriptions = await _context.Subscriptions
@@ -50,6 +56,60 @@ public class FinancialInsightsEngine : IFinancialInsightsEngine
             .Where(b => b.UserId == userId)
             .SumAsync(b => b.Amount);
 
+        // ── New: baseline for LifestyleInflationRule ─────────────────────────
+        // A genuinely older window (4-6 months back) than "previous month" —
+        // the built-in delta rule below already catches one-month blips,
+        // this is specifically for sustained, gradual creep instead.
+        var (sixMonthsAgoStart, _) = AppTimeZone.MonthBoundsUtc(endDate.AddMonths(-6));
+        var (_, fourMonthsAgoEnd) = AppTimeZone.MonthBoundsUtc(endDate.AddMonths(-4));
+
+        var baselineExpenseSum = await _context.Transactions
+            .Where(t => t.UserId == userId && t.Type == Domain.Enums.TransactionType.Expense &&
+                        t.Date >= sixMonthsAgoStart && t.Date <= fourMonthsAgoEnd)
+            .SumAsync(t => t.Amount);
+
+        var baselineMonthlyAverage = baselineExpenseSum / 3m; // 3 months in that window
+
+        // ── New: salary-day spike data for SalaryDaySpikeRule ────────────────
+        var largestIncomeTransaction = await _context.Transactions
+            .Where(t => t.UserId == userId && t.Date >= startOfMonth && t.Date <= endDate && t.Type == Domain.Enums.TransactionType.Income)
+            .OrderByDescending(t => t.Amount)
+            .FirstOrDefaultAsync();
+
+        decimal spendingInThreeDaysAfterLargestIncome = 0;
+        decimal averageDailySpendRestOfMonth = 0;
+
+        if (largestIncomeTransaction != null)
+        {
+            var salaryDayLocal = largestIncomeTransaction.Date.ToLocal().Date;
+            var threeDaysAfterStart = DateTime.SpecifyKind(salaryDayLocal, DateTimeKind.Unspecified).ToUtc();
+            var threeDaysAfterEnd = DateTime.SpecifyKind(salaryDayLocal.AddDays(3), DateTimeKind.Unspecified).ToUtc();
+
+            spendingInThreeDaysAfterLargestIncome = await _context.Transactions
+                .Where(t => t.UserId == userId && t.Type == Domain.Enums.TransactionType.Expense &&
+                            t.Date >= threeDaysAfterStart && t.Date < threeDaysAfterEnd)
+                .SumAsync(t => t.Amount);
+
+            var daysInPeriod = (endDate.ToLocal().Date - startOfMonth.ToLocal().Date).Days + 1;
+            var remainingDays = Math.Max(1, daysInPeriod - 3);
+            var restOfMonthExpense = currentExpenses - spendingInThreeDaysAfterLargestIncome;
+            averageDailySpendRestOfMonth = restOfMonthExpense / remainingDays;
+        }
+
+        // ── New: oldest active subscription age for SubscriptionReviewNudgeRule ──
+        var oldestActiveSubscription = await _context.Subscriptions
+            .Include(s => s.RecurringTransaction)
+            .Where(s => s.UserId == userId && s.RecurringTransaction.IsActive)
+            .OrderBy(s => s.RecurringTransaction.StartDate)
+            .FirstOrDefaultAsync();
+
+        int oldestSubscriptionMonths = 0;
+        if (oldestActiveSubscription != null)
+        {
+            var start = oldestActiveSubscription.RecurringTransaction.StartDate;
+            oldestSubscriptionMonths = Math.Max(0, ((endDate.Year - start.Year) * 12) + endDate.Month - start.Month);
+        }
+
         var ruleContext = new RuleContext
         {
             UserId = userId,
@@ -58,7 +118,11 @@ public class FinancialInsightsEngine : IFinancialInsightsEngine
             PreviousIncome = previousIncome,
             PreviousExpense = previousExpenses,
             SubscriptionSpend = activeSubscriptions,
-            BudgetLimit = budgetLimit
+            BudgetLimit = budgetLimit,
+            BaselineExpenseFourToSixMonthsAgo = baselineMonthlyAverage,
+            SpendingInThreeDaysAfterLargestIncome = spendingInThreeDaysAfterLargestIncome,
+            AverageDailySpendRestOfMonth = averageDailySpendRestOfMonth,
+            OldestActiveSubscriptionMonths = oldestSubscriptionMonths
         };
 
         var results = new List<FinancialInsight>();

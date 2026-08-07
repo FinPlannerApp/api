@@ -41,5 +41,11 @@ public interface IApplicationDbContext
     DbSet<UserChallengeEnrollment> UserChallengeEnrollments { get; }
     DbSet<UserChallengeProgress> UserChallengeProgresses { get; }
 
+    DbSet<DecisionJournalEntry> DecisionJournalEntries { get; }
+    DbSet<SavingsBucket> SavingsBuckets { get; }
+    DbSet<Merchant> Merchants { get; }
+    DbSet<MerchantAlias> MerchantAliases { get; }
+    DbSet<Goal> Goals { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

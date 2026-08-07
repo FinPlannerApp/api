@@ -14,7 +14,13 @@ public class CreditCardDetails : BaseEntity
     public decimal? CreditLimit { get; set; }
     public decimal? MinimumDueAmount { get; set; }
     public DateTime? DueDate { get; set; }
-    public DateTime? StatementClosingDate { get; set; }
+    public DateTime? StatementClosingDate { get; set; } // "Bill Date" in the UI — same concept, clearer label there
+
+    /// <summary>Annual/membership fee, if any.</summary>
+    public decimal? AnnualFee { get; set; }
+
+    /// <summary>APR on unpaid balances.</summary>
+    public decimal? InterestRate { get; set; }
 }
 
 public class LoanDetails : BaseEntity
@@ -37,4 +43,8 @@ public class BankAccountDetails : BaseEntity
 
     public decimal? InterestRate { get; set; }
     public Domain.Enums.InterestFrequency? InterestFrequency { get; set; }
+
+    /// <summary>Minimum balance the bank requires — informational, no
+    /// automatic penalty tracking, just surfaced so it's visible.</summary>
+    public decimal? MinimumBalance { get; set; }
 }

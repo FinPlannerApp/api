@@ -456,6 +456,52 @@ public class AuthService : IAuthService
         return Result.Success(true);
     }
 
+    public async Task<Result<UserProfileDto>> UpdateProfileAsync(string userId, UpdateProfileDto dto)
+    {
+        var user = await _userManager.FindByIdAsync(userId);
+        if (user == null)
+            return Result.Failure<UserProfileDto>(new Error("User.NotFound", "User not found."));
+
+        user.Name = dto.Name;
+        user.OverspendAlertsEnabled = dto.OverspendAlertsEnabled;
+
+        var wantsEmailChange = !string.IsNullOrWhiteSpace(dto.NewEmail) &&
+                                !dto.NewEmail.Equals(user.Email, StringComparison.OrdinalIgnoreCase);
+
+        if (wantsEmailChange)
+        {
+            if (string.IsNullOrWhiteSpace(dto.CurrentPassword) ||
+                !await _userManager.CheckPasswordAsync(user, dto.CurrentPassword))
+            {
+                return Result.Failure<UserProfileDto>(new Error(
+                    "Auth.InvalidPassword",
+                    "Your current password is required and must be correct to change your email."));
+            }
+
+            var existingUserWithEmail = await _userManager.FindByEmailAsync(dto.NewEmail!);
+            if (existingUserWithEmail != null && existingUserWithEmail.Id != userId)
+                return Result.Failure<UserProfileDto>(new Error("Auth.EmailInUse", "This email is already in use."));
+
+            user.Email = dto.NewEmail;
+            user.UserName = dto.NewEmail;
+            user.EmailConfirmed = false;
+        }
+
+        var updateResult = await _userManager.UpdateAsync(user);
+        if (!updateResult.Succeeded)
+        {
+            var errors = string.Join(", ", updateResult.Errors.Select(e => e.Description));
+            return Result.Failure<UserProfileDto>(new Error("Profile.UpdateFailed", errors));
+        }
+
+        return Result.Success(new UserProfileDto
+        {
+            Name = user.Name,
+            Email = user.Email!,
+            OverspendAlertsEnabled = user.OverspendAlertsEnabled
+        });
+    }
+
     private async Task<string> GenerateJwtToken(ApplicationUser user, string sessionId)
     {
         var jwtKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.Key));

@@ -125,6 +125,43 @@ public class AccountCategoryService : ICategoryService<AccountCategoryDto, Upser
         return Result.Success(true);
     }
 
+    public async Task<Result<bool>> MergeAsync(string userId, MergeAccountCategoriesDto dto)
+    {
+        if (dto.SourceCategoryId == dto.TargetCategoryId)
+            return Result.Failure<bool>(new Error("Category.SameCategory", "Cannot merge a category into itself."));
+
+        var source = await _context.AccountCategories.FindAsync(dto.SourceCategoryId);
+        var target = await _context.AccountCategories.FindAsync(dto.TargetCategoryId);
+
+        if (source == null || source.UserId != userId || target == null || target.UserId != userId)
+            return Result.Failure<bool>(new Error("Category.NotFound", "One or both categories could not be found."));
+
+        // Reassign every account currently using the source category —
+        // this is the actual merge. Nothing about the accounts themselves
+        // changes except which category they point at.
+        var affectedAccounts = await _context.Accounts
+            .Where(a => a.AccountCategoryId == dto.SourceCategoryId && a.UserId == userId)
+            .ToListAsync();
+
+        foreach (var account in affectedAccounts)
+        {
+            account.AccountCategoryId = dto.TargetCategoryId;
+        }
+        _context.Accounts.UpdateRange(affectedAccounts);
+
+        // Retire the source category — soft delete, same convention as
+        // everything else in this app, not a hard delete.
+        source.IsDeleted = true;
+        source.DeletedAt = DateTime.UtcNow;
+        _context.AccountCategories.Update(source);
+
+        await _context.SaveChangesAsync();
+        await _cache.RemoveAsync(AllKey(userId)); // invalidate the cached category list
+        await _cache.RemoveByPrefixAsync($"dash::{userId}:"); // net worth/summary may reference category-derived data
+
+        return Result.Success(true);
+    }
+
     private AccountCategoryDto MapToDto(AccountCategory c)
     {
         return new AccountCategoryDto

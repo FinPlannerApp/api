@@ -1,4 +1,4 @@
-﻿using Application;
+using Application;
 using Application.Contracts;
 using Application.DTOs;
 using Application.DTOs.AccountCategory;
@@ -13,10 +13,14 @@ namespace API.Controllers;
 public class AccountCategoriesController : BaseController
 {
     private readonly ICategoryService<AccountCategoryDto, UpsertAccountCategoryDto> _accountCategoryService;
+    private readonly Application.Services.AccountCategoryService _accountCategoryServiceConcrete;
 
-    public AccountCategoriesController(ICategoryService<AccountCategoryDto, UpsertAccountCategoryDto> accountCategoryService)
+    public AccountCategoriesController(
+        ICategoryService<AccountCategoryDto, UpsertAccountCategoryDto> accountCategoryService,
+        Application.Services.AccountCategoryService accountCategoryServiceConcrete)
     {
         _accountCategoryService = accountCategoryService;
+        _accountCategoryServiceConcrete = accountCategoryServiceConcrete;
     }
 
     [HttpPost("search")]
@@ -44,6 +48,13 @@ public class AccountCategoriesController : BaseController
     public async Task<IActionResult> Delete([FromBody] DeleteDto dto)
     {
         var result = await _accountCategoryService.DeleteAsync(UserId!, dto.Id);
+        return HandleResult(result);
+    }
+
+    [HttpPost("merge")]
+    public async Task<IActionResult> Merge([FromBody] Application.DTOs.AccountCategory.MergeAccountCategoriesDto dto)
+    {
+        var result = await _accountCategoryServiceConcrete.MergeAsync(UserId!, dto);
         return HandleResult(result);
     }
 }

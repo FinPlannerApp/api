@@ -17,6 +17,11 @@ public class RuleContext
     public decimal SavingsRate => TotalIncome == 0 ? 0 : (TotalIncome - TotalExpense) / TotalIncome;
     public decimal SubscriptionSpend { get; set; }
     public decimal BudgetLimit { get; set; }
+
+    public decimal BaselineExpenseFourToSixMonthsAgo { get; set; }
+    public decimal SpendingInThreeDaysAfterLargestIncome { get; set; }
+    public decimal AverageDailySpendRestOfMonth { get; set; }
+    public int OldestActiveSubscriptionMonths { get; set; }
 }
 
 public class FinancialInsight

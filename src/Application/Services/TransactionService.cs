@@ -580,6 +580,8 @@ public class TransactionService : ITransactionService
             AccountId = t.AccountId,
             AccountName = t.Account?.Name,
             CategoryName = t.TransactionCategory?.Name ?? (t.Description.Contains("Transfer") ? "Transfer" : null),
+            MerchantId = t.MerchantId,
+            MerchantName = t.Merchant?.Name,
             TransferGroupId = t.TransferGroupId
         };
     }
@@ -638,13 +640,15 @@ public class TransactionService : ITransactionService
             if (!justCrossedThreshold)
                 continue; // either already over before this transaction, or still under — no alert either way
 
-            userEmail ??= await _context.Users
+            var userPrefs = await _context.Users
                 .Where(u => u.Id == userId)
-                .Select(u => u.Email)
+                .Select(u => new { u.Email, u.OverspendAlertsEnabled })
                 .FirstOrDefaultAsync();
 
-            if (string.IsNullOrEmpty(userEmail))
+            if (userPrefs == null || string.IsNullOrEmpty(userPrefs.Email) || !userPrefs.OverspendAlertsEnabled)
                 continue;
+
+            userEmail = userPrefs.Email;
 
             var categoryName = budget.TransactionCategoryId.HasValue
                 ? (await _context.TransactionCategories.FindAsync(budget.TransactionCategoryId.Value))?.Name ?? "this category"

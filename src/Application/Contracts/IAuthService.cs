@@ -1,4 +1,4 @@
-﻿using Application.Common.Models;
+using Application.Common.Models;
 using Application.DTOs.Auth;
 
 namespace Application.Contracts;
@@ -15,4 +15,5 @@ public interface IAuthService
     Task<Result<bool>> ResetPasswordAsync(ResetPasswordDto dto);
     Task<Result<bool>> CheckEmailAsync(string email);
     Task<Result<bool>> CheckUserNameAsync(string username);
+    Task<Result<UserProfileDto>> UpdateProfileAsync(string userId, UpdateProfileDto dto);
 }

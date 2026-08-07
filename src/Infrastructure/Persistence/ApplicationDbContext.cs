@@ -57,6 +57,12 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<UserChallengeEnrollment> UserChallengeEnrollments { get; set; }
     public DbSet<UserChallengeProgress> UserChallengeProgresses { get; set; }
 
+    public DbSet<DecisionJournalEntry> DecisionJournalEntries => Set<DecisionJournalEntry>();
+    public DbSet<SavingsBucket> SavingsBuckets => Set<SavingsBucket>();
+    public DbSet<Merchant> Merchants => Set<Merchant>();
+    public DbSet<MerchantAlias> MerchantAliases => Set<MerchantAlias>();
+    public DbSet<Goal> Goals => Set<Goal>();
+
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IHttpContextAccessor httpContextAccessor) : base(options)
     {
         _httpContextAccessor = httpContextAccessor;
@@ -267,6 +273,12 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<TransactionLog>(e => e.ToTable("TransactionLogs", "transactions"));
         builder.Entity<TransactionCategoryLog>(e => e.ToTable("TransactionCategoryLogs", "transactions"));
 
+        builder.Entity<DecisionJournalEntry>(e =>
+        {
+            e.ToTable("DecisionJournalEntries", "transactions");
+            e.HasIndex(d => new { d.UserId, d.DecisionDate });
+        });
+
         // --- FEEDBACK SCHEMA ---
         builder.Entity<Feedback>(e => e.ToTable("Feedbacks", "feedback"));
         builder.Entity<FeedbackLog>(e => e.ToTable("FeedbackLogs", "feedback"));
@@ -306,6 +318,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<ChallengeDay>().HasQueryFilter(cd => !cd.IsDeleted);
         builder.Entity<UserChallengeEnrollment>().HasQueryFilter(uce => !uce.IsDeleted);
         builder.Entity<UserChallengeProgress>().HasQueryFilter(ucp => !ucp.IsDeleted);
+        builder.Entity<DecisionJournalEntry>().HasQueryFilter(d => !d.IsDeleted);
 
         // --- Budget Configuration ---
         builder.Entity<Budget>()
@@ -537,6 +550,40 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
              
             e.HasIndex(a => a.IssueId);
             e.HasIndex(a => a.CreatedAt);
+        });
+
+        builder.Entity<SavingsBucket>(e =>
+        {
+            e.ToTable("SavingsBuckets", "accounts");
+            e.HasIndex(b => b.AccountId);
+            e.HasOne(b => b.Account)
+                .WithMany()
+                .HasForeignKey(b => b.AccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<Merchant>(e =>
+        {
+            e.ToTable("Merchants", "transactions");
+            e.HasIndex(m => new { m.UserId, m.Name }).IsUnique();
+        });
+        builder.Entity<MerchantAlias>(e =>
+        {
+            e.ToTable("MerchantAliases", "transactions");
+            e.HasOne(a => a.Merchant)
+                .WithMany(m => m.Aliases)
+                .HasForeignKey(a => a.MerchantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<Goal>(e =>
+        {
+            e.ToTable("Goals", "accounts");
+            e.HasIndex(g => g.UserId);
+            e.HasOne(g => g.SavingsBucket)
+                .WithMany()
+                .HasForeignKey(g => g.SavingsBucketId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
     }
 }

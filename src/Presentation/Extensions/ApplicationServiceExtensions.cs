@@ -20,16 +20,23 @@ public static class ApplicationServiceExtensions
         });
 
         services.AddScoped<IAccountService, AccountService>();
+        services.AddScoped<ISavingsBucketService, SavingsBucketService>();
+        services.AddScoped<IMerchantService, MerchantService>();
+        services.AddScoped<IGoalService, GoalService>();
         services.AddScoped<ITransactionService, TransactionService>();
         services.AddScoped<IAuthService, AuthService>();
 
         services.AddScoped<ICategoryService<AccountCategoryDto, UpsertAccountCategoryDto>, AccountCategoryService>();
+        services.AddScoped<AccountCategoryService>();
         services.AddScoped<ICategoryService<TransactionCategoryDto, UpsertTransactionCategoryDto>, TransactionCategoryService>();
 
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IReportService, ReportService>();
         services.AddScoped<Application.Features.Insights.IFinancialInsightsEngine, Application.Features.Insights.FinancialInsightsEngine>();
         services.AddScoped<Domain.Rules.IFinancialRule, Application.Features.Insights.Rules.HighSubscriptionSpendRule>();
+        services.AddScoped<Domain.Rules.IFinancialRule, Application.Features.Insights.Rules.LifestyleInflationRule>();
+        services.AddScoped<Domain.Rules.IFinancialRule, Application.Features.Insights.Rules.SalaryDaySpikeRule>();
+        services.AddScoped<Domain.Rules.IFinancialRule, Application.Features.Insights.Rules.SubscriptionReviewNudgeRule>();
 
         services.AddScoped<IssueRankingService>();
         services.AddScoped<IssueSimilarityService>();
@@ -43,6 +50,7 @@ public static class ApplicationServiceExtensions
         services.AddScoped<ReactionService>();
         services.AddScoped<IssueActivityService>();
         services.AddScoped<IssueRelationService>();
+        services.AddScoped<IDecisionJournalService, DecisionJournalService>();
 
         return services;
     }

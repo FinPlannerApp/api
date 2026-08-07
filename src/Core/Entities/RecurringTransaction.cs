@@ -31,5 +31,14 @@ public class RecurringTransaction : BaseEntity
     public bool IsActive { get; set; } = true;
     public DateTime? LastProcessedDate { get; set; }
 
+    /// <summary>
+    /// Distinguishes a must-pay obligation (rent, EMI, insurance) from a
+    /// regular recurring transaction (a subscription you could cancel
+    /// without real consequence). Purely a user-set classification —
+    /// the system doesn't infer this, since it has no way to actually
+    /// know which recurring payments are truly essential.
+    /// </summary>
+    public bool IsObligation { get; set; } = false;
+
     public Subscription? Subscription { get; set; }
 }

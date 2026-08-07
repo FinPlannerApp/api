@@ -13,6 +13,8 @@ public class TransactionDto
     public int AccountId { get; set; }
     public string? AccountName { get; set; }
     public string? CategoryName { get; set; }
+    public int? MerchantId { get; set; }
+    public string? MerchantName { get; set; }
 
     /// <summary>
     /// Null for every ordinary transaction. Non-null (shared with its

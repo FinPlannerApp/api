@@ -8,6 +8,8 @@ public class CreditCardDetailsDto
     public decimal? MinimumDueAmount { get; set; }
     public DateTime? DueDate { get; set; }
     public DateTime? StatementClosingDate { get; set; }
+    public decimal? AnnualFee { get; set; }
+    public decimal? InterestRate { get; set; }
 }
 
 public class LoanDetailsDto
@@ -24,4 +26,5 @@ public class BankAccountDetailsDto
 {
     public decimal? InterestRate { get; set; }
     public InterestFrequency? InterestFrequency { get; set; }
+    public decimal? MinimumBalance { get; set; }
 }

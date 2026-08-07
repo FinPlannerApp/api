@@ -39,6 +39,27 @@ public class RecurringTransactionsController : BaseController
         var result = await _mediator.Send(new DeleteRecurringTransactionCommand(UserId, request.Id));
         return HandleResult(result);
     }
+
+    [HttpPost("{id}/pause")]
+    public async Task<IActionResult> Pause(int id)
+    {
+        var result = await _mediator.Send(new Application.Features.RecurringTransactions.Commands.PauseRecurringTransactionCommand(UserId, id));
+        return HandleResult(result);
+    }
+
+    [HttpPost("{id}/resume")]
+    public async Task<IActionResult> Resume(int id)
+    {
+        var result = await _mediator.Send(new Application.Features.RecurringTransactions.Commands.ResumeRecurringTransactionCommand(UserId, id));
+        return HandleResult(result);
+    }
+
+    [HttpGet("upcoming-obligations")]
+    public async Task<IActionResult> GetUpcomingObligations([FromQuery] int daysAhead = 30)
+    {
+        var result = await _mediator.Send(new Application.Features.RecurringTransactions.Queries.GetUpcomingObligationsQuery(UserId, daysAhead));
+        return HandleResult(result);
+    }
 }
 
 public record DeleteRequest(int Id);

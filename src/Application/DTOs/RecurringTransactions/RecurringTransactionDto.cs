@@ -19,4 +19,5 @@ public class RecurringTransactionDto
     public DateTime NextProcessDate { get; set; }
     public bool IsActive { get; set; }
     public DateTime? LastProcessedDate { get; set; }
+    public bool IsObligation { get; set; }
 }

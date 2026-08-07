@@ -78,6 +78,18 @@ public class DashboardService : IDashboardService
             .Where(a => a.UserId == userId && !a.AccountCategory.IsLiability)
             .SumAsync(a => a.Balance);
 
+        var liquidAssets = await _context.Accounts
+            .Where(a => a.UserId == userId &&
+                (a.AccountCategory.AccountType == Domain.Enums.AccountType.Bank ||
+                 a.AccountCategory.AccountType == Domain.Enums.AccountType.Cash))
+            .SumAsync(a => a.Balance);
+
+        var creditCardDebt = await _context.Accounts
+            .Where(a => a.UserId == userId && a.AccountCategory.AccountType == Domain.Enums.AccountType.CreditCard)
+            .SumAsync(a => a.Balance);
+
+        var realAvailableCash = liquidAssets + creditCardDebt;
+
         var broughtForward = await _context.Transactions
             .Where(t => t.Account.UserId == userId && t.Date < startFilter)
             .SumAsync(t => t.Type == TransactionType.Income ? t.Amount : -t.Amount);
@@ -98,7 +110,8 @@ public class DashboardService : IDashboardService
             NetWorth = netWorth,
             MonthlyIncome = monthlyIncome,
             MonthlyExpenses = monthlyExpenses,
-            BroughtForwardAmount = broughtForward
+            BroughtForwardAmount = broughtForward,
+            RealAvailableCash = realAvailableCash
         };
 
         await _cache.SetAsync(cacheKey, summary, TimeSpan.FromMinutes(5));
@@ -237,5 +250,44 @@ public class DashboardService : IDashboardService
         await _cache.SetAsync(cacheKey, insights, TimeSpan.FromMinutes(30));
 
         return Result.Success(insights);
+    }
+
+    public async Task<Result<List<MonthlyTrendPointDto>>> GetMonthlyTrendAsync(string userId, int monthsBack = 6)
+    {
+        var results = new List<MonthlyTrendPointDto>();
+        var now = DateTime.UtcNow;
+
+        // monthsBack-1 down to 0, so results come back oldest-first —
+        // matches what a chart's x-axis expects without the frontend
+        // needing to reverse anything.
+        for (int i = monthsBack - 1; i >= 0; i--)
+        {
+            var (monthStart, monthEnd) = AppTimeZone.MonthBoundsUtc(now.AddMonths(-i));
+
+            // Excludes transfers, same fix as everywhere else this
+            // project computes income/expense — a trend chart built on
+            // the unfixed numbers would just make the double-counting
+            // bug permanent and visible on a chart instead of fixed.
+            var income = await _context.Transactions
+                .Where(t => t.Account.UserId == userId && t.Date >= monthStart && t.Date <= monthEnd &&
+                            t.Type == TransactionType.Income && t.TransferGroupId == null)
+                .SumAsync(t => t.Amount);
+
+            var expense = await _context.Transactions
+                .Where(t => t.Account.UserId == userId && t.Date >= monthStart && t.Date <= monthEnd &&
+                            t.Type == TransactionType.Expense && t.TransferGroupId == null)
+                .SumAsync(t => t.Amount);
+
+            var localMonth = monthStart.ToLocal();
+            results.Add(new MonthlyTrendPointDto
+            {
+                Year = localMonth.Year,
+                Month = localMonth.Month,
+                Income = income,
+                Expense = expense
+            });
+        }
+
+        return Result.Success(results);
     }
 }

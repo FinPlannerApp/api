@@ -28,4 +28,7 @@ public class Transaction : BaseEntity
     /// needs to change.
     /// </summary>
     public Guid? TransferGroupId { get; set; }
+
+    public int? MerchantId { get; set; }
+    public Merchant? Merchant { get; set; }
 }

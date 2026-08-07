@@ -10,4 +10,5 @@ public interface IDashboardService
     Task<Result<List<SpendingByCategoryDto>>> GetSpendingByCategoryAsync(string userId, DateTime? startDate = null, DateTime? endDate = null);
     Task<Result<AccountSummaryDto>> GetAccountSummaryAsync(string userId, int accountId, DateTime? startDate = null, DateTime? endDate = null);
     Task<Result<DashboardInsightsDto>> GetDeepInsightsAsync(string userId, DateTime? startDate = null, DateTime? endDate = null);
+    Task<Result<List<MonthlyTrendPointDto>>> GetMonthlyTrendAsync(string userId, int monthsBack = 6);
 }

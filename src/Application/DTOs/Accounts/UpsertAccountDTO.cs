@@ -6,6 +6,7 @@ public class UpsertAccountDto
     public required string Name { get; set; }
     public decimal Balance { get; set; }
     public int AccountCategoryId { get; set; }
+    public string? Purpose { get; set; }
 
     // Frontend sends whichever ONE of these is relevant based on the
     // selected category's AccountType — the other two stay null. The

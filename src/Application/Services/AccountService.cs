@@ -73,7 +73,7 @@ public class AccountService : IAccountService
         // actually set. Found while extending this method for the detail
         // records; fixed alongside since it's directly adjacent.
         var items = await _context.Accounts
-            .Where(a => a.UserId == userId && !a.IsDeleted)
+            .Where(a => a.UserId == userId && !a.IsDeleted && !a.IsArchived)
             .Include(a => a.AccountCategory)
             .Include(a => a.CreditCardDetails)
             .Include(a => a.LoanDetails)
@@ -119,6 +119,7 @@ public class AccountService : IAccountService
             account.Name = dto.Name;
             account.Balance = dto.Balance;
             account.AccountCategoryId = dto.AccountCategoryId;
+            account.Purpose = dto.Purpose;
             _context.Accounts.Update(account);
         }
         else
@@ -129,7 +130,8 @@ public class AccountService : IAccountService
                 Name = dto.Name,
                 Balance = dto.Balance,
                 AccountCategoryId = dto.AccountCategoryId,
-                UserId = userId
+                UserId = userId,
+                Purpose = dto.Purpose
             };
             _context.Accounts.Add(account);
             await _context.SaveChangesAsync(); // need account.Id before creating a detail record with an FK to it
@@ -163,6 +165,8 @@ public class AccountService : IAccountService
             account.CreditCardDetails.MinimumDueAmount = dto.CreditCardDetails.MinimumDueAmount;
             account.CreditCardDetails.DueDate = dto.CreditCardDetails.DueDate;
             account.CreditCardDetails.StatementClosingDate = dto.CreditCardDetails.StatementClosingDate;
+            account.CreditCardDetails.AnnualFee = dto.CreditCardDetails.AnnualFee;
+            account.CreditCardDetails.InterestRate = dto.CreditCardDetails.InterestRate;
         }
         else if (account.CreditCardDetails != null)
         {
@@ -199,6 +203,7 @@ public class AccountService : IAccountService
             }
             account.BankAccountDetails.InterestRate = dto.BankAccountDetails.InterestRate;
             account.BankAccountDetails.InterestFrequency = dto.BankAccountDetails.InterestFrequency;
+            account.BankAccountDetails.MinimumBalance = dto.BankAccountDetails.MinimumBalance;
         }
         else if (account.BankAccountDetails != null)
         {
@@ -221,6 +226,65 @@ public class AccountService : IAccountService
         return Result.Success(true);
     }
 
+    public async Task<Result<bool>> MergeAccountsAsync(string userId, MergeAccountsDto dto)
+    {
+        if (dto.SourceAccountId == dto.TargetAccountId)
+            return Result.Failure<bool>(new Error("Account.SameAccount", "Cannot merge an account into itself."));
+
+        var source = await _context.Accounts.FindAsync(dto.SourceAccountId);
+        var target = await _context.Accounts.FindAsync(dto.TargetAccountId);
+
+        if (source == null || source.UserId != userId || target == null || target.UserId != userId)
+            return Result.Failure<bool>(new Error("Account.NotFound", "One or both accounts could not be found."));
+
+        // Move every transaction from source to target — this is the
+        // actual merge. Nothing about individual transactions changes
+        // except which account they belong to.
+        var affectedTransactions = await _context.Transactions
+            .Where(t => t.AccountId == dto.SourceAccountId)
+            .ToListAsync();
+
+        foreach (var transaction in affectedTransactions)
+        {
+            transaction.AccountId = dto.TargetAccountId;
+        }
+        _context.Transactions.UpdateRange(affectedTransactions);
+
+        // Sets the balance directly rather than deriving it — deliberately
+        // NOT subject to the negative-balance guard from earlier. A merge
+        // is a data-correction/consolidation action with the user seeing
+        // both original balances before confirming, same reasoning as why
+        // DeleteTransactionAsync is also exempt from that guard: forcing
+        // extra hoops on a correction the user explicitly chose isn't
+        // protection, it's friction.
+        target.Balance = dto.FinalBalance;
+        _context.Accounts.Update(target);
+
+        // Retire the source account
+        source.IsDeleted = true;
+        source.DeletedAt = DateTime.UtcNow;
+        _context.Accounts.Update(source);
+
+        await _context.SaveChangesAsync();
+        await _cache.RemoveByPrefixAsync($"dash::{userId}:");
+
+        return Result.Success(true);
+    }
+
+    public async Task<Result<bool>> SetArchivedStatusAsync(string userId, int accountId, bool isArchived)
+    {
+        var account = await _context.Accounts.FindAsync(accountId);
+        if (account == null || account.UserId != userId)
+            return Result.Failure<bool>(new Error("Account.NotFound", "Account not found."));
+
+        account.IsArchived = isArchived;
+        _context.Accounts.Update(account);
+        await _context.SaveChangesAsync();
+        await _cache.RemoveByPrefixAsync($"dash::{userId}:");
+
+        return Result.Success(true);
+    }
+
     private AccountDto MapToDto(Account a, Domain.Entities.AccountCategory? categoryOverride = null)
     {
         var category = categoryOverride ?? a.AccountCategory;
@@ -231,6 +295,9 @@ public class AccountService : IAccountService
             Name = a.Name,
             Balance = a.Balance,
             AccountCategoryName = category?.Name ?? "",
+            AccountCategoryId = a.AccountCategoryId,
+            IsArchived = a.IsArchived,
+            Purpose = a.Purpose,
             IsLiability = category?.IsLiability ?? false,
             AccountType = category?.AccountType ?? AccountType.Other,
             CreditCardDetails = a.CreditCardDetails is null ? null : new CreditCardDetailsDto
@@ -238,7 +305,9 @@ public class AccountService : IAccountService
                 CreditLimit = a.CreditCardDetails.CreditLimit,
                 MinimumDueAmount = a.CreditCardDetails.MinimumDueAmount,
                 DueDate = a.CreditCardDetails.DueDate,
-                StatementClosingDate = a.CreditCardDetails.StatementClosingDate
+                StatementClosingDate = a.CreditCardDetails.StatementClosingDate,
+                AnnualFee = a.CreditCardDetails.AnnualFee,
+                InterestRate = a.CreditCardDetails.InterestRate
             },
             LoanDetails = a.LoanDetails is null ? null : new LoanDetailsDto
             {
@@ -252,7 +321,8 @@ public class AccountService : IAccountService
             BankAccountDetails = a.BankAccountDetails is null ? null : new BankAccountDetailsDto
             {
                 InterestRate = a.BankAccountDetails.InterestRate,
-                InterestFrequency = a.BankAccountDetails.InterestFrequency
+                InterestFrequency = a.BankAccountDetails.InterestFrequency,
+                MinimumBalance = a.BankAccountDetails.MinimumBalance
             }
         };
     }

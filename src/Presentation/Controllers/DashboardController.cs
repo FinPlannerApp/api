@@ -1,4 +1,4 @@
-﻿using Application.Contracts;
+using Application.Contracts;
 using Application.DTOs.Dashboard;
 using Application.Features.Dashboard.Queries;
 using MediatR;
@@ -61,6 +61,13 @@ public class DashboardController : BaseController
     public async Task<IActionResult> GetFinancialHealth([FromQuery] int month, [FromQuery] int year)
     {
         var result = await _mediator.Send(new GetFinancialHealthQuery(UserId, month, year));
+        return HandleResult(result);
+    }
+
+    [HttpGet("monthly-trend")]
+    public async Task<IActionResult> GetMonthlyTrend([FromQuery] int monthsBack = 6)
+    {
+        var result = await _dashboardService.GetMonthlyTrendAsync(UserId, monthsBack);
         return HandleResult(result);
     }
 }

@@ -1,4 +1,4 @@
-﻿using Application.Contracts;
+using Application.Contracts;
 using Application.DTOs.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -112,6 +112,14 @@ public class AuthController : BaseController
     {
         if (string.IsNullOrWhiteSpace(dto.Username)) return BadRequest("Username is required.");
         var result = await _authService.CheckUserNameAsync(dto.Username);
+        return HandleResult(result);
+    }
+
+    [HttpPost("update-profile")]
+    [Authorize]
+    public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileDto dto)
+    {
+        var result = await _authService.UpdateProfileAsync(UserId!, dto);
         return HandleResult(result);
     }
 }
