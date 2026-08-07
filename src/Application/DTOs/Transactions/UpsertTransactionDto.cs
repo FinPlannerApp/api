@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
 using Domain.Enums;
 
@@ -12,4 +12,5 @@ public class UpsertTransactionDto
     public DateTime Date { get; set; }
     public TransactionType Type { get; set; }
     public int? TransactionCategoryId { get; set; }
+    public int? MerchantId { get; set; }
 }

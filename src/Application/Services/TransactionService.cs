@@ -115,6 +115,7 @@ public class TransactionService : ITransactionService
         var items = await queryable
             .Include(t => t.TransactionCategory)
             .Include(t => t.Account)
+            .Include(t => t.Merchant)
             .Skip((queryParams.PageNumber - 1) * queryParams.PageSize)
             .Take(queryParams.PageSize)
             .ToListAsync();
@@ -234,6 +235,7 @@ public class TransactionService : ITransactionService
             transaction.Date = dto.Date;
             transaction.Type = dto.Type;
             transaction.TransactionCategoryId = dto.TransactionCategoryId;
+            transaction.MerchantId = dto.MerchantId;
             _context.Transactions.Update(transaction);
         }
         else
@@ -245,6 +247,7 @@ public class TransactionService : ITransactionService
                 Date = dto.Date,
                 Type = dto.Type,
                 TransactionCategoryId = dto.TransactionCategoryId,
+                MerchantId = dto.MerchantId,
                 AccountId = accountId,
                 UserId = userId
             };
@@ -286,6 +289,7 @@ public class TransactionService : ITransactionService
         // Reload to include relations for return DTO
         var resultTransactionWithCategory = await _context.Transactions
             .Include(t => t.TransactionCategory)
+            .Include(t => t.Merchant)
             .FirstAsync(t => t.Id == transaction.Id);
 
         var resultDto = MapToDto(resultTransactionWithCategory);
@@ -546,6 +550,7 @@ public class TransactionService : ITransactionService
         var items = await filteredQuery
             .Include(t => t.TransactionCategory)
             .Include(t => t.Account)
+            .Include(t => t.Merchant)
             .OrderByDescending(t => t.Date)
             .ThenByDescending(t => t.Id)
             .Skip((queryParams.PageNumber - 1) * queryParams.PageSize)

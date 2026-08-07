@@ -9,6 +9,7 @@ namespace Application.Services;
 public interface ISavingsBucketService
 {
     Task<Result<AccountBucketBreakdownDto>> GetBucketsForAccountAsync(string userId, int accountId);
+    Task<Result<List<SavingsBucketDto>>> GetAllForUserAsync(string userId);
     Task<Result<SavingsBucketDto>> UpsertAsync(string userId, UpsertSavingsBucketDto dto);
     Task<Result<bool>> DeleteAsync(string userId, int id);
 }
@@ -132,5 +133,25 @@ public class SavingsBucketService : ISavingsBucketService
         await _context.SaveChangesAsync();
 
         return Result.Success(true);
+    }
+
+    public async Task<Result<List<SavingsBucketDto>>> GetAllForUserAsync(string userId)
+    {
+        var buckets = await _context.SavingsBuckets
+            .Include(b => b.Account)
+            .Where(b => b.UserId == userId)
+            .OrderBy(b => b.Account.Name).ThenByDescending(b => b.AllocatedAmount)
+            .Select(b => new SavingsBucketDto
+            {
+                Id = b.Id,
+                AccountId = b.AccountId,
+                AccountName = b.Account.Name,
+                Name = b.Name,
+                AllocatedAmount = b.AllocatedAmount,
+                TargetAmount = b.TargetAmount
+            })
+            .ToListAsync();
+
+        return Result.Success(buckets);
     }
 }

@@ -35,4 +35,11 @@ public class SavingsBucketsController : BaseController
         var result = await _service.DeleteAsync(UserId, dto.Id);
         return HandleResult(result);
     }
+
+    [HttpGet("all")]
+    public async Task<IActionResult> GetAll()
+    {
+        var result = await _service.GetAllForUserAsync(UserId);
+        return HandleResult(result);
+    }
 }
