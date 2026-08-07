@@ -74,22 +74,33 @@ public class RecurringTransactionJob
                 if (result.IsSuccess)
                 {
                     rt.LastProcessedDate = rt.NextProcessDate;
-                    rt.NextProcessDate   = CalculateNextDate(rt.NextProcessDate, rt.Frequency, rt.CustomDays);
 
-                    if (rt.EndDate.HasValue && rt.NextProcessDate > rt.EndDate.Value)
+                    if (rt.Frequency == RecurrenceFrequency.OneTime)
                     {
                         rt.IsActive = false;
                         _logger.LogInformation(
-                            "Recurring transaction {Id} deactivated — end date {EndDate} reached.",
-                            rt.Id, rt.EndDate);
+                            "One-time recurring transaction {Id} processed and deactivated — no further occurrences.",
+                            rt.Id);
+                    }
+                    else
+                    {
+                        rt.NextProcessDate = CalculateNextDate(rt.NextProcessDate, rt.Frequency, rt.CustomDays);
+
+                        if (rt.EndDate.HasValue && rt.NextProcessDate > rt.EndDate.Value)
+                        {
+                            rt.IsActive = false;
+                            _logger.LogInformation(
+                                "Recurring transaction {Id} deactivated — end date {EndDate} reached.",
+                                rt.Id, rt.EndDate);
+                        }
+
+                        _logger.LogInformation(
+                            "Recurring transaction {Id} processed. Next run: {NextDate}",
+                            rt.Id, rt.NextProcessDate);
                     }
 
                     _context.RecurringTransactions.Update(rt);
                     await _context.SaveChangesAsync(default);
-
-                    _logger.LogInformation(
-                        "Recurring transaction {Id} processed. Next run: {NextDate}",
-                        rt.Id, rt.NextProcessDate);
                 }
                 else
                 {
@@ -129,6 +140,7 @@ public class RecurringTransactionJob
             RecurrenceFrequency.Monthly => current.AddMonths(1),
             RecurrenceFrequency.Yearly  => current.AddYears(1),
             RecurrenceFrequency.Custom  => CalculateNextCustomDate(current, customDays),
+            RecurrenceFrequency.OneTime => current,
             _ => throw new ArgumentOutOfRangeException(nameof(frequency), frequency, null)
         };
 

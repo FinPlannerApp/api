@@ -6,5 +6,6 @@ public enum RecurrenceFrequency
     Weekly = 2,
     Monthly = 3,
     Yearly = 4,
-    Custom = 5
+    Custom = 5,
+    OneTime = 6
 }
