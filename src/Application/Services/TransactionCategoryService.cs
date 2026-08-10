@@ -1,4 +1,3 @@
-
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Categories;
@@ -45,6 +44,7 @@ public class TransactionCategoryService : ICategoryService<TransactionCategoryDt
 
         // Apply pagination
         var items = await query
+            .Include(c => c.ParentCategory)
             .Skip((queryParams.PageNumber - 1) * queryParams.PageSize)
             .Take(queryParams.PageSize)
             .ToListAsync();
@@ -62,6 +62,7 @@ public class TransactionCategoryService : ICategoryService<TransactionCategoryDt
             return Result.Success(cached);
 
         var allCategories = await _context.TransactionCategories
+            .Include(c => c.ParentCategory)
             .Where(c => c.UserId == userId && !c.IsDeleted)
             .ToListAsync();
 
@@ -72,6 +73,41 @@ public class TransactionCategoryService : ICategoryService<TransactionCategoryDt
 
     public async Task<Result<TransactionCategoryDto>> UpsertAsync(string userId, UpsertTransactionCategoryDto dto)
     {
+        if (dto.ParentCategoryId.HasValue)
+        {
+            var parent = await _context.TransactionCategories
+                .FirstOrDefaultAsync(c => c.Id == dto.ParentCategoryId.Value);
+
+            if (parent == null || parent.UserId != userId)
+                return Result.Failure<TransactionCategoryDto>(
+                    new Error("Category.ParentNotFound", "Parent category not found."));
+
+            // Enforces the one-level-deep rule: you can't make a subcategory
+            // of something that's already a subcategory.
+            if (parent.ParentCategoryId.HasValue)
+                return Result.Failure<TransactionCategoryDto>(
+                    new Error("Category.NestingTooDeep",
+                        $"'{parent.Name}' is already a subcategory. Subcategories can only be one level deep."));
+
+            // A category can't be its own parent.
+            if (dto.Id.HasValue && dto.Id.Value == dto.ParentCategoryId.Value)
+                return Result.Failure<TransactionCategoryDto>(
+                    new Error("Category.SelfParent", "A category can't be its own parent."));
+
+            // A category that already HAS subcategories can't itself become
+            // a subcategory — that would create two levels by the back door.
+            if (dto.Id.HasValue)
+            {
+                var hasChildren = await _context.TransactionCategories
+                    .AnyAsync(c => c.ParentCategoryId == dto.Id.Value);
+
+                if (hasChildren)
+                    return Result.Failure<TransactionCategoryDto>(
+                        new Error("Category.HasSubCategories",
+                            "This category has subcategories of its own, so it can't become a subcategory."));
+            }
+        }
+
         TransactionCategory? category = null;
 
         if (dto.Id.HasValue && dto.Id > 0)
@@ -82,6 +118,7 @@ public class TransactionCategoryService : ICategoryService<TransactionCategoryDt
                 return Result.Failure<TransactionCategoryDto>(new Error("Category.NotFound", "Category not found."));
 
             category.Name = ToTitleCase(dto.Name);
+            category.ParentCategoryId = dto.ParentCategoryId;
             _context.TransactionCategories.Update(category);
         }
         else
@@ -89,7 +126,8 @@ public class TransactionCategoryService : ICategoryService<TransactionCategoryDt
             category = new TransactionCategory
             {
                 Name = ToTitleCase(dto.Name),
-                UserId = userId
+                UserId = userId,
+                ParentCategoryId = dto.ParentCategoryId
             };
             _context.TransactionCategories.Add(category);
         }
@@ -98,6 +136,12 @@ public class TransactionCategoryService : ICategoryService<TransactionCategoryDt
         {
             await _context.SaveChangesAsync();
             await _cache.RemoveAsync(AllKey(userId)); // invalidate stale list
+
+            if (category.ParentCategoryId.HasValue && category.ParentCategory == null)
+            {
+                category.ParentCategory = await _context.TransactionCategories.FindAsync(category.ParentCategoryId.Value);
+            }
+
             var resultDto = MapToDto(category);
             return Result.Success(resultDto);
         }
@@ -127,7 +171,9 @@ public class TransactionCategoryService : ICategoryService<TransactionCategoryDt
         {
             Id = c.Id,
             Name = c.Name,
-            IsTransferCategory = c.IsTransferCategory
+            IsTransferCategory = c.IsTransferCategory,
+            ParentCategoryId = c.ParentCategoryId,
+            ParentCategoryName = c.ParentCategory?.Name
         };
     }
 

@@ -75,7 +75,7 @@ public class DashboardService : IDashboardService
             return Result.Success(cached);
 
         var netWorth = await _context.Accounts
-            .Where(a => a.UserId == userId && !a.AccountCategory.IsLiability)
+            .Where(a => a.UserId == userId)
             .SumAsync(a => a.Balance);
 
         var liquidAssets = await _context.Accounts
@@ -84,11 +84,21 @@ public class DashboardService : IDashboardService
                  a.AccountCategory.AccountType == Domain.Enums.AccountType.Cash))
             .SumAsync(a => a.Balance);
 
-        var creditCardDebt = await _context.Accounts
-            .Where(a => a.UserId == userId && a.AccountCategory.AccountType == Domain.Enums.AccountType.CreditCard)
-            .SumAsync(a => a.Balance);
+        var creditCardAccounts = await _context.Accounts
+            .Include(a => a.AccountCategory)
+            .Include(a => a.CreditCardDetails)
+            .Where(a => a.UserId == userId && a.AccountCategory.AccountType == AccountType.CreditCard)
+            .ToListAsync();
 
+        var creditCardDebt = creditCardAccounts.Sum(a => a.Balance);
         var realAvailableCash = liquidAssets + creditCardDebt;
+
+        decimal reservedForPayment = 0;
+        foreach (var card in creditCardAccounts)
+        {
+            var breakdown = await CreditCardStatementCalculator.CalculateAsync(_context, card);
+            reservedForPayment += breakdown.StatementOutstanding;
+        }
 
         var broughtForward = await _context.Transactions
             .Where(t => t.Account.UserId == userId && t.Date < startFilter)
@@ -111,7 +121,8 @@ public class DashboardService : IDashboardService
             MonthlyIncome = monthlyIncome,
             MonthlyExpenses = monthlyExpenses,
             BroughtForwardAmount = broughtForward,
-            RealAvailableCash = realAvailableCash
+            RealAvailableCash = realAvailableCash,
+            ReservedForPayment = reservedForPayment
         };
 
         await _cache.SetAsync(cacheKey, summary, TimeSpan.FromMinutes(5));

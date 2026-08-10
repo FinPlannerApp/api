@@ -39,6 +39,8 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
             return Result.Success(new FinancialHealthDto { Score = 0, Status = "No Data" });
         }
 
+        var rollupMap = await CategoryRollup.BuildRollupMapAsync(_context, request.UserId, cancellationToken);
+
         // FIX 2: was missing an upper bound entirely (only t.Date >=
         // currentMonthStart, no <=) — correct only by coincidence when
         // querying the current month; querying any PAST month would have
@@ -91,7 +93,7 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
             {
                 var spent = currentTransactions
                     .Where(t => t.Type == TransactionType.Expense &&
-                               (!budget.TransactionCategoryId.HasValue || t.TransactionCategoryId == budget.TransactionCategoryId))
+                                CategoryRollup.Matches(rollupMap, budget.TransactionCategoryId, t.TransactionCategoryId))
                     .Sum(t => t.Amount);
 
                 if (spent > budget.Amount) exceededCount++;
@@ -281,7 +283,8 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
         foreach (var lastMonth in lastMonthExpensesByCategory.Where(x => x.CategoryId.HasValue).Take(2))
         {
             var currentMonthTotal = currentTransactions
-                .Where(t => t.Type == TransactionType.Expense && t.TransactionCategoryId == lastMonth.CategoryId)
+                .Where(t => t.Type == TransactionType.Expense &&
+                            CategoryRollup.Matches(rollupMap, lastMonth.CategoryId, t.TransactionCategoryId))
                 .Sum(t => t.Amount);
 
             if (currentMonthTotal > lastMonth.Total * 1.2m)

@@ -31,4 +31,13 @@ public class Transaction : BaseEntity
 
     public int? MerchantId { get; set; }
     public Merchant? Merchant { get; set; }
+
+    /// <summary>
+    /// True for a correction created by AdjustBalanceAsync, never set by
+    /// anything else. Exists purely for clear labeling/display/future
+    /// filtering — the actual exclusion from income/expense totals comes
+    /// from TransferGroupId being set, which already has every existing
+    /// aggregation site checking for it.
+    /// </summary>
+    public bool IsBalanceAdjustment { get; set; } = false;
 }

@@ -15,6 +15,7 @@ public class SubscriptionDto
     public string? CancellationUrl { get; set; }
     public DateTime NextProcessDate { get; set; }
     public string Frequency { get; set; } = string.Empty;
+    public int RecurringTransactionId { get; set; }
 }
 
 public record GetActiveSubscriptionsQuery(string UserId) : IRequest<Result<List<SubscriptionDto>>>;
@@ -41,7 +42,8 @@ public class GetActiveSubscriptionsQueryHandler : IRequestHandler<GetActiveSubsc
                 Tag = s.Tag,
                 CancellationUrl = s.CancellationUrl,
                 NextProcessDate = s.RecurringTransaction.NextProcessDate,
-                Frequency = s.RecurringTransaction.Frequency.ToString()
+                Frequency = s.RecurringTransaction.Frequency.ToString(),
+                RecurringTransactionId = s.RecurringTransactionId
             })
             .ToListAsync(cancellationToken);
 

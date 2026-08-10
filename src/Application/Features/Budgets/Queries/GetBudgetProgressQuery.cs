@@ -84,6 +84,8 @@ public class GetBudgetProgressQueryHandler
         if (!accountIds.Any())
             return Result<List<BudgetProgressDto>>.Success(new List<BudgetProgressDto>());
 
+        var rollupMap = await CategoryRollup.BuildRollupMapAsync(_context, request.UserId, cancellationToken);
+
         // ── 3. Fetch raw yearly expense rows (UTC range — correct boundary) ────
         // Grouping happens AFTER this, in memory, using local time. Don't group
         // by t.Date.Month here — that's the same bug at the SQL level.
@@ -143,7 +145,7 @@ public class GetBudgetProgressQueryHandler
                 case Domain.Enums.BudgetPeriod.Weekly:
                     spentAmount = budget.TransactionCategoryId.HasValue
                         ? spendingByCategoryWeekly
-                            .Where(s => s.CategoryId == budget.TransactionCategoryId.Value)
+                            .Where(s => CategoryRollup.Matches(rollupMap, budget.TransactionCategoryId, s.CategoryId))
                             .Sum(s => s.Total)
                         : spendingByCategoryWeekly.Sum(s => s.Total);
                     break;
@@ -154,7 +156,7 @@ public class GetBudgetProgressQueryHandler
 
                     spentAmount = budget.TransactionCategoryId.HasValue
                         ? relevantRows
-                            .Where(s => s.CategoryId == budget.TransactionCategoryId.Value)
+                            .Where(s => CategoryRollup.Matches(rollupMap, budget.TransactionCategoryId, s.CategoryId))
                             .Sum(s => s.Total)
                         : relevantRows.Sum(s => s.Total);
                     break;
@@ -162,7 +164,7 @@ public class GetBudgetProgressQueryHandler
                 default: // Yearly
                     spentAmount = budget.TransactionCategoryId.HasValue
                         ? spendingByCategory
-                            .Where(s => s.CategoryId == budget.TransactionCategoryId.Value)
+                            .Where(s => CategoryRollup.Matches(rollupMap, budget.TransactionCategoryId, s.CategoryId))
                             .Sum(s => s.Total)
                         : spendingByCategory.Sum(s => s.Total);
                     break;

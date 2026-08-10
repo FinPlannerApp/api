@@ -66,6 +66,7 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
         entity.EndDate = request.Dto.EndDate;
         entity.IsActive = request.Dto.IsActive;
         entity.IsObligation = request.Dto.IsObligation;
+        entity.LinkedLoanAccountId = request.Dto.LinkedLoanAccountId;
 
         // If it's a new entity or the start date/frequency changed, recalculate NextProcessDate
         // Simplification: Recalculate if it's new or if it's currently in the future relative to StartDate
@@ -108,7 +109,8 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
             NextProcessDate = entity.NextProcessDate,
             IsActive = entity.IsActive,
             LastProcessedDate = entity.LastProcessedDate,
-            IsObligation = entity.IsObligation
+            IsObligation = entity.IsObligation,
+            LinkedLoanAccountId = entity.LinkedLoanAccountId
         };
 
         return Result.Success(resultDto);

@@ -40,17 +40,17 @@ public class ChallengeSeederService
             new() { DayNumber = 1, WeekNumber = 1,
                 Title = "Map Your Money Footprint",
                 Description = "List every bank account, UPI ID, and payment app you use. Add each one as an Account so you have a single source of truth.",
-                ActionRoute = "/accounts" },
+                ActionRoute = "/app/accounts" },
 
             new() { DayNumber = 2, WeekNumber = 1,
                 Title = "Review Your Last 30 Days",
                 Description = "Pull your last month's bank statement and see exactly where your money went. Import it via bulk upload or add transactions manually.",
-                ActionRoute = "/transactions" },
+                ActionRoute = "/app/transactions" },
 
             new() { DayNumber = 3, WeekNumber = 1,
                 Title = "Cancel What You Don't Use",
                 Description = "Go through your subscriptions and cancel anything you haven't actually used recently.",
-                ActionRoute = "/subscriptions" },
+                ActionRoute = "/app/subscriptions" },
 
             new() { DayNumber = 4, WeekNumber = 1,
                 Title = "Declutter Your Digital Space",
@@ -76,26 +76,27 @@ public class ChallengeSeederService
             new() { DayNumber = 9, WeekNumber = 2,
                 Title = "Sort Your Spending Into 4 Buckets",
                 Description = "Tag your spending categories as Needs, Joys, Goals, or Leaks. This becomes the foundation for your budget.",
-                ActionRoute = "/categories" },
+                ActionRoute = "/app/transaction-categories" },
 
             new() { DayNumber = 10, WeekNumber = 2,
                 Title = "Start Tracking Daily",
                 Description = "Get in the habit of logging what you spend, every day, starting today.",
-                ActionRoute = "/transactions" },
+                ActionRoute = "/app/transactions" },
 
             new() { DayNumber = 11, WeekNumber = 2,
                 Title = "Build Your 50/30/20 Budget",
                 Description = "50% Needs, up to 30% Joys, 20% Goals. Set this up as your first real budget.",
-                ActionRoute = "/budgets" },
+                ActionRoute = "/app/budgets" },
 
             new() { DayNumber = 12, WeekNumber = 2,
                 Title = "Tighten the Leaks",
                 Description = "Set a strict limit on your Leaks category and hold yourself to it this week.",
-                ActionRoute = "/budgets" },
+                ActionRoute = "/app/budgets" },
 
             new() { DayNumber = 13, WeekNumber = 2,
                 Title = "Pick Your Money Days",
-                Description = "Choose fixed days each week for paying bills, checking balances, and investing. Consistency beats intensity." },
+                Description = "Choose fixed days each week for paying bills, checking balances, and investing. Consistency beats intensity.",
+                ActionRoute = "/app/recurring-transactions" },
 
             new() { DayNumber = 14, WeekNumber = 2, IsRestDay = true,
                 Title = "Rest Day",
@@ -104,7 +105,8 @@ public class ChallengeSeederService
             // ── Week 3: Managing Debt, Credit, and Cash Flow ─────────────────
             new() { DayNumber = 15, WeekNumber = 3,
                 Title = "List Every Debt",
-                Description = "Every loan, every EMI, every rupee you owe — friends, apps, banks. Order it from highest EMI to lowest." },
+                Description = "Every loan, every EMI, every rupee you owe — friends, apps, banks. Order it from highest EMI to lowest.",
+                ActionRoute = "/app/accounts" },
 
             new() { DayNumber = 16, WeekNumber = 3,
                 Title = "Choose Your Payoff Strategy",
@@ -113,7 +115,7 @@ public class ChallengeSeederService
             new() { DayNumber = 17, WeekNumber = 3,
                 Title = "Automate Every EMI",
                 Description = "Set up a recurring transaction for each EMI so a due date never slips again.",
-                ActionRoute = "/recurring-transactions" },
+                ActionRoute = "/app/recurring-transactions" },
 
             new() { DayNumber = 18, WeekNumber = 3,
                 Title = "Check Your Credit Score",
@@ -134,7 +136,8 @@ public class ChallengeSeederService
             // ── Week 4: Wealth Building and Energy Shift ─────────────────────
             new() { DayNumber = 22, WeekNumber = 4,
                 Title = "Secure Your Emergency Fund",
-                Description = "Move it into a debt mutual fund, or start one with a SIP if you don't have a fund yet." },
+                Description = "Move it into a debt mutual fund, or start one with a SIP if you don't have a fund yet.",
+                ActionRoute = "/app/goals" },
 
             new() { DayNumber = 23, WeekNumber = 4,
                 Title = "Design Your Investment Mix",
@@ -143,7 +146,7 @@ public class ChallengeSeederService
             new() { DayNumber = 24, WeekNumber = 4,
                 Title = "Automate Your Investments",
                 Description = "Schedule your SIP dates so investing happens without you having to remember.",
-                ActionRoute = "/recurring-transactions" },
+                ActionRoute = "/app/recurring-transactions" },
 
             new() { DayNumber = 25, WeekNumber = 4,
                 Title = "Pick Your Platform",

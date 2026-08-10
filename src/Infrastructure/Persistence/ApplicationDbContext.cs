@@ -268,7 +268,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         {
             e.ToTable("TransactionCategories", "transactions");
             e.HasIndex(tc => new { tc.UserId, tc.Name }).IsUnique();
-            // e.HasQueryFilter(tc => !tc.IsDeleted); // Moved to global filters
+            e.HasOne(tc => tc.ParentCategory)
+                .WithMany(tc => tc.SubCategories)
+                .HasForeignKey(tc => tc.ParentCategoryId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<TransactionLog>(e => e.ToTable("TransactionLogs", "transactions"));
         builder.Entity<TransactionCategoryLog>(e => e.ToTable("TransactionCategoryLogs", "transactions"));
@@ -319,6 +322,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<UserChallengeEnrollment>().HasQueryFilter(uce => !uce.IsDeleted);
         builder.Entity<UserChallengeProgress>().HasQueryFilter(ucp => !ucp.IsDeleted);
         builder.Entity<DecisionJournalEntry>().HasQueryFilter(d => !d.IsDeleted);
+        builder.Entity<SavingsBucket>().HasQueryFilter(sb => !sb.IsDeleted);
+        builder.Entity<Merchant>().HasQueryFilter(m => !m.IsDeleted);
+        builder.Entity<MerchantAlias>().HasQueryFilter(ma => !ma.IsDeleted);
+        builder.Entity<Goal>().HasQueryFilter(g => !g.IsDeleted);
 
         // --- Budget Configuration ---
         builder.Entity<Budget>()
@@ -359,6 +366,11 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
             e.HasOne(rt => rt.TransactionCategory)
                 .WithMany()
                 .HasForeignKey(rt => rt.TransactionCategoryId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            e.HasOne(rt => rt.LinkedLoanAccount)
+                .WithMany()
+                .HasForeignKey(rt => rt.LinkedLoanAccountId)
                 .OnDelete(DeleteBehavior.SetNull);
 
             e.HasIndex(rt => new { rt.UserId, rt.NextProcessDate, rt.IsActive });

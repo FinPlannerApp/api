@@ -20,6 +20,7 @@ public class UpsertRecurringTransactionDto
     public DateTime? EndDate { get; set; }
     public bool IsActive { get; set; } = true;
     public bool IsObligation { get; set; } = false;
+    public int? LinkedLoanAccountId { get; set; }
 }
 
 public class UpsertRecurringTransactionDtoValidator : AbstractValidator<UpsertRecurringTransactionDto>

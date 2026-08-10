@@ -85,7 +85,8 @@ public class TransactionService : ITransactionService
 
         if (queryParams.TransactionCategoryId.HasValue)
         {
-            queryable = queryable.Where(t => t.TransactionCategoryId == queryParams.TransactionCategoryId.Value);
+            var categoryIds = await CategoryRollup.ExpandCategoryIdsAsync(_context, queryParams.TransactionCategoryId.Value);
+            queryable = queryable.Where(t => t.TransactionCategoryId.HasValue && categoryIds.Contains(t.TransactionCategoryId.Value));
         }
 
         // FR-03: amount range filtering — confirmed missing during the synopsis
@@ -602,14 +603,17 @@ public class TransactionService : ITransactionService
         if (transaction.TransactionCategoryId is null)
             return; // no category, nothing to match against a category budget
 
-        // Matches budgets scoped to this specific category, AND general
-        // "all categories" budgets (TransactionCategoryId == null on the budget).
-        var matchingBudgets = await _context.Budgets
+        var rollupMap = await CategoryRollup.BuildRollupMapAsync(_context, userId);
+
+        var candidateBudgets = await _context.Budgets
             .Where(b => b.UserId == userId && !b.IsDeleted &&
-                        (b.TransactionCategoryId == transaction.TransactionCategoryId || b.TransactionCategoryId == null) &&
                         b.StartDate <= transaction.Date &&
                         (b.EndDate == null || b.EndDate >= transaction.Date))
             .ToListAsync();
+
+        var matchingBudgets = candidateBudgets
+            .Where(b => CategoryRollup.Matches(rollupMap, b.TransactionCategoryId, transaction.TransactionCategoryId))
+            .ToList();
 
         if (!matchingBudgets.Any())
             return;
@@ -630,11 +634,17 @@ public class TransactionService : ITransactionService
                 _ => AppTimeZone.MonthBoundsUtc(transaction.Date) // Monthly, and the default
             };
 
+            var budgetCategoryIds = budget.TransactionCategoryId.HasValue
+                && rollupMap.TryGetValue(budget.TransactionCategoryId.Value, out var mapped)
+                    ? mapped
+                    : new List<int>();
+
             var spentAfter = await _context.Transactions
                 .Where(t => accountIds.Contains(t.AccountId) && !t.IsDeleted &&
                             t.Type == TransactionType.Expense &&
                             t.Date >= periodStart && t.Date <= periodEnd &&
-                            (budget.TransactionCategoryId == null || t.TransactionCategoryId == budget.TransactionCategoryId))
+                            (budget.TransactionCategoryId == null ||
+                             (t.TransactionCategoryId.HasValue && budgetCategoryIds.Contains(t.TransactionCategoryId.Value))))
                 .SumAsync(t => t.Amount);
 
             // transaction.Amount is already included in spentAfter, since it

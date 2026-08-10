@@ -40,5 +40,16 @@ public class RecurringTransaction : BaseEntity
     /// </summary>
     public bool IsObligation { get; set; } = false;
 
+    /// <summary>
+    /// Null for a normal recurring transaction. When set, this recurring
+    /// transaction represents an EMI payment for the referenced loan
+    /// account — AccountId is the PAYING account (e.g. a bank account),
+    /// this is the LOAN account. When the job processes an occurrence
+    /// with this set, it routes through AccountService.MakeLoanPaymentAsync
+    /// (interest/principal split) instead of a plain expense.
+    /// </summary>
+    public int? LinkedLoanAccountId { get; set; }
+    public Account? LinkedLoanAccount { get; set; }
+
     public Subscription? Subscription { get; set; }
 }

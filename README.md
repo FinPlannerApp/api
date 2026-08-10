@@ -8,7 +8,7 @@
 |------------|---------|
 | **.NET 10 / ASP.NET Core** | Web API framework |
 | **Entity Framework Core** | ORM — PostgreSQL migrations, LINQ queries |
-| **ASP.NET Core Identity** | User management, password hashing (BCrypt), roles |
+| **ASP.NET Core Identity** | User management, password hashing (Argon2id), roles |
 | **Redis (StackExchange.Redis)** | OTP store, pending registration cache (with TTL) |
 | **JWT Bearer** | Short-lived access token authentication |
 | **Refresh Tokens** | Long-lived token rotation in PostgreSQL |

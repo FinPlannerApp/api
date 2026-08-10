@@ -1,5 +1,6 @@
 using Application.Common.Helpers;
 using Application.Contracts;
+using Application.DTOs.Accounts;
 using Application.DTOs.Transactions;
 using Domain.Entities;
 using Domain.Enums;
@@ -8,31 +9,22 @@ using Microsoft.Extensions.Logging;
 
 namespace Infrastructure.BackgroundJobs;
 
-/// <summary>
-/// Hangfire job: processes all recurring transactions that are due.
-///
-/// KEY FIX (earlier): continues past individual failures instead of
-/// aborting the whole loop, collects them, throws AggregateException at
-/// the end so Hangfire still gets a retry signal.
-///
-/// NEW: Custom frequency support (e.g. every Mon/Wed/Fri), timezone-aware
-/// via AppTimeZone — the day-of-week walk happens in local time, same
-/// reasoning as the month-boundary fixes elsewhere: a UTC-stored timestamp
-/// near local midnight can read as the wrong day-of-week in UTC terms.
-/// </summary>
 public class RecurringTransactionJob
 {
     private readonly IApplicationDbContext _context;
     private readonly ITransactionService   _transactionService;
+    private readonly IAccountService       _accountService;
     private readonly ILogger<RecurringTransactionJob> _logger;
 
     public RecurringTransactionJob(
         IApplicationDbContext context,
         ITransactionService transactionService,
+        IAccountService accountService,
         ILogger<RecurringTransactionJob> logger)
     {
         _context            = context;
         _transactionService = transactionService;
+        _accountService     = accountService;
         _logger             = logger;
     }
 
@@ -58,20 +50,61 @@ public class RecurringTransactionJob
 
         foreach (var rt in dueTransactions)
         {
+            await using var dbTransaction = await ((DbContext)_context).Database.BeginTransactionAsync();
+
             try
             {
-                var upsertDto = new UpsertTransactionDto
+                bool success;
+
+                if (rt.LinkedLoanAccountId.HasValue)
                 {
-                    Description           = rt.Description,
-                    Amount                = rt.Amount,
-                    Type                  = rt.Type,
-                    Date                  = rt.NextProcessDate,
-                    TransactionCategoryId = rt.TransactionCategoryId
-                };
+                    // Routes through the proper interest/principal split
+                    // instead of a plain expense — the whole point of
+                    // wiring this up. Same atomic transaction wraps this
+                    // call too, since MakeLoanPaymentAsync's own
+                    // SaveChangesAsync participates in the already-open
+                    // explicit transaction rather than committing independently.
+                    var loanResult = await _accountService.MakeLoanPaymentAsync(rt.UserId, new MakeLoanPaymentDto
+                    {
+                        LoanAccountId = rt.LinkedLoanAccountId.Value,
+                        PayingAccountId = rt.AccountId,
+                        Amount = rt.Amount,
+                        Date = rt.NextProcessDate
+                    });
 
-                var result = await _transactionService.UpsertTransactionAsync(rt.UserId, rt.AccountId, upsertDto);
+                    success = loanResult.IsSuccess;
+                    if (!success)
+                    {
+                        var ex = new InvalidOperationException(
+                            $"Loan payment failed for recurring tx {rt.Id}: {loanResult.Error.Description}");
+                        failures.Add((rt.Id, rt.Description ?? "", ex));
+                        _logger.LogError(ex, "Failed to process loan-linked recurring transaction {Id}", rt.Id);
+                    }
+                }
+                else
+                {
+                    var upsertDto = new UpsertTransactionDto
+                    {
+                        Description           = rt.Description,
+                        Amount                = rt.Amount,
+                        Type                  = rt.Type,
+                        Date                  = rt.NextProcessDate,
+                        TransactionCategoryId = rt.TransactionCategoryId
+                    };
 
-                if (result.IsSuccess)
+                    var result = await _transactionService.UpsertTransactionAsync(rt.UserId, rt.AccountId, upsertDto);
+                    success = result.IsSuccess;
+
+                    if (!success)
+                    {
+                        var ex = new InvalidOperationException(
+                            $"Application error for recurring tx {rt.Id}: {result.Error.Description}");
+                        failures.Add((rt.Id, rt.Description ?? "", ex));
+                        _logger.LogError(ex, "Failed to process recurring transaction {Id}", rt.Id);
+                    }
+                }
+
+                if (success)
                 {
                     rt.LastProcessedDate = rt.NextProcessDate;
 
@@ -101,17 +134,16 @@ public class RecurringTransactionJob
 
                     _context.RecurringTransactions.Update(rt);
                     await _context.SaveChangesAsync(default);
+                    await dbTransaction.CommitAsync();
                 }
                 else
                 {
-                    var ex = new InvalidOperationException(
-                        $"Application error for recurring tx {rt.Id}: {result.Error.Description}");
-                    failures.Add((rt.Id, rt.Description ?? "", ex));
-                    _logger.LogError(ex, "Failed to process recurring transaction {Id}", rt.Id);
+                    await dbTransaction.RollbackAsync();
                 }
             }
             catch (Exception ex)
             {
+                await dbTransaction.RollbackAsync();
                 failures.Add((rt.Id, rt.Description ?? "", ex));
                 _logger.LogError(ex, "Exception processing recurring transaction {Id}", rt.Id);
             }
@@ -140,22 +172,14 @@ public class RecurringTransactionJob
             RecurrenceFrequency.Monthly => current.AddMonths(1),
             RecurrenceFrequency.Yearly  => current.AddYears(1),
             RecurrenceFrequency.Custom  => CalculateNextCustomDate(current, customDays),
-            RecurrenceFrequency.OneTime => current,
             _ => throw new ArgumentOutOfRangeException(nameof(frequency), frequency, null)
         };
 
-    /// <summary>
-    /// Walks forward from `current` (UTC) day-by-day in LOCAL time until it
-    /// finds one whose local day-of-week is in the selected set, then
-    /// converts that local date back to UTC for storage — same time-of-day
-    /// as the original `current` value, so a recurring transaction that
-    /// always fires at local midnight keeps doing so.
-    /// </summary>
     private static DateTime CalculateNextCustomDate(DateTime currentUtc, RecurrenceDayOfWeek? customDays)
     {
         if (customDays is null or RecurrenceDayOfWeek.None)
             throw new InvalidOperationException(
-                "Custom recurrence requires at least one day selected — this shouldn't happen if the DTO validator ran, but failing loudly here rather than silently picking a default.");
+                "Custom recurrence requires at least one day selected.");
 
         var currentLocal = currentUtc.ToLocal();
 
@@ -166,8 +190,6 @@ public class RecurringTransactionJob
                 return candidateLocal.ToUtc();
         }
 
-        // Unreachable given the None check above (any non-empty bitmask must
-        // match within 7 days), but the compiler doesn't know that.
         throw new InvalidOperationException("Could not determine next custom recurrence date.");
     }
 

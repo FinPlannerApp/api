@@ -66,4 +66,32 @@ public class AccountsController : BaseController
         var result = await _accountService.SetArchivedStatusAsync(UserId, id, false);
         return HandleResult(result);
     }
+
+    [HttpPost("loan-payment")]
+    public async Task<IActionResult> MakeLoanPayment([FromBody] MakeLoanPaymentDto dto)
+    {
+        var result = await _accountService.MakeLoanPaymentAsync(UserId, dto);
+        return HandleResult(result);
+    }
+
+    [HttpGet("{loanAccountId}/amortization-schedule")]
+    public async Task<IActionResult> GetAmortizationSchedule(int loanAccountId)
+    {
+        var result = await _accountService.GetAmortizationScheduleAsync(UserId, loanAccountId);
+        return HandleResult(result);
+    }
+
+    [HttpGet("{accountId}/credit-card-breakdown")]
+    public async Task<IActionResult> GetCreditCardBreakdown(int accountId)
+    {
+        var result = await _accountService.GetCreditCardBreakdownAsync(UserId, accountId);
+        return HandleResult(result);
+    }
+
+    [HttpPost("adjust-balance")]
+    public async Task<IActionResult> AdjustBalance([FromBody] AdjustBalanceDto dto)
+    {
+        var result = await _accountService.AdjustBalanceAsync(UserId, dto);
+        return HandleResult(result);
+    }
 }

@@ -23,28 +23,27 @@ public class FinancialInsightsEngine : IFinancialInsightsEngine
 
     public async Task<List<FinancialInsight>> GenerateInsightsAsync(string userId, DateTime endDate)
     {
-        // FIX: was constructing month boundaries directly from endDate.Year/Month
-        // with hardcoded DateTimeKind.Utc — the same timezone bug fixed
-        // earlier this project in DashboardService, GetBudgetProgressQuery,
-        // and GetTransactionsAsync. Found while extending this exact file
-        // for the new rules below, fixed in the same pass.
         var (startOfMonth, _) = AppTimeZone.MonthBoundsUtc(endDate);
         var (previousMonthStart, previousMonthEnd) = AppTimeZone.MonthBoundsUtc(endDate.AddMonths(-1));
 
         var currentExpenses = await _context.Transactions
-            .Where(t => t.UserId == userId && t.Date >= startOfMonth && t.Date <= endDate && t.Type == Domain.Enums.TransactionType.Expense)
+            .Where(t => t.UserId == userId && t.Date >= startOfMonth && t.Date <= endDate &&
+                        t.Type == Domain.Enums.TransactionType.Expense && t.TransferGroupId == null)
             .SumAsync(t => t.Amount);
 
         var currentIncome = await _context.Transactions
-            .Where(t => t.UserId == userId && t.Date >= startOfMonth && t.Date <= endDate && t.Type == Domain.Enums.TransactionType.Income)
+            .Where(t => t.UserId == userId && t.Date >= startOfMonth && t.Date <= endDate &&
+                        t.Type == Domain.Enums.TransactionType.Income && t.TransferGroupId == null)
             .SumAsync(t => t.Amount);
 
         var previousExpenses = await _context.Transactions
-            .Where(t => t.UserId == userId && t.Date >= previousMonthStart && t.Date <= previousMonthEnd && t.Type == Domain.Enums.TransactionType.Expense)
+            .Where(t => t.UserId == userId && t.Date >= previousMonthStart && t.Date <= previousMonthEnd &&
+                        t.Type == Domain.Enums.TransactionType.Expense && t.TransferGroupId == null)
             .SumAsync(t => t.Amount);
 
         var previousIncome = await _context.Transactions
-            .Where(t => t.UserId == userId && t.Date >= previousMonthStart && t.Date <= previousMonthEnd && t.Type == Domain.Enums.TransactionType.Income)
+            .Where(t => t.UserId == userId && t.Date >= previousMonthStart && t.Date <= previousMonthEnd &&
+                        t.Type == Domain.Enums.TransactionType.Income && t.TransferGroupId == null)
             .SumAsync(t => t.Amount);
 
         var activeSubscriptions = await _context.Subscriptions
@@ -56,23 +55,27 @@ public class FinancialInsightsEngine : IFinancialInsightsEngine
             .Where(b => b.UserId == userId)
             .SumAsync(b => b.Amount);
 
-        // ── New: baseline for LifestyleInflationRule ─────────────────────────
-        // A genuinely older window (4-6 months back) than "previous month" —
-        // the built-in delta rule below already catches one-month blips,
-        // this is specifically for sustained, gradual creep instead.
+        // ── Baseline for LifestyleInflationRule ───────────────────────────────
         var (sixMonthsAgoStart, _) = AppTimeZone.MonthBoundsUtc(endDate.AddMonths(-6));
         var (_, fourMonthsAgoEnd) = AppTimeZone.MonthBoundsUtc(endDate.AddMonths(-4));
 
         var baselineExpenseSum = await _context.Transactions
             .Where(t => t.UserId == userId && t.Type == Domain.Enums.TransactionType.Expense &&
+                        t.TransferGroupId == null &&
                         t.Date >= sixMonthsAgoStart && t.Date <= fourMonthsAgoEnd)
             .SumAsync(t => t.Amount);
 
-        var baselineMonthlyAverage = baselineExpenseSum / 3m; // 3 months in that window
+        var baselineMonthlyAverage = baselineExpenseSum / 3m;
 
-        // ── New: salary-day spike data for SalaryDaySpikeRule ────────────────
+        // ── Salary-day spike data for SalaryDaySpikeRule ──────────────────────
+        // TransferGroupId == null matters especially here — without it, the
+        // "largest income transaction" lookup could pick up a transfer's
+        // income leg (someone moving money between their own accounts)
+        // instead of an actual salary deposit, misidentifying "salary day"
+        // entirely.
         var largestIncomeTransaction = await _context.Transactions
-            .Where(t => t.UserId == userId && t.Date >= startOfMonth && t.Date <= endDate && t.Type == Domain.Enums.TransactionType.Income)
+            .Where(t => t.UserId == userId && t.Date >= startOfMonth && t.Date <= endDate &&
+                        t.Type == Domain.Enums.TransactionType.Income && t.TransferGroupId == null)
             .OrderByDescending(t => t.Amount)
             .FirstOrDefaultAsync();
 
@@ -87,6 +90,7 @@ public class FinancialInsightsEngine : IFinancialInsightsEngine
 
             spendingInThreeDaysAfterLargestIncome = await _context.Transactions
                 .Where(t => t.UserId == userId && t.Type == Domain.Enums.TransactionType.Expense &&
+                            t.TransferGroupId == null &&
                             t.Date >= threeDaysAfterStart && t.Date < threeDaysAfterEnd)
                 .SumAsync(t => t.Amount);
 
@@ -96,7 +100,7 @@ public class FinancialInsightsEngine : IFinancialInsightsEngine
             averageDailySpendRestOfMonth = restOfMonthExpense / remainingDays;
         }
 
-        // ── New: oldest active subscription age for SubscriptionReviewNudgeRule ──
+        // ── Oldest active subscription age for SubscriptionReviewNudgeRule ────
         var oldestActiveSubscription = await _context.Subscriptions
             .Include(s => s.RecurringTransaction)
             .Where(s => s.UserId == userId && s.RecurringTransaction.IsActive)
@@ -127,7 +131,6 @@ public class FinancialInsightsEngine : IFinancialInsightsEngine
 
         var results = new List<FinancialInsight>();
 
-        // Built-in rule: delta change
         if (ruleContext.PreviousExpense > 0)
         {
             var delta = ((ruleContext.TotalExpense - ruleContext.PreviousExpense) / ruleContext.PreviousExpense) * 100;

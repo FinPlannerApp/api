@@ -64,11 +64,14 @@ public class GetRecurringTransactionsQueryHandler : IRequestHandler<GetRecurring
                 Amount = rt.Amount,
                 Type = rt.Type,
                 Frequency = rt.Frequency,
+                CustomDays = rt.CustomDays,
                 StartDate = rt.StartDate,
                 EndDate = rt.EndDate,
                 NextProcessDate = rt.NextProcessDate,
                 IsActive = rt.IsActive,
-                LastProcessedDate = rt.LastProcessedDate
+                LastProcessedDate = rt.LastProcessedDate,
+                IsObligation = rt.IsObligation,
+                LinkedLoanAccountId = rt.LinkedLoanAccountId
             })
             .ToListAsync(cancellationToken);
 

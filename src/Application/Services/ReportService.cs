@@ -212,7 +212,8 @@ public class ReportService : IReportService
             .ToListAsync();
 
         var totalAssets = accounts.Where(a => a.Classification == "Asset").Sum(a => a.Balance);
-        var totalLiabilities = accounts.Where(a => a.Classification == "Liability").Sum(a => a.Balance);
+        var totalLiabilitiesRaw = accounts.Where(a => a.Classification == "Liability").Sum(a => a.Balance);
+        var netWorth = totalAssets + totalLiabilitiesRaw;
 
         using var memoryStream = new MemoryStream();
         using (var writer = new StreamWriter(memoryStream, leaveOpen: true))
@@ -226,11 +227,11 @@ public class ReportService : IReportService
             csv.NextRecord();
 
             csv.WriteField("Total Liabilities");
-            csv.WriteField(totalLiabilities.ToString("F2"));
+            csv.WriteField(Math.Abs(totalLiabilitiesRaw).ToString("F2"));
             csv.NextRecord();
 
             csv.WriteField("Net Worth");
-            csv.WriteField((totalAssets - totalLiabilities).ToString("F2"));
+            csv.WriteField(netWorth.ToString("F2"));
             csv.NextRecord();
         }
 
