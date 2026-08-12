@@ -51,7 +51,18 @@ public static class SplitShareCalculator
                 var totalPercent = participants.Sum(p => p.Percentage ?? 0);
                 if (Math.Abs(totalPercent - 100) > 0.01m)
                     throw new InvalidOperationException($"Percentages sum to {totalPercent}%, but must sum to 100%.");
-                return participants.Select(p => (p.MemberId, Share: Math.Round(totalAmount * (p.Percentage ?? 0) / 100m, 2))).ToList();
+
+                var percentageShares = participants
+                    .Select(p => (p.MemberId, Share: Math.Round(totalAmount * (p.Percentage ?? 0) / 100m, 2)))
+                    .ToList();
+
+                var percentageRemainder = totalAmount - percentageShares.Sum(s => s.Share);
+                if (percentageRemainder != 0 && percentageShares.Count > 0)
+                {
+                    var last = percentageShares[^1];
+                    percentageShares[^1] = (last.MemberId, last.Share + percentageRemainder);
+                }
+                return percentageShares;
             }
 
             case Domain.Entities.Split.SplitType.Shares:
@@ -59,7 +70,18 @@ public static class SplitShareCalculator
                 var totalShares = participants.Sum(p => p.Shares ?? 0);
                 if (totalShares <= 0)
                     throw new InvalidOperationException("Total shares must be greater than zero.");
-                return participants.Select(p => (p.MemberId, Share: Math.Round(totalAmount * (p.Shares ?? 0) / totalShares, 2))).ToList();
+
+                var shareShares = participants
+                    .Select(p => (p.MemberId, Share: Math.Round(totalAmount * (p.Shares ?? 0) / totalShares, 2)))
+                    .ToList();
+
+                var sharesRemainder = totalAmount - shareShares.Sum(s => s.Share);
+                if (sharesRemainder != 0 && shareShares.Count > 0)
+                {
+                    var last = shareShares[^1];
+                    shareShares[^1] = (last.MemberId, last.Share + sharesRemainder);
+                }
+                return shareShares;
             }
 
             default:

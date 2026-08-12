@@ -94,8 +94,12 @@ public class SplitService : ISplitService
         if (member == null)
             return Result.Failure<bool>(new Error("SplitMember.NotFound", "Member not found."));
 
-        if (member.SplitGroup.CreatedByUserId != userId)
-            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can update a member's payment details right now."));
+        // The creator can manage any member's details (the V1 model for
+        // unlinked members). A linked member can additionally manage
+        // their own — better privacy and UX than routing every UPI
+        // update through the creator.
+        if (member.SplitGroup.CreatedByUserId != userId && member.LinkedUserId != userId)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "You can only update your own payment details."));
 
         member.UpiId = dto.UpiId;
         _context.SplitGroupMembers.Update(member);
@@ -118,6 +122,19 @@ public class SplitService : ISplitService
             return Result.Failure<ExpenseDto>(new Error(
                 "SplitExpense.PayersMismatch",
                 $"Payers add up to {payersSum:F2}, but the expense total is {dto.Amount:F2} — they need to match."));
+
+        // Every payer and participant must actually belong to this
+        // group — without this check, a crafted request could reference
+        // a member ID from a completely different group, attaching this
+        // expense to someone else's group data.
+        var groupMemberIds = group.Members.Select(m => m.Id).ToHashSet();
+        var allReferencedIds = dto.Payers.Select(p => p.MemberId)
+            .Concat(dto.Participants.Select(p => p.MemberId));
+
+        if (allReferencedIds.Any(id => !groupMemberIds.Contains(id)))
+            return Result.Failure<ExpenseDto>(new Error(
+                "SplitExpense.MemberNotInGroup",
+                "One or more payers or participants don't belong to this group."));
 
         List<(int MemberId, decimal Share)> shares;
         try
@@ -205,6 +222,36 @@ public class SplitService : ISplitService
         if (fromMember == null || toMember == null)
             return Result.Failure<SettlementDto>(new Error("SplitMember.NotFound", "One or both members not found in this group."));
 
+        // The group creator can record a settlement on behalf of any
+        // member (the intended V1 model — the creator operates the app
+        // for members who don't have their own FinPlanner login). A
+        // LINKED member, if one exists, can only create a settlement
+        // where they themselves are the one paying.
+        if (group.CreatedByUserId != userId)
+        {
+            var callerMember = FindMemberForUser(group, userId);
+            if (callerMember == null || callerMember.Id != dto.FromMemberId)
+                return Result.Failure<SettlementDto>(new Error(
+                    "SplitGroup.Forbidden", "You can only create a settlement where you're the one paying."));
+        }
+
+        // Validate against the FromMember's actual overall outstanding
+        // debt — not against the specific ToMember pairing, since a
+        // settlement can legitimately go to someone other than whoever
+        // the simplified debt plan suggested. What must hold regardless
+        // is that nobody can settle for more than they actually owe in
+        // total.
+        var currentBalances = SplitBalanceCalculator.CalculateNetBalances(group);
+        var fromMemberBalance = currentBalances.First(b => b.MemberId == dto.FromMemberId).NetBalance;
+        var fromMemberOwes = Math.Max(0, -fromMemberBalance);
+
+        if (dto.Amount > fromMemberOwes + 0.01m) // small tolerance for rounding
+        {
+            return Result.Failure<SettlementDto>(new Error(
+                "SplitSettlement.ExceedsDebt",
+                $"{fromMember.Name} owes ₹{fromMemberOwes:F2} overall — this settlement (₹{dto.Amount:F2}) exceeds that."));
+        }
+
         var settlement = new SplitSettlement
         {
             SplitGroupId = dto.GroupId,
@@ -236,14 +283,22 @@ public class SplitService : ISplitService
     public async Task<Result<bool>> MarkSettlementPaidAsync(string userId, int settlementId)
     {
         var settlement = await _context.SplitSettlements
-            .Include(s => s.SplitGroup)
+            .Include(s => s.SplitGroup).ThenInclude(g => g.Members) // needed for FindMemberForUser below — wasn't loaded before
             .FirstOrDefaultAsync(s => s.Id == settlementId);
 
         if (settlement == null)
             return Result.Failure<bool>(new Error("SplitSettlement.NotFound", "Settlement not found."));
 
+        // Same principle as creating a settlement: the creator can
+        // confirm on behalf of anyone; a linked member can only confirm
+        // their own payment.
         if (settlement.SplitGroup.CreatedByUserId != userId)
-            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can confirm settlements right now."));
+        {
+            var callerMember = FindMemberForUser(settlement.SplitGroup, userId);
+            if (callerMember == null || callerMember.Id != settlement.FromMemberId)
+                return Result.Failure<bool>(new Error(
+                    "SplitGroup.Forbidden", "Only the person who made this payment can confirm it."));
+        }
 
         settlement.Status = SettlementStatus.Completed;
         settlement.CompletedAt = DateTime.UtcNow;
@@ -271,10 +326,16 @@ public class SplitService : ISplitService
         if (settlement == null)
             return Result.Failure<PaymentRequestDto>(new Error("SplitSettlement.NotFound", "Settlement not found."));
 
-        if (settlement.SplitGroup.CreatedByUserId != userId &&
-            settlement.SplitGroup.Members.All(m => m.LinkedUserId != userId))
+        // Narrower than general group access — a payment request
+        // specifically should only go to the creator or the actual
+        // person paying, not any member who happens to have access to
+        // the group.
+        if (settlement.SplitGroup.CreatedByUserId != userId)
         {
-            return Result.Failure<PaymentRequestDto>(new Error("SplitGroup.Forbidden", "You don't have access to this settlement."));
+            var callerMember = FindMemberForUser(settlement.SplitGroup, userId);
+            if (callerMember == null || callerMember.Id != settlement.FromMemberId)
+                return Result.Failure<PaymentRequestDto>(new Error(
+                    "SplitGroup.Forbidden", "You can only request payment details for your own settlement."));
         }
 
         if (string.IsNullOrWhiteSpace(settlement.ToMember.UpiId))
@@ -314,13 +375,26 @@ public class SplitService : ISplitService
         {
             GroupName = group.Name,
             Currency = group.Currency,
-            Members = group.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, UpiId = m.UpiId }).ToList(),
+            // UpiId deliberately omitted here — this is a public,
+            // no-login view. Payment identifiers should only be visible
+            // to someone actually operating the group (the creator),
+            // not anyone who happens to have the link.
+            Members = group.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, UpiId = null }).ToList(),
             Expenses = group.Expenses.OrderByDescending(e => e.Date).Select(MapExpenseToDto).ToList(),
             Balances = ComputeBalancesDto(group)
         });
     }
 
     // ── Private helpers ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Finds the group member record linked to this authenticated user,
+    /// if any. Null if the user isn't linked to any member in this
+    /// group — which today means anyone except the creator, since no
+    /// join flow exists yet to link anyone else.
+    /// </summary>
+    private static SplitGroupMember? FindMemberForUser(SplitGroup group, string userId)
+        => group.Members.FirstOrDefault(m => m.LinkedUserId == userId);
 
     private async Task<SplitGroup?> LoadGroupForUserAsync(string userId, int groupId)
     {
