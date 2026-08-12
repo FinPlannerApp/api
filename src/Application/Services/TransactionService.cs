@@ -229,6 +229,13 @@ public class TransactionService : ITransactionService
             if (transaction == null || transaction.AccountId != accountId)
                 return Result.Failure<TransactionDto>(new Error("Transaction.NotFound", "Transaction not found."));
 
+            if (transaction.Kind == TransactionKind.Transfer || transaction.Kind == TransactionKind.LoanPrincipal)
+            {
+                return Result.Failure<TransactionDto>(new Error(
+                    "Transaction.PartOfPair",
+                    "This transaction is one side of a transfer or loan payment and can't be deleted on its own — deleting only one leg would leave the accounting inconsistent. Contact support or use the account merge/correction tools if this needs reversing."));
+            }
+
             oldAmount = transaction.Amount;
             oldType = transaction.Type;
             transaction.Description = dto.Description;
@@ -270,7 +277,9 @@ public class TransactionService : ITransactionService
         account.Balance = prospectiveBalance;
         _context.Accounts.Update(account);
         
-        await _context.SaveChangesAsync();
+        var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
+        if (saveResult.IsFailure)
+            return Result.Failure<TransactionDto>(saveResult.Error);
 
         // Only check for NEW expense transactions — see design notes above
         // for why edits are deliberately out of scope for this check.
@@ -309,6 +318,13 @@ public class TransactionService : ITransactionService
         if (transaction == null || transaction.AccountId != accountId)
             return Result.Failure<bool>(new Error("Transaction.NotFound", "Transaction not found."));
 
+        if (transaction.Kind == TransactionKind.Transfer || transaction.Kind == TransactionKind.LoanPrincipal)
+        {
+            return Result.Failure<bool>(new Error(
+                "Transaction.PartOfPair",
+                "This transaction is one side of a transfer or loan payment and can't be deleted on its own — deleting only one leg would leave the accounting inconsistent. Contact support or use the account merge/correction tools if this needs reversing."));
+        }
+
         // Revert Balance
         account.Balance += (transaction.Type == TransactionType.Income ? -transaction.Amount : transaction.Amount);
 
@@ -318,7 +334,10 @@ public class TransactionService : ITransactionService
         transaction.DeletedAt = DateTime.UtcNow;
         _context.Transactions.Update(transaction);
 
-        await _context.SaveChangesAsync();
+        var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
+        if (saveResult.IsFailure)
+            return Result.Failure<bool>(saveResult.Error);
+
         await _cache.RemoveByPrefixAsync($"dash::{userId}:");
 
         return Result.Success(true);
@@ -368,7 +387,8 @@ public class TransactionService : ITransactionService
             AccountId             = sourceAccountId,
             TransactionCategoryId = dto.TransactionCategoryId,
             UserId                = userId,
-            TransferGroupId       = transferGroupId
+            TransferGroupId       = transferGroupId,
+            Kind                  = TransactionKind.Transfer
         };
         sourceAccount.Balance -= dto.Amount;
 
@@ -381,7 +401,8 @@ public class TransactionService : ITransactionService
             AccountId             = dto.DestinationAccountId,
             TransactionCategoryId = dto.TransactionCategoryId,
             UserId                = userId,
-            TransferGroupId       = transferGroupId
+            TransferGroupId       = transferGroupId,
+            Kind                  = TransactionKind.Transfer
         };
         destinationAccount.Balance += dto.Amount;
 
@@ -390,7 +411,10 @@ public class TransactionService : ITransactionService
         _context.Accounts.Update(sourceAccount);
         _context.Accounts.Update(destinationAccount);
 
-        await _context.SaveChangesAsync();
+        var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
+        if (saveResult.IsFailure)
+            return Result.Failure<bool>(saveResult.Error);
+
         await _cache.RemoveByPrefixAsync($"dash::{userId}:");
 
         return Result.Success(true);
@@ -401,6 +425,13 @@ public class TransactionService : ITransactionService
         var transaction = await _context.Transactions.FindAsync(transactionId);
         if (transaction == null)
             return Result.Failure<bool>(new Error("Transaction.NotFound", "Transaction not found."));
+
+        if (transaction.Kind == TransactionKind.Transfer || transaction.Kind == TransactionKind.LoanPrincipal)
+        {
+            return Result.Failure<bool>(new Error(
+                "Transaction.PartOfPair",
+                "This transaction is one side of a transfer or loan payment and can't be deleted on its own — deleting only one leg would leave the accounting inconsistent. Contact support or use the account merge/correction tools if this needs reversing."));
+        }
 
         var sourceAccount = await _context.Accounts
             .Include(a => a.AccountCategory)
@@ -448,7 +479,10 @@ public class TransactionService : ITransactionService
         _context.Accounts.Update(destinationAccount);
         _context.Transactions.Update(transaction);
 
-        await _context.SaveChangesAsync();
+        var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
+        if (saveResult.IsFailure)
+            return Result.Failure<bool>(saveResult.Error);
+
         await _cache.RemoveByPrefixAsync($"dash::{userId}:");
 
         return Result.Success(true);
@@ -481,8 +515,8 @@ public class TransactionService : ITransactionService
         if (queryParams.Filters.TryGetValue("year", out var yearStr) && int.TryParse(yearStr, out var parsedYear))
             year = parsedYear;
 
-        var startOfMonth = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var endOfMonth = startOfMonth.AddMonths(1).AddTicks(-1);
+        var (startOfMonth, endOfMonth) = AppTimeZone.MonthBoundsUtc(
+            new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Unspecified).ToUtc());
 
         // Base queryable: all transactions across user's accounts
         var allTransactions = _context.Transactions

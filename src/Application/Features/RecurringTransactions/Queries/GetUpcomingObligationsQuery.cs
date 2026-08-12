@@ -1,3 +1,4 @@
+using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.RecurringTransactions;
@@ -43,28 +44,55 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
 
         results.AddRange(recurringObligations);
 
-        // ── Source 2: credit card due dates, pulled directly from the account ──
-        var today = DateTime.UtcNow.Date;
-        var creditCardDueDates = await _context.Accounts
+        // ── Source 2: credit card bills — prefers a RECORDED bill (the
+        // real amount, includes interest/fees) over the static
+        // DueDate/MinimumDueAmount fields, which only ever reflected a
+        // rough estimate anyway ──
+        var today = AppTimeZone.TodayLocal();
+
+        var creditCardAccounts = await _context.Accounts
             .Include(a => a.CreditCardDetails)
-            .Where(a => a.UserId == request.UserId &&
-                        a.AccountCategory.AccountType == AccountType.CreditCard &&
-                        a.CreditCardDetails != null &&
-                        a.CreditCardDetails.DueDate != null &&
-                        a.CreditCardDetails.DueDate >= today &&
-                        a.CreditCardDetails.DueDate <= cutoff)
-            .Select(a => new UpcomingObligationDto
-            {
-                Description = $"{a.Name} bill due",
-                AccountName = a.Name,
-                Amount = null,
-                MinimumDueAmount = a.CreditCardDetails!.MinimumDueAmount,
-                DueDate = a.CreditCardDetails!.DueDate!.Value,
-                Source = "CreditCard"
-            })
+            .Where(a => a.UserId == request.UserId && a.AccountCategory.AccountType == AccountType.CreditCard)
             .ToListAsync(cancellationToken);
 
-        results.AddRange(creditCardDueDates);
+        foreach (var account in creditCardAccounts)
+        {
+            // Most recent recorded bill for this account, if any.
+            var recentBill = await _context.CreditCardBills
+                .Where(b => b.AccountId == account.Id)
+                .OrderByDescending(b => b.StatementDate)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (recentBill != null && recentBill.DueDate.HasValue &&
+                recentBill.DueDate.Value >= today && recentBill.DueDate.Value <= cutoff)
+            {
+                results.Add(new UpcomingObligationDto
+                {
+                    Description = $"{account.Name} bill due",
+                    AccountName = account.Name,
+                    Amount = recentBill.BillAmount, // the real recorded amount, not an estimate
+                    MinimumDueAmount = recentBill.MinimumDue,
+                    DueDate = recentBill.DueDate.Value,
+                    Source = "CreditCard"
+                });
+            }
+            else if (account.CreditCardDetails?.DueDate is { } staticDueDate &&
+                     staticDueDate >= today && staticDueDate <= cutoff)
+            {
+                // Fallback — no bill recorded for this cycle yet, use
+                // whatever's set on the account itself, same as before
+                // this feature existed.
+                results.Add(new UpcomingObligationDto
+                {
+                    Description = $"{account.Name} bill due",
+                    AccountName = account.Name,
+                    Amount = null,
+                    MinimumDueAmount = account.CreditCardDetails.MinimumDueAmount,
+                    DueDate = staticDueDate,
+                    Source = "CreditCard"
+                });
+            }
+        }
 
         return Result.Success(results.OrderBy(r => r.DueDate).ToList());
     }

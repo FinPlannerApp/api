@@ -74,9 +74,8 @@ public class DashboardService : IDashboardService
         if (cached is not null)
             return Result.Success(cached);
 
-        var netWorth = await _context.Accounts
-            .Where(a => a.UserId == userId)
-            .SumAsync(a => a.Balance);
+        var netWorthResult = await NetWorthCalculator.CalculateAsync(_context, userId);
+        var netWorth = netWorthResult.NetWorth;
 
         var liquidAssets = await _context.Accounts
             .Where(a => a.UserId == userId &&
@@ -96,8 +95,20 @@ public class DashboardService : IDashboardService
         decimal reservedForPayment = 0;
         foreach (var card in creditCardAccounts)
         {
-            var breakdown = await CreditCardStatementCalculator.CalculateAsync(_context, card);
-            reservedForPayment += breakdown.StatementOutstanding;
+            var recentBill = await _context.CreditCardBills
+                .Where(b => b.AccountId == card.Id)
+                .OrderByDescending(b => b.StatementDate)
+                .FirstOrDefaultAsync();
+
+            if (recentBill != null)
+            {
+                reservedForPayment += recentBill.BillAmount;
+            }
+            else
+            {
+                var breakdown = await CreditCardStatementCalculator.CalculateAsync(_context, card);
+                reservedForPayment += breakdown.StatementOutstanding;
+            }
         }
 
         var broughtForward = await _context.Transactions
@@ -204,7 +215,8 @@ public class DashboardService : IDashboardService
         var query = _context.Transactions
             .Include(t => t.TransactionCategory)
             .Include(t => t.Account)
-            .Where(t => t.Account.UserId == userId && t.Date >= startFilter && t.Date <= endFilter);
+            .Where(t => t.Account.UserId == userId && t.Date >= startFilter && t.Date <= endFilter &&
+                        t.TransferGroupId == null);
 
         var insights = new DashboardInsightsDto();
 

@@ -1,3 +1,4 @@
+using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Challenge;
@@ -52,7 +53,7 @@ public class ChallengeService : IChallengeService
         var totalActionableDays = days.Count(d => !d.IsRestDay);
         var completedCount = dayDtos.Count(d => !d.IsRestDay && d.IsCompleted);
 
-        var elapsedDays = (DateTime.UtcNow.Date - enrollment.StartedAt.Date).Days + 1;
+        var elapsedDays = (AppTimeZone.TodayLocal() - enrollment.StartedAt.ToLocal().Date).Days + 1;
         var currentDayNumber = Math.Clamp(elapsedDays, 1, 30);
 
         var overview = new ChallengeOverviewDto

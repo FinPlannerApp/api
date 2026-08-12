@@ -1,10 +1,12 @@
 using Application.Contracts;
 using Domain.Entities;
+using Domain.Entities.Split;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Npgsql.EntityFrameworkCore.PostgreSQL;
 using System.Security.Claims;
 using System.Text.Json;
 
@@ -62,6 +64,13 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<Merchant> Merchants => Set<Merchant>();
     public DbSet<MerchantAlias> MerchantAliases => Set<MerchantAlias>();
     public DbSet<Goal> Goals => Set<Goal>();
+    public DbSet<CreditCardBill> CreditCardBills => Set<CreditCardBill>();
+    public DbSet<SplitGroup> SplitGroups => Set<SplitGroup>();
+    public DbSet<SplitGroupMember> SplitGroupMembers => Set<SplitGroupMember>();
+    public DbSet<SplitExpense> SplitExpenses => Set<SplitExpense>();
+    public DbSet<SplitExpensePayer> SplitExpensePayers => Set<SplitExpensePayer>();
+    public DbSet<SplitExpenseParticipant> SplitExpenseParticipants => Set<SplitExpenseParticipant>();
+    public DbSet<SplitSettlement> SplitSettlements => Set<SplitSettlement>();
 
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IHttpContextAccessor httpContextAccessor) : base(options)
     {
@@ -188,6 +197,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     {
         base.OnModelCreating(builder);
 
+        // Optimistic concurrency control on Account balance operations using PostgreSQL xmin column
+        builder.Entity<Account>().Property<uint>("xmin").IsRowVersion();
+
         // --- IDENTITY SCHEMA ---
         builder.Entity<ApplicationUser>(e => {
             e.ToTable("Users", "identity");
@@ -244,6 +256,16 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
             e.HasOne(d => d.Account)
                 .WithOne(a => a.BankAccountDetails)
                 .HasForeignKey<BankAccountDetails>(d => d.AccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<CreditCardBill>(e =>
+        {
+            e.ToTable("CreditCardBills", "accounts");
+            e.HasIndex(b => new { b.AccountId, b.StatementDate });
+            e.HasOne(b => b.Account)
+                .WithMany()
+                .HasForeignKey(b => b.AccountId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -326,6 +348,65 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<Merchant>().HasQueryFilter(m => !m.IsDeleted);
         builder.Entity<MerchantAlias>().HasQueryFilter(ma => !ma.IsDeleted);
         builder.Entity<Goal>().HasQueryFilter(g => !g.IsDeleted);
+        builder.Entity<CreditCardBill>().HasQueryFilter(b => !b.IsDeleted);
+        builder.Entity<SplitGroup>().HasQueryFilter(g => !g.IsDeleted);
+        builder.Entity<SplitGroupMember>().HasQueryFilter(m => !m.IsDeleted);
+        builder.Entity<SplitExpense>().HasQueryFilter(x => !x.IsDeleted);
+        builder.Entity<SplitExpensePayer>().HasQueryFilter(p => !p.IsDeleted);
+        builder.Entity<SplitExpenseParticipant>().HasQueryFilter(p => !p.IsDeleted);
+        builder.Entity<SplitSettlement>().HasQueryFilter(s => !s.IsDeleted);
+
+        // --- SPLIT MODULE SCHEMA ---
+        builder.Entity<SplitGroup>(e =>
+        {
+            e.ToTable("SplitGroups", "split");
+            e.HasIndex(g => g.ShareToken).IsUnique();
+            e.HasIndex(g => g.CreatedByUserId);
+        });
+
+        builder.Entity<SplitGroupMember>(e =>
+        {
+            e.ToTable("SplitGroupMembers", "split");
+            e.HasOne(m => m.SplitGroup).WithMany(g => g.Members)
+                .HasForeignKey(m => m.SplitGroupId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(m => m.LinkedUserId);
+        });
+
+        builder.Entity<SplitExpense>(e =>
+        {
+            e.ToTable("SplitExpenses", "split");
+            e.HasOne(x => x.SplitGroup).WithMany(g => g.Expenses)
+                .HasForeignKey(x => x.SplitGroupId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<SplitExpensePayer>(e =>
+        {
+            e.ToTable("SplitExpensePayers", "split");
+            e.HasOne(p => p.SplitExpense).WithMany(x => x.Payers)
+                .HasForeignKey(p => p.SplitExpenseId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(p => p.SplitGroupMember).WithMany(m => m.PaidExpenses)
+                .HasForeignKey(p => p.SplitGroupMemberId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<SplitExpenseParticipant>(e =>
+        {
+            e.ToTable("SplitExpenseParticipants", "split");
+            e.HasOne(p => p.SplitExpense).WithMany(x => x.Participants)
+                .HasForeignKey(p => p.SplitExpenseId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(p => p.SplitGroupMember).WithMany(m => m.OwedExpenses)
+                .HasForeignKey(p => p.SplitGroupMemberId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<SplitSettlement>(e =>
+        {
+            e.ToTable("SplitSettlements", "split");
+            e.HasOne(s => s.SplitGroup).WithMany(g => g.Settlements)
+                .HasForeignKey(s => s.SplitGroupId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(s => s.FromMember).WithMany()
+                .HasForeignKey(s => s.FromMemberId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(s => s.ToMember).WithMany()
+                .HasForeignKey(s => s.ToMemberId).OnDelete(DeleteBehavior.Restrict);
+        });
 
         // --- Budget Configuration ---
         builder.Entity<Budget>()

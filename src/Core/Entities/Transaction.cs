@@ -40,4 +40,21 @@ public class Transaction : BaseEntity
     /// aggregation site checking for it.
     /// </summary>
     public bool IsBalanceAdjustment { get; set; } = false;
+
+    /// <summary>
+    /// True for an initial balance record created on account creation or backfilled,
+    /// never set by anything else. Auditable starting point for transaction history
+    /// and Brought Forward calculations.
+    /// </summary>
+    public bool IsOpeningBalance { get; set; } = false;
+
+    /// <summary>
+    /// Explicit classification, defaulting to Normal for every existing
+    /// transaction. This is what lets the lifecycle-protection logic
+    /// know which transactions have a genuine paired leg that
+    /// needs protecting (Transfer, LoanPrincipal) versus which are
+    /// self-contained singletons that just happen to also carry a
+    /// TransferGroupId for exclusion purposes (BalanceAdjustment).
+    /// </summary>
+    public TransactionKind Kind { get; set; } = TransactionKind.Normal;
 }

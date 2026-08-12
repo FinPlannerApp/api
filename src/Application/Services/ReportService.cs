@@ -211,9 +211,10 @@ public class ReportService : IReportService
             })
             .ToListAsync();
 
-        var totalAssets = accounts.Where(a => a.Classification == "Asset").Sum(a => a.Balance);
-        var totalLiabilitiesRaw = accounts.Where(a => a.Classification == "Liability").Sum(a => a.Balance);
-        var netWorth = totalAssets + totalLiabilitiesRaw;
+        var netWorthResult = await NetWorthCalculator.CalculateAsync(_context, userId);
+        var totalAssets = netWorthResult.TotalAssets;
+        var totalLiabilitiesRaw = -netWorthResult.TotalLiabilities; // back to raw/negative for this report's existing display logic below, which was already correct
+        var netWorth = netWorthResult.NetWorth;
 
         using var memoryStream = new MemoryStream();
         using (var writer = new StreamWriter(memoryStream, leaveOpen: true))

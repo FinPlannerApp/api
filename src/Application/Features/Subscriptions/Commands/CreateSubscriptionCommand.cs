@@ -44,6 +44,8 @@ public class CreateSubscriptionCommandHandler : IRequestHandler<CreateSubscripti
     {
         var dto = request.Dto;
 
+        var nextProcessDate = CalculateFirstOccurrenceOnOrAfterToday(dto.StartDate, dto.Frequency);
+
         var recurringTransaction = new RecurringTransaction
         {
             UserId = request.UserId,
@@ -53,8 +55,8 @@ public class CreateSubscriptionCommandHandler : IRequestHandler<CreateSubscripti
             Amount = dto.Amount,
             Type = TransactionType.Expense, // subscriptions are expenses
             Frequency = dto.Frequency,
-            StartDate = dto.StartDate,
-            NextProcessDate = dto.StartDate,
+            StartDate = dto.StartDate, // the REAL historical start — unchanged, this is what fixes the display/age-calculation issue
+            NextProcessDate = nextProcessDate, // the actual next occurrence, never a past date
             IsActive = true
         };
 
@@ -71,5 +73,37 @@ public class CreateSubscriptionCommandHandler : IRequestHandler<CreateSubscripti
         await _context.SaveChangesAsync(cancellationToken);
 
         return Result.Success(subscription.Id);
+    }
+
+    /// <summary>
+    /// If StartDate is in the past, rolls forward to the first real
+    /// occurrence on or after today — without this, a subscription
+    /// entered with a genuine past start date would look immediately
+    /// overdue to the recurring job and generate a back-dated charge the
+    /// moment it saves. StartDate itself stays untouched; only
+    /// NextProcessDate is adjusted.
+    /// </summary>
+    private static DateTime CalculateFirstOccurrenceOnOrAfterToday(DateTime startDate, RecurrenceFrequency frequency)
+    {
+        var next = startDate;
+        var today = DateTime.UtcNow;
+        var safetyLimit = 10000; // defends against a degenerate input looping indefinitely, never realistically hit
+
+        while (next < today && safetyLimit-- > 0)
+        {
+            next = frequency switch
+            {
+                RecurrenceFrequency.Daily => next.AddDays(1),
+                RecurrenceFrequency.Weekly => next.AddDays(7),
+                RecurrenceFrequency.Monthly => next.AddMonths(1),
+                RecurrenceFrequency.Yearly => next.AddYears(1),
+                _ => today // Custom/OneTime frequencies aren't really
+                           // meaningful for a subscription — fall back to
+                           // today rather than looping on a case this
+                           // method isn't designed to roll forward
+            };
+        }
+
+        return next;
     }
 }

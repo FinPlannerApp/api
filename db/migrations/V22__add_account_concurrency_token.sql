@@ -1,0 +1,3 @@
+-- Migration: Add optimistic concurrency token registration for Account table
+-- PostgreSQL uses the built-in system column 'xmin' for row versioning in EF Core.
+-- No DDL table modification is required because 'xmin' exists natively on all PostgreSQL tables.

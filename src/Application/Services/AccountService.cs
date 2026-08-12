@@ -118,7 +118,13 @@ public class AccountService : IAccountService
                 return Result.Failure<AccountDto>(new Error("Account.NotFound", "Account not found."));
 
             account.Name = dto.Name;
-            account.Balance = dto.Balance;
+            // Balance is deliberately NOT touched here — it can only be
+            // set at creation (the else-branch below) or corrected via
+            // AdjustBalanceAsync, which creates a real, visible
+            // transaction explaining the change. Silently accepting
+            // dto.Balance on every edit would mean a direct API call
+            // (bypassing whatever the frontend currently disables) could
+            // still overwrite it with zero record of why.
             account.AccountCategoryId = dto.AccountCategoryId;
             account.Purpose = dto.Purpose;
             _context.Accounts.Update(account);
@@ -136,6 +142,38 @@ public class AccountService : IAccountService
             };
             _context.Accounts.Add(account);
             await _context.SaveChangesAsync(); // need account.Id before creating a detail record with an FK to it
+
+            // Opening Balance transaction — makes the starting balance
+            // auditable through transaction history instead of a number
+            // that just appears with no record of where it came from.
+            // This is also the actual fix for "Brought Forward" being
+            // wrong: that calculation sums transaction history before a
+            // period start, and now the starting balance is part of that
+            // history instead of invisible to it. Skipped for a genuine
+            // ₹0 starting balance — nothing meaningful to record.
+            if (dto.Balance != 0)
+            {
+                _context.Transactions.Add(new Transaction
+                {
+                    Description = "Opening Balance",
+                    Amount = Math.Abs(dto.Balance),
+                    Date = DateTime.UtcNow,
+                    Type = dto.Balance > 0 ? TransactionType.Income : TransactionType.Expense,
+                    AccountId = account.Id,
+                    UserId = userId,
+                    IsOpeningBalance = true,
+                    Kind = TransactionKind.OpeningBalance,
+                    // Reuses the same TransferGroupId exclusion trick as
+                    // Balance Adjustment — a singleton, unpaired GUID.
+                    // Every place that already filters TransferGroupId
+                    // == null (Monthly Income/Expense, Deep Insights)
+                    // automatically excludes this too, for free.
+                    // "Brought Forward" deliberately has NO
+                    // TransferGroupId filter in its own query, so it
+                    // correctly still counts this — that's the whole fix.
+                    TransferGroupId = Guid.NewGuid()
+                });
+            }
         }
 
         await SyncAccountDetailsAsync(account, category.AccountType, dto);
@@ -327,6 +365,23 @@ public class AccountService : IAccountService
         // every liability account in this app.
         var outstandingBalance = Math.Abs(loanAccount.Balance);
 
+        // Compute what a full payoff would actually cost (remaining
+        // principal + this period's interest) BEFORE splitting the
+        // requested amount — needed to validate against, not to use in
+        // the split itself.
+        var monthlyRate = (loanAccount.LoanDetails.InterestRate ?? 0) / 100m / 12m;
+        var thisMonthsInterest = Math.Round(outstandingBalance * monthlyRate, 2);
+        var maxValidPayment = outstandingBalance + thisMonthsInterest;
+
+        if (dto.Amount > maxValidPayment)
+        {
+            return Result.Failure<LoanPaymentResultDto>(new Error(
+                "LoanPayment.ExceedsPayoff",
+                $"This payment (₹{dto.Amount:F2}) is more than what's needed to fully pay off this loan " +
+                $"(₹{maxValidPayment:F2} — ₹{outstandingBalance:F2} principal + ₹{thisMonthsInterest:F2} interest). " +
+                "Enter the exact payoff amount if you're closing this loan out, or a smaller amount for a regular payment."));
+        }
+
         var (interestPortion, principalPortion) = LoanAmortization.CalculateSplit(
             outstandingBalance, loanAccount.LoanDetails.InterestRate ?? 0, dto.Amount);
 
@@ -340,7 +395,8 @@ public class AccountService : IAccountService
                 Date = dto.Date,
                 Type = TransactionType.Expense,
                 AccountId = dto.PayingAccountId,
-                UserId = userId
+                UserId = userId,
+                Kind = TransactionKind.LoanInterest
                 // Deliberately not TransferGroupId-linked — this portion
                 // genuinely IS an expense, the whole point of this method
                 // is making sure only THIS part counts as one.
@@ -363,7 +419,8 @@ public class AccountService : IAccountService
                 Type = TransactionType.Expense,
                 AccountId = dto.PayingAccountId,
                 UserId = userId,
-                TransferGroupId = transferGroupId
+                TransferGroupId = transferGroupId,
+                Kind = TransactionKind.LoanPrincipal
             };
             payingAccount.Balance -= principalPortion;
 
@@ -375,7 +432,8 @@ public class AccountService : IAccountService
                 Type = TransactionType.Income,
                 AccountId = dto.LoanAccountId,
                 UserId = userId,
-                TransferGroupId = transferGroupId
+                TransferGroupId = transferGroupId,
+                Kind = TransactionKind.LoanPrincipal
             };
             // Balance is negative (debt); an "Income" leg here correctly
             // moves it toward zero — exactly how a credit card payment
@@ -397,7 +455,11 @@ public class AccountService : IAccountService
 
         _context.Accounts.Update(payingAccount);
         _context.Accounts.Update(loanAccount);
-        await _context.SaveChangesAsync();
+
+        var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
+        if (saveResult.IsFailure)
+            return Result.Failure<LoanPaymentResultDto>(saveResult.Error);
+
         await _cache.RemoveByPrefixAsync($"dash::{userId}:");
 
         return Result.Success(new LoanPaymentResultDto
@@ -504,6 +566,7 @@ public class AccountService : IAccountService
             AccountId = dto.AccountId,
             UserId = userId,
             IsBalanceAdjustment = true,
+            Kind = TransactionKind.BalanceAdjustment,
 
             // Reuses the existing transfer-exclusion mechanism rather
             // than adding a second, parallel filter to every one of the
@@ -519,10 +582,126 @@ public class AccountService : IAccountService
         account.Balance = dto.NewBalance;
         _context.Accounts.Update(account);
 
-        await _context.SaveChangesAsync();
+        var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
+        if (saveResult.IsFailure)
+            return Result.Failure<AccountDto>(saveResult.Error);
+
         await _cache.RemoveByPrefixAsync($"dash::{userId}:");
 
         return Result.Success(MapToDto(account, account.AccountCategory));
+    }
+
+    public async Task<Result<CreditCardBillResultDto>> RecordCreditCardBillAsync(string userId, RecordCreditCardBillDto dto)
+    {
+        var account = await _context.Accounts
+            .Include(a => a.AccountCategory)
+            .Include(a => a.CreditCardDetails)
+            .FirstOrDefaultAsync(a => a.Id == dto.AccountId);
+
+        if (account == null || account.UserId != userId)
+            return Result.Failure<CreditCardBillResultDto>(new Error("Account.NotFound", "Account not found."));
+
+        if (account.AccountCategory?.AccountType != AccountType.CreditCard || account.CreditCardDetails == null)
+            return Result.Failure<CreditCardBillResultDto>(new Error("CreditCard.NotACard", "This account isn't set up as a credit card."));
+
+        if (dto.BillAmount < 0)
+            return Result.Failure<CreditCardBillResultDto>(new Error("CreditCardBill.InvalidAmount", "Bill amount can't be negative."));
+
+        var computedBreakdown = await CreditCardStatementCalculator.CalculateAsync(_context, account);
+        var statementDate = computedBreakdown.MostRecentStatementDate ?? DateTime.UtcNow;
+
+        // Upsert against (AccountId, StatementDate) — recording a bill
+        // for a cycle that already has one updates it rather than
+        // creating a duplicate, so re-entering a corrected figure is safe.
+        var existingBill = await _context.CreditCardBills
+            .FirstOrDefaultAsync(b => b.AccountId == dto.AccountId &&
+                                      b.StatementDate.Date == statementDate.Date);
+
+        if (existingBill != null)
+        {
+            existingBill.BillAmount = dto.BillAmount;
+            existingBill.MinimumDue = dto.MinimumDue;
+            existingBill.DueDate = dto.DueDate ?? account.CreditCardDetails.DueDate;
+            _context.CreditCardBills.Update(existingBill);
+        }
+        else
+        {
+            _context.CreditCardBills.Add(new CreditCardBill
+            {
+                UserId = userId,
+                AccountId = dto.AccountId,
+                StatementDate = statementDate,
+                BillAmount = dto.BillAmount,
+                MinimumDue = dto.MinimumDue,
+                DueDate = dto.DueDate ?? account.CreditCardDetails.DueDate
+            });
+        }
+
+        await _context.SaveChangesAsync();
+        await _cache.RemoveByPrefixAsync($"dash::{userId}:");
+
+        var impliedCharges = Math.Max(0, dto.BillAmount - computedBreakdown.StatementOutstanding);
+
+        return Result.Success(new CreditCardBillResultDto
+        {
+            RecordedBillAmount = dto.BillAmount,
+            ComputedFromTransactions = computedBreakdown.StatementOutstanding,
+            ImpliedInterestAndFees = impliedCharges,
+            StatementDate = statementDate
+        });
+    }
+
+    public async Task<Result<int>> BackfillOpeningBalancesAsync(string userId)
+    {
+        var accounts = await _context.Accounts
+            .Where(a => a.UserId == userId)
+            .ToListAsync();
+
+        int created = 0;
+        foreach (var account in accounts)
+        {
+            var alreadyHasOne = await _context.Transactions
+                .AnyAsync(t => t.AccountId == account.Id && t.IsOpeningBalance);
+            if (alreadyHasOne) continue;
+
+            var existingTransactionsNetEffect = await _context.Transactions
+                .Where(t => t.AccountId == account.Id)
+                .SumAsync(t => t.Type == TransactionType.Income ? t.Amount : -t.Amount);
+
+            var impliedOpeningBalance = account.Balance - existingTransactionsNetEffect;
+
+            if (impliedOpeningBalance == 0) continue;
+
+            // Dated one day before this account's earliest transaction
+            // (or its own creation date if it has none at all), so it
+            // always correctly sorts as "before everything else" —
+            // including in any date-ordered "Brought Forward" query.
+            var earliestTransactionDate = await _context.Transactions
+                .Where(t => t.AccountId == account.Id)
+                .OrderBy(t => t.Date)
+                .Select(t => (DateTime?)t.Date)
+                .FirstOrDefaultAsync();
+
+            var backfillDate = (earliestTransactionDate ?? account.CreatedAt).AddDays(-1);
+
+            _context.Transactions.Add(new Transaction
+            {
+                Description = "Opening Balance (backfilled)",
+                Amount = Math.Abs(impliedOpeningBalance),
+                Date = backfillDate,
+                Type = impliedOpeningBalance > 0 ? TransactionType.Income : TransactionType.Expense,
+                AccountId = account.Id,
+                UserId = userId,
+                IsOpeningBalance = true,
+                Kind = TransactionKind.OpeningBalance,
+                TransferGroupId = Guid.NewGuid()
+            });
+            created++;
+        }
+
+        await _context.SaveChangesAsync();
+        await _cache.RemoveByPrefixAsync($"dash::{userId}:");
+        return Result.Success(created);
     }
 
     private AccountDto MapToDto(Account a, Domain.Entities.AccountCategory? categoryOverride = null)

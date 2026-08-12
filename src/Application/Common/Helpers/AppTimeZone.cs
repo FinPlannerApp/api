@@ -78,4 +78,15 @@ public static class AppTimeZone
             DateTime.SpecifyKind(localEnd, DateTimeKind.Unspecified).ToUtc()
         );
     }
+
+    /// <summary>
+    /// "Today," correctly meaning the current calendar day in the app's
+    /// local timezone — NOT DateTime.UtcNow.Date, which answers a
+    /// different question (today in UTC) that happens to match local
+    /// time only some of the day, depending on the UTC offset. Use this
+    /// anywhere code currently reaches for DateTime.UtcNow.Date to
+    /// compare against a date the user thinks of as "today" — elapsed-day
+    /// counts, "is this due today" checks, and similar.
+    /// </summary>
+    public static DateTime TodayLocal() => DateTime.UtcNow.ToLocal().Date;
 }

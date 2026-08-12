@@ -1,4 +1,5 @@
 using Domain.Entities;
+using Domain.Entities.Split;
 using Microsoft.EntityFrameworkCore;
 
 namespace Application.Contracts;
@@ -46,6 +47,13 @@ public interface IApplicationDbContext
     DbSet<Merchant> Merchants { get; }
     DbSet<MerchantAlias> MerchantAliases { get; }
     DbSet<Goal> Goals { get; }
+    DbSet<CreditCardBill> CreditCardBills { get; }
+    DbSet<SplitGroup> SplitGroups { get; }
+    DbSet<SplitGroupMember> SplitGroupMembers { get; }
+    DbSet<SplitExpense> SplitExpenses { get; }
+    DbSet<SplitExpensePayer> SplitExpensePayers { get; }
+    DbSet<SplitExpenseParticipant> SplitExpenseParticipants { get; }
+    DbSet<SplitSettlement> SplitSettlements { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

@@ -94,4 +94,18 @@ public class AccountsController : BaseController
         var result = await _accountService.AdjustBalanceAsync(UserId, dto);
         return HandleResult(result);
     }
+
+    [HttpPost("record-credit-card-bill")]
+    public async Task<IActionResult> RecordCreditCardBill([FromBody] RecordCreditCardBillDto dto)
+    {
+        var result = await _accountService.RecordCreditCardBillAsync(UserId, dto);
+        return HandleResult(result);
+    }
+
+    [HttpPost("backfill-opening-balances")]
+    public async Task<IActionResult> BackfillOpeningBalances()
+    {
+        var result = await _accountService.BackfillOpeningBalancesAsync(UserId);
+        return HandleResult(result);
+    }
 }

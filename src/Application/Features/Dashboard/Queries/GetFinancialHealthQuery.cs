@@ -124,9 +124,8 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
         // ── 4. Net Worth Trend (15 pts) — calculated from current Net Worth & 3-month net flow ──
         var (threeMonthsAgoStart, _) = AppTimeZone.MonthBoundsUtc(referenceDate.AddMonths(-3));
 
-        var currentNetWorth = await _context.Accounts
-            .Where(a => a.UserId == request.UserId && !a.AccountCategory.IsLiability)
-            .SumAsync(a => a.Balance, cancellationToken);
+        var netWorthResult = await NetWorthCalculator.CalculateAsync(_context, request.UserId, cancellationToken);
+        var currentNetWorth = netWorthResult.NetWorth;
 
         var netIncomeInPeriod = await _context.Transactions
             .Where(t => accountIds.Contains(t.AccountId) && t.Date >= threeMonthsAgoStart && t.Date <= currentMonthEnd && t.TransferGroupId == null)
@@ -163,13 +162,17 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
                 (a.AccountCategory.AccountType == AccountType.Bank || a.AccountCategory.AccountType == AccountType.Cash))
             .SumAsync(a => a.Balance, cancellationToken);
 
-        // Average of the last 3 full months' expenses (excluding
-        // transfers, same as everywhere else) — a single month can be
-        // unusually low/high, 3 months smooths that out.
+        // Average of the last 3 FULLY COMPLETED months' expenses — the
+        // current, still-in-progress month is deliberately excluded
+        // entirely. Including even a few days of the current month while
+        // still dividing by a fixed 3 skews the average away from what
+        // "3 months" actually means, in either direction depending on
+        // how that partial month's spending compares to a typical one.
         var (threeMonthsBackStart, _) = AppTimeZone.MonthBoundsUtc(referenceDate.AddMonths(-3));
+        var (_, lastCompletedMonthEnd) = AppTimeZone.MonthBoundsUtc(referenceDate.AddMonths(-1));
         var recentExpenseTotal = await _context.Transactions
             .Where(t => accountIds.Contains(t.AccountId) && t.Type == TransactionType.Expense &&
-                        t.TransferGroupId == null && t.Date >= threeMonthsBackStart && t.Date <= currentMonthEnd)
+                        t.TransferGroupId == null && t.Date >= threeMonthsBackStart && t.Date <= lastCompletedMonthEnd)
             .SumAsync(t => t.Amount, cancellationToken);
         var averageMonthlyExpense = recentExpenseTotal / 3m;
 

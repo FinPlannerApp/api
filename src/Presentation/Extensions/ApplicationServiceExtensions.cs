@@ -51,6 +51,7 @@ public static class ApplicationServiceExtensions
         services.AddScoped<IssueActivityService>();
         services.AddScoped<IssueRelationService>();
         services.AddScoped<IDecisionJournalService, DecisionJournalService>();
+        services.AddScoped<ISplitService, SplitService>();
 
         return services;
     }
