@@ -53,6 +53,12 @@ public static class ApplicationServiceExtensions
         services.AddScoped<IDecisionJournalService, DecisionJournalService>();
         services.AddScoped<ISplitService, SplitService>();
 
+        // Blog Image Storage & Services
+        services.AddScoped<IBlogImageStorage, DatabaseBlogImageStorage>();
+        services.AddScoped<R2BlogImageStorage>();
+        services.AddScoped<BlogImageMigrationService>();
+        services.AddScoped<BlogService>();
+
         return services;
     }
 }

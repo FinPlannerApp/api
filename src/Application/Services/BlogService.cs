@@ -3,16 +3,19 @@ using Application.Contracts;
 using Application.DTOs.Blog;
 using Domain.Entities;
 using Microsoft.EntityFrameworkCore;
+using SkiaSharp;
 
 namespace Application.Services;
 
 public class BlogService
 {
     private readonly IApplicationDbContext _context;
+    private readonly IBlogImageStorage _imageStorage;
 
-    public BlogService(IApplicationDbContext context)
+    public BlogService(IApplicationDbContext context, IBlogImageStorage imageStorage)
     {
         _context = context;
+        _imageStorage = imageStorage;
     }
 
     // ── Public reads — no auth required, only ever returns published posts ────
@@ -49,6 +52,37 @@ public class BlogService
             ContentMarkdown = post.ContentMarkdown,
             IsPublished = post.IsPublished
         });
+    }
+
+    // ── Image Handling ────────────────────────────────────────────────────────
+
+    public async Task<Result<string>> UploadImageAsync(Stream imageStream, string fileName)
+    {
+        // Converts whatever format was uploaded (PNG, JPEG, whatever)
+        // into WebP — guarantees what's actually stored matches what
+        // you decided on, regardless of what the browser sent.
+        using var memoryStream = new MemoryStream();
+        await imageStream.CopyToAsync(memoryStream);
+        var inputBytes = memoryStream.ToArray();
+
+        using var original = SKBitmap.Decode(inputBytes);
+        if (original == null)
+            return Result.Failure<string>(new Error("BlogImage.InvalidImage", "Could not decode the uploaded file as an image."));
+
+        using var skImage = SKImage.FromBitmap(original);
+        using var encodedData = skImage.Encode(SKEncodedImageFormat.Webp, quality: 80);
+
+        var publicUrl = await _imageStorage.StoreAsync(encodedData.ToArray(), fileName);
+        return Result.Success(publicUrl);
+    }
+
+    public async Task<Result<(byte[] Data, string ContentType)>> GetImageAsync(int id)
+    {
+        var image = await _context.BlogImages.FirstOrDefaultAsync(i => i.Id == id);
+        if (image == null)
+            return Result.Failure<(byte[], string)>(new Error("BlogImage.NotFound", "Image not found."));
+
+        return Result.Success((image.Data, image.ContentType));
     }
 
     // ── Admin-only writes ────────────────────────────────────────────────────

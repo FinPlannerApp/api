@@ -10,12 +10,12 @@ namespace API.Controllers;
 public class BlogController : BaseController
 {
     private readonly BlogService _blogService;
-    private readonly BlogImageService _imageService;
+    private readonly BlogImageMigrationService _migrationService;
 
-    public BlogController(BlogService blogService, BlogImageService imageService)
+    public BlogController(BlogService blogService, BlogImageMigrationService migrationService)
     {
         _blogService = blogService;
-        _imageService = imageService;
+        _migrationService = migrationService;
     }
 
     [HttpGet("published")]
@@ -33,9 +33,11 @@ public class BlogController : BaseController
     [ResponseCache(Duration = 31536000, Location = ResponseCacheLocation.Any)]
     public async Task<IActionResult> GetImage(int id)
     {
-        var result = await _imageService.GetImageAsync(id);
+        var result = await _blogService.GetImageAsync(id);
         if (result.IsFailure) return NotFound();
-        return File(result.Value.Data, result.Value.ContentType);
+
+        var (data, contentType) = result.Value;
+        return File(data, contentType);
     }
 
     [HttpGet("admin/all")]
@@ -55,19 +57,22 @@ public class BlogController : BaseController
 
     [HttpPost("admin/upload-image")]
     [Authorize(Roles = "Admin")]
+    [RequestSizeLimit(10_000_000)] // 10MB cap on uploaded source file before WebP conversion
     public async Task<IActionResult> UploadImage(IFormFile file)
     {
         if (file == null || file.Length == 0)
-            return BadRequest("File is empty.");
+            return BadRequest("No file provided.");
 
         using var stream = file.OpenReadStream();
-        var result = await _imageService.UploadAndCompressAsync(file.FileName, stream);
-        if (result.IsFailure) return HandleResult(result);
+        var result = await _blogService.UploadImageAsync(stream, file.FileName);
+        return HandleResult(result);
+    }
 
-        return Ok(new BlogImageUploadResultDto
-        {
-            Id = result.Value.Id,
-            PublicUrl = result.Value.PublicUrl
-        });
+    [HttpPost("admin/migrate-to-r2")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> MigrateToR2()
+    {
+        var result = await _migrationService.MigrateAllImagesToR2Async();
+        return HandleResult(result);
     }
 }
