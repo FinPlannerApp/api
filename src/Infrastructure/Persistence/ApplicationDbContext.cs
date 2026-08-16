@@ -65,12 +65,16 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<MerchantAlias> MerchantAliases => Set<MerchantAlias>();
     public DbSet<Goal> Goals => Set<Goal>();
     public DbSet<CreditCardBill> CreditCardBills => Set<CreditCardBill>();
+    public DbSet<CreditCardPayment> CreditCardPayments => Set<CreditCardPayment>();
     public DbSet<SplitGroup> SplitGroups => Set<SplitGroup>();
     public DbSet<SplitGroupMember> SplitGroupMembers => Set<SplitGroupMember>();
     public DbSet<SplitExpense> SplitExpenses => Set<SplitExpense>();
     public DbSet<SplitExpensePayer> SplitExpensePayers => Set<SplitExpensePayer>();
     public DbSet<SplitExpenseParticipant> SplitExpenseParticipants => Set<SplitExpenseParticipant>();
     public DbSet<SplitSettlement> SplitSettlements => Set<SplitSettlement>();
+    public DbSet<SplitGroupInvite> SplitGroupInvites => Set<SplitGroupInvite>();
+    public DbSet<BlogPost> BlogPosts => Set<BlogPost>();
+    public DbSet<BlogImage> BlogImages => Set<BlogImage>();
 
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IHttpContextAccessor httpContextAccessor) : base(options)
     {
@@ -355,6 +359,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<SplitExpensePayer>().HasQueryFilter(p => !p.IsDeleted);
         builder.Entity<SplitExpenseParticipant>().HasQueryFilter(p => !p.IsDeleted);
         builder.Entity<SplitSettlement>().HasQueryFilter(s => !s.IsDeleted);
+        builder.Entity<SplitGroupInvite>().HasQueryFilter(i => !i.IsDeleted);
 
         // --- SPLIT MODULE SCHEMA ---
         builder.Entity<SplitGroup>(e =>
@@ -406,6 +411,14 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
                 .HasForeignKey(s => s.FromMemberId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(s => s.ToMember).WithMany()
                 .HasForeignKey(s => s.ToMemberId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<SplitGroupInvite>(e =>
+        {
+            e.ToTable("SplitGroupInvites", "split");
+            e.HasIndex(i => i.TokenHash).IsUnique();
+            e.HasOne(i => i.SplitGroup).WithMany()
+                .HasForeignKey(i => i.SplitGroupId).OnDelete(DeleteBehavior.Cascade);
         });
 
         // --- Budget Configuration ---
@@ -677,6 +690,31 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
                 .WithMany()
                 .HasForeignKey(g => g.SavingsBucketId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<CreditCardPayment>(e =>
+        {
+            e.ToTable("CreditCardPayments", "accounts");
+            e.HasIndex(p => p.CreditCardAccountId);
+            e.HasOne<Account>()
+                .WithMany()
+                .HasForeignKey(p => p.CreditCardAccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<Account>()
+                .WithMany()
+                .HasForeignKey(p => p.PayingAccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<BlogPost>(e =>
+        {
+            e.ToTable("BlogPosts", "accounts");
+            e.HasIndex(b => b.Slug).IsUnique();
+        });
+
+        builder.Entity<BlogImage>(e =>
+        {
+            e.ToTable("BlogImages", "accounts");
         });
     }
 }

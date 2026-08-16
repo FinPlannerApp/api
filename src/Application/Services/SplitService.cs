@@ -2,7 +2,9 @@ using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Split;
+using Application.DTOs.Transactions;
 using Domain.Entities.Split;
+using Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace Application.Services;
@@ -10,10 +12,12 @@ namespace Application.Services;
 public class SplitService : ISplitService
 {
     private readonly IApplicationDbContext _context;
+    private readonly ITransactionService _transactionService;
 
-    public SplitService(IApplicationDbContext context)
+    public SplitService(IApplicationDbContext context, ITransactionService transactionService)
     {
         _context = context;
+        _transactionService = transactionService;
     }
 
     public async Task<Result<GroupDto>> CreateGroupAsync(string userId, CreateGroupDto dto)
@@ -383,6 +387,242 @@ public class SplitService : ISplitService
             Expenses = group.Expenses.OrderByDescending(e => e.Date).Select(MapExpenseToDto).ToList(),
             Balances = ComputeBalancesDto(group)
         });
+    }
+
+    public async Task<Result<InviteCreatedDto>> CreateInviteAsync(string userId, CreateInviteDto dto)
+    {
+        var group = await _context.SplitGroups.FirstOrDefaultAsync(g => g.Id == dto.GroupId);
+        if (group == null)
+            return Result.Failure<InviteCreatedDto>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        if (group.CreatedByUserId != userId)
+            return Result.Failure<InviteCreatedDto>(new Error("SplitGroup.Forbidden", "Only the group creator can create invites."));
+
+        var token = InviteTokenHelper.GenerateToken();
+        var invite = new SplitGroupInvite
+        {
+            SplitGroupId = dto.GroupId,
+            CreatedByUserId = userId,
+            TokenHash = InviteTokenHelper.Hash(token),
+            ExpiresAt = dto.ExpiresAt,
+            MaxUses = dto.MaxUses
+        };
+
+        _context.SplitGroupInvites.Add(invite);
+        await _context.SaveChangesAsync();
+
+        // The only moment the plain token exists anywhere — returned
+        // once, here, then never retrievable again. Only its hash lives
+        // in the database from this point forward.
+        return Result.Success(new InviteCreatedDto
+        {
+            Token = token,
+            ExpiresAt = invite.ExpiresAt,
+            MaxUses = invite.MaxUses
+        });
+    }
+
+    public async Task<Result<InvitePreviewDto>> PreviewInviteAsync(string token)
+    {
+        var tokenHash = InviteTokenHelper.Hash(token);
+        var invite = await _context.SplitGroupInvites
+            .Include(i => i.SplitGroup).ThenInclude(g => g.Members)
+            .FirstOrDefaultAsync(i => i.TokenHash == tokenHash);
+
+        if (invite == null)
+            return Result.Success(new InvitePreviewDto { IsValid = false, InvalidReason = "not found" });
+
+        var (isValid, reason) = ValidateInvite(invite);
+
+        return Result.Success(new InvitePreviewDto
+        {
+            GroupName = invite.SplitGroup.Name,
+            MemberCount = invite.SplitGroup.Members.Count,
+            IsValid = isValid,
+            InvalidReason = reason
+        });
+    }
+
+    public async Task<Result<JoinGroupResultDto>> JoinViaInviteAsync(string userId, JoinGroupDto dto)
+    {
+        var tokenHash = InviteTokenHelper.Hash(dto.Token);
+        var invite = await _context.SplitGroupInvites
+            .Include(i => i.SplitGroup).ThenInclude(g => g.Members)
+            .FirstOrDefaultAsync(i => i.TokenHash == tokenHash);
+
+        if (invite == null)
+            return Result.Failure<JoinGroupResultDto>(new Error("SplitInvite.NotFound", "This invite link isn't valid."));
+
+        var (isValid, reason) = ValidateInvite(invite);
+        if (!isValid)
+            return Result.Failure<JoinGroupResultDto>(new Error("SplitInvite.Invalid", $"This invite is no longer valid ({reason})."));
+
+        // Already joined via this exact link before — safe to just
+        // confirm membership again, not an error. Makes the join
+        // endpoint idempotent, which matters if someone opens the link
+        // twice or double-taps "Join."
+        var existingMember = invite.SplitGroup.Members.FirstOrDefault(m => m.LinkedUserId == userId);
+        if (existingMember != null)
+        {
+            return Result.Success(new JoinGroupResultDto
+            {
+                GroupId = invite.SplitGroupId,
+                MemberId = existingMember.Id,
+                AlreadyWasMember = true
+            });
+        }
+
+        var newMember = new SplitGroupMember
+        {
+            SplitGroupId = invite.SplitGroupId,
+            Name = dto.DisplayName,
+            LinkedUserId = userId
+        };
+
+        _context.SplitGroupMembers.Add(newMember);
+        invite.UsedCount++;
+        _context.SplitGroupInvites.Update(invite);
+        await _context.SaveChangesAsync();
+
+        return Result.Success(new JoinGroupResultDto
+        {
+            GroupId = invite.SplitGroupId,
+            MemberId = newMember.Id,
+            AlreadyWasMember = false
+        });
+    }
+
+    public async Task<Result<bool>> RevokeInviteAsync(string userId, int inviteId)
+    {
+        var invite = await _context.SplitGroupInvites
+            .Include(i => i.SplitGroup)
+            .FirstOrDefaultAsync(i => i.Id == inviteId);
+
+        if (invite == null)
+            return Result.Failure<bool>(new Error("SplitInvite.NotFound", "Invite not found."));
+
+        if (invite.SplitGroup.CreatedByUserId != userId)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can revoke invites."));
+
+        invite.RevokedAt = DateTime.UtcNow;
+        _context.SplitGroupInvites.Update(invite);
+        await _context.SaveChangesAsync();
+
+        return Result.Success(true);
+    }
+
+    public async Task<Result<bool>> CloseGroupAsync(string userId, int groupId)
+    {
+        var group = await _context.SplitGroups.FirstOrDefaultAsync(g => g.Id == groupId);
+        if (group == null)
+            return Result.Failure<bool>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        if (group.CreatedByUserId != userId)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can close the group."));
+
+        group.Status = SplitGroupStatus.Settled;
+        _context.SplitGroups.Update(group);
+        await _context.SaveChangesAsync();
+
+        return Result.Success(true);
+    }
+
+    public async Task<Result<ImportToLedgerResultDto>> ImportToLedgerAsync(string userId, ImportToLedgerDto dto)
+    {
+        var group = await _context.SplitGroups
+            .Include(g => g.Members)
+            .FirstOrDefaultAsync(g => g.Id == dto.GroupId);
+
+        if (group == null)
+            return Result.Failure<ImportToLedgerResultDto>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        // Deliberately restricted to closed groups, matching the flow
+        // you described — importing mid-trip, while expenses are still
+        // being added, would mean re-running this repeatedly and
+        // reasoning about partial state. Closing first gives one clean,
+        // final import.
+        if (group.Status != SplitGroupStatus.Settled && group.Status != SplitGroupStatus.Archived)
+            return Result.Failure<ImportToLedgerResultDto>(new Error(
+                "SplitGroup.NotClosed", "Close this group before importing it to your ledger."));
+
+        var callerMember = group.Members.FirstOrDefault(m => m.LinkedUserId == userId);
+        if (callerMember == null)
+            return Result.Failure<ImportToLedgerResultDto>(new Error(
+                "SplitGroup.NotAMember", "You need to be a linked member of this group to import your share."));
+
+        var participations = await _context.SplitExpenseParticipants
+            .Include(p => p.SplitExpense)
+            .Where(p => p.SplitGroupMemberId == callerMember.Id && p.ImportedTransactionId == null)
+            .ToListAsync();
+
+        int imported = 0;
+        foreach (var participation in participations)
+        {
+            var expense = participation.SplitExpense;
+
+            var result = await _transactionService.UpsertTransactionAsync(userId, dto.AccountId, new UpsertTransactionDto
+            {
+                Description = $"[{group.Name}] {expense.Description} — your share",
+                Amount = participation.ShareAmount,
+                Type = TransactionType.Expense,
+                Date = expense.Date, // the ORIGINAL expense date, not today — this is the whole point
+                TransactionCategoryId = null // left uncategorized deliberately rather than guessing at a mapping
+            });
+
+            if (result.IsSuccess)
+            {
+                // result.Value's Id comes back as an int from UpsertTransactionAsync's TransactionDto
+                participation.ImportedTransactionId = result.Value.Id;
+                _context.SplitExpenseParticipants.Update(participation);
+                imported++;
+            }
+            // A single failed import (e.g. a concurrency conflict on the
+            // target account) doesn't abort the whole batch — it's
+            // simply left un-imported, and re-running this action later
+            // will pick it up, since ImportedTransactionId stays null.
+        }
+
+        await _context.SaveChangesAsync();
+
+        return Result.Success(new ImportToLedgerResultDto
+        {
+            TransactionsCreated = imported,
+            AlreadyImportedCount = participations.Count - imported
+        });
+    }
+
+    public async Task<Result<List<SettlementDto>>> GetSettlementHistoryAsync(string userId, int groupId)
+    {
+        var group = await LoadGroupForUserAsync(userId, groupId);
+        if (group == null)
+            return Result.Failure<List<SettlementDto>>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        var settlements = await _context.SplitSettlements
+            .Include(s => s.FromMember)
+            .Include(s => s.ToMember)
+            .Where(s => s.SplitGroupId == groupId)
+            .OrderByDescending(s => s.CompletedAt ?? s.CreatedAt)
+            .ToListAsync();
+
+        return Result.Success(settlements.Select(s => new SettlementDto
+        {
+            Id = s.Id,
+            FromMemberName = s.FromMember.Name,
+            ToMemberName = s.ToMember.Name,
+            Amount = s.Amount,
+            Method = s.Method,
+            Status = s.Status,
+            PaymentReference = s.PaymentReference,
+            CompletedAt = s.CompletedAt
+        }).ToList());
+    }
+
+    private static (bool IsValid, string? Reason) ValidateInvite(SplitGroupInvite invite)
+    {
+        if (invite.RevokedAt.HasValue) return (false, "revoked");
+        if (invite.ExpiresAt.HasValue && invite.ExpiresAt.Value < DateTime.UtcNow) return (false, "expired");
+        if (invite.MaxUses.HasValue && invite.UsedCount >= invite.MaxUses.Value) return (false, "fully used");
+        return (true, null);
     }
 
     // ── Private helpers ─────────────────────────────────────────────────────────

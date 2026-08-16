@@ -94,6 +94,45 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
             }
         }
 
+        // ── Source 3: loan EMI due dates ─────────────────────────────────────
+        var loanAccounts = await _context.Accounts
+            .Include(a => a.LoanDetails)
+            .Where(a => a.UserId == request.UserId && a.AccountCategory.AccountType == AccountType.Loan)
+            .ToListAsync(cancellationToken);
+
+        foreach (var loan in loanAccounts)
+        {
+            if (loan.LoanDetails?.NextEmiDueDate == null || loan.LoanDetails.EmiAmount == null)
+                continue;
+
+            var dueDate = loan.LoanDetails.NextEmiDueDate.Value;
+            if (dueDate < today || dueDate > cutoff)
+                continue;
+
+            bool isShortfallRisk = false;
+            if (loan.LoanDetails.DesignatedPayingAccountId.HasValue)
+            {
+                var payingAccount = await _context.Accounts
+                    .FirstOrDefaultAsync(a => a.Id == loan.LoanDetails.DesignatedPayingAccountId.Value, cancellationToken);
+
+                if (payingAccount != null && payingAccount.Balance < loan.LoanDetails.EmiAmount.Value)
+                {
+                    isShortfallRisk = true;
+                }
+            }
+
+            results.Add(new UpcomingObligationDto
+            {
+                Description = $"{loan.Name} EMI due",
+                AccountName = loan.Name,
+                Amount = loan.LoanDetails.EmiAmount.Value,
+                MinimumDueAmount = null,
+                DueDate = dueDate,
+                Source = "Loan",
+                IsShortfallRisk = isShortfallRisk
+            });
+        }
+
         return Result.Success(results.OrderBy(r => r.DueDate).ToList());
     }
 }

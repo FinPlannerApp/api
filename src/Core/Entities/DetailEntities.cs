@@ -34,6 +34,15 @@ public class LoanDetails : BaseEntity
     public int? TenureMonths { get; set; }
     public DateTime? NextEmiDueDate { get; set; }
     public DateTime? StartDate { get; set; }
+
+    /// <summary>
+    /// Which account you plan to pay this loan's EMI from — optional,
+    /// used only for the shortfall warning in Upcoming Obligations. Not
+    /// required for the loan to function; a loan with this unset simply
+    /// never shows a shortfall warning, since there's nothing to check
+    /// the balance against.
+    /// </summary>
+    public int? DesignatedPayingAccountId { get; set; }
 }
 
 public class BankAccountDetails : BaseEntity

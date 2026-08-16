@@ -93,6 +93,15 @@ public class SplitExpenseParticipant : BaseEntity
     public SplitGroupMember SplitGroupMember { get; set; } = null!;
 
     public decimal ShareAmount { get; set; }
+
+    /// <summary>
+    /// Set once this share has been imported as a real personal
+    /// transaction — a plain int, no FK constraint into Transactions,
+    /// same "soft reference" convention as every UserId field in this
+    /// schema. Prevents importing the same share twice; doesn't create
+    /// a hard database dependency in either direction.
+    /// </summary>
+    public int? ImportedTransactionId { get; set; }
 }
 
 public class SplitSettlement : BaseEntity

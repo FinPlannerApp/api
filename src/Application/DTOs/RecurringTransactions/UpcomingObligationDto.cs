@@ -18,4 +18,14 @@ public class UpcomingObligationDto
     // icon/label per source without needing two separate API calls merged
     // client-side.
     public string Source { get; set; } = string.Empty;
+
+    /// <summary>
+    /// True when the designated paying account's current balance is
+    /// less than this obligation's amount. Deliberately simple — checks
+    /// the account's balance right now, not a full projection accounting
+    /// for every other obligation between now and the due date. A
+    /// direct "you have X, you owe Y, that's short" signal, not a
+    /// cash-flow forecast.
+    /// </summary>
+    public bool IsShortfallRisk { get; set; }
 }

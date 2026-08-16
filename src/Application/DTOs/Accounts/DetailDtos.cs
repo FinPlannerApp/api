@@ -20,6 +20,7 @@ public class LoanDetailsDto
     public int? TenureMonths { get; set; }
     public DateTime? NextEmiDueDate { get; set; }
     public DateTime? StartDate { get; set; }
+    public int? DesignatedPayingAccountId { get; set; }
 }
 
 public class BankAccountDetailsDto

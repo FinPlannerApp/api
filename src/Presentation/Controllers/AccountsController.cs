@@ -102,6 +102,21 @@ public class AccountsController : BaseController
         return HandleResult(result);
     }
 
+    [HttpPost("make-credit-card-payment-batch")]
+    public async Task<IActionResult> MakeCreditCardPaymentBatch([FromBody] MakeCreditCardPaymentBatchDto dto)
+    {
+        var result = await _accountService.MakeCreditCardPaymentBatchAsync(UserId, dto);
+        return HandleResult(result);
+    }
+
+    [HttpGet("cashback-insights")]
+    public async Task<IActionResult> GetCashbackInsights()
+        => HandleResult(await _accountService.GetCashbackInsightsAsync(UserId));
+
+    [HttpGet("{creditCardAccountId}/payment-suggestions")]
+    public async Task<IActionResult> GetPaymentSuggestions(int creditCardAccountId, [FromQuery] decimal amount)
+        => HandleResult(await _accountService.GetPaymentSuggestionsAsync(UserId, creditCardAccountId, amount));
+
     [HttpPost("backfill-opening-balances")]
     public async Task<IActionResult> BackfillOpeningBalances()
     {

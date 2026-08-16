@@ -68,4 +68,33 @@ public class SplitController : BaseController
     [AllowAnonymous]
     public async Task<IActionResult> GetPublicView(string shareToken)
         => HandleResult(await _service.GetPublicGroupViewAsync(shareToken));
+
+    [HttpPost("invites")]
+    public async Task<IActionResult> CreateInvite([FromBody] CreateInviteDto dto)
+        => HandleResult(await _service.CreateInviteAsync(UserId, dto));
+
+    [HttpGet("invites/{token}/preview")]
+    [AllowAnonymous]
+    public async Task<IActionResult> PreviewInvite(string token)
+        => HandleResult(await _service.PreviewInviteAsync(token));
+
+    [HttpPost("invites/join")]
+    public async Task<IActionResult> JoinViaInvite([FromBody] JoinGroupDto dto)
+        => HandleResult(await _service.JoinViaInviteAsync(UserId, dto));
+
+    [HttpPost("invites/{inviteId}/revoke")]
+    public async Task<IActionResult> RevokeInvite(int inviteId)
+        => HandleResult(await _service.RevokeInviteAsync(UserId, inviteId));
+
+    [HttpPost("groups/{groupId}/close")]
+    public async Task<IActionResult> CloseGroup(int groupId)
+        => HandleResult(await _service.CloseGroupAsync(UserId, groupId));
+
+    [HttpPost("import-to-ledger")]
+    public async Task<IActionResult> ImportToLedger([FromBody] ImportToLedgerDto dto)
+        => HandleResult(await _service.ImportToLedgerAsync(UserId, dto));
+
+    [HttpGet("groups/{groupId}/settlements")]
+    public async Task<IActionResult> GetSettlementHistory(int groupId)
+        => HandleResult(await _service.GetSettlementHistoryAsync(UserId, groupId));
 }

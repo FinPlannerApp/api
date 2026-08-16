@@ -16,6 +16,19 @@ public static class SplitShareCalculator
         if (participants.Count == 0)
             throw new InvalidOperationException("An expense needs at least one participant.");
 
+        // Same member listed twice would create two separate share
+        // records for one person, double-counting them in every balance
+        // calculation downstream — checked once here, before any
+        // split-type-specific logic runs.
+        var duplicateIds = participants
+            .GroupBy(p => p.MemberId)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToList();
+        if (duplicateIds.Any())
+            throw new InvalidOperationException(
+                $"Member ID(s) {string.Join(", ", duplicateIds)} appear more than once as a participant.");
+
         switch (type)
         {
             case Domain.Entities.Split.SplitType.Equal:
@@ -38,7 +51,12 @@ public static class SplitShareCalculator
 
             case Domain.Entities.Split.SplitType.Exact:
             {
-                var shares = participants.Select(p => (p.MemberId, Share: p.ExactAmount ?? 0)).ToList();
+                if (participants.Any(p => p.ExactAmount == null))
+                    throw new InvalidOperationException("Every participant needs an exact amount for an Exact split — none can be left blank.");
+                if (participants.Any(p => p.ExactAmount < 0))
+                    throw new InvalidOperationException("Exact amounts can't be negative.");
+
+                var shares = participants.Select(p => (p.MemberId, Share: p.ExactAmount!.Value)).ToList();
                 var sum = shares.Sum(s => s.Share);
                 if (Math.Abs(sum - totalAmount) > 0.01m)
                     throw new InvalidOperationException(
@@ -48,12 +66,17 @@ public static class SplitShareCalculator
 
             case Domain.Entities.Split.SplitType.Percentage:
             {
+                if (participants.Any(p => p.Percentage == null))
+                    throw new InvalidOperationException("Every participant needs a percentage for a Percentage split — none can be left blank.");
+                if (participants.Any(p => p.Percentage < 0))
+                    throw new InvalidOperationException("Percentages can't be negative.");
+
                 var totalPercent = participants.Sum(p => p.Percentage ?? 0);
                 if (Math.Abs(totalPercent - 100) > 0.01m)
                     throw new InvalidOperationException($"Percentages sum to {totalPercent}%, but must sum to 100%.");
 
                 var percentageShares = participants
-                    .Select(p => (p.MemberId, Share: Math.Round(totalAmount * (p.Percentage ?? 0) / 100m, 2)))
+                    .Select(p => (p.MemberId, Share: Math.Round(totalAmount * p.Percentage!.Value / 100m, 2)))
                     .ToList();
 
                 var percentageRemainder = totalAmount - percentageShares.Sum(s => s.Share);
@@ -67,12 +90,21 @@ public static class SplitShareCalculator
 
             case Domain.Entities.Split.SplitType.Shares:
             {
+                if (participants.Any(p => p.Shares == null))
+                    throw new InvalidOperationException("Every participant needs a share count for a Shares split — none can be left blank.");
+                // Zero or negative shares are rejected rather than
+                // allowed as "participates but owes nothing" — someone
+                // who genuinely owes nothing for an expense shouldn't be
+                // listed as a participant on it at all. Treating this as
+                // invalid input catches the more likely case: a value
+                // that was meant to be entered but wasn't.
+                if (participants.Any(p => p.Shares <= 0))
+                    throw new InvalidOperationException("Shares must be greater than zero for every participant.");
+
                 var totalShares = participants.Sum(p => p.Shares ?? 0);
-                if (totalShares <= 0)
-                    throw new InvalidOperationException("Total shares must be greater than zero.");
 
                 var shareShares = participants
-                    .Select(p => (p.MemberId, Share: Math.Round(totalAmount * (p.Shares ?? 0) / totalShares, 2)))
+                    .Select(p => (p.MemberId, Share: Math.Round(totalAmount * p.Shares!.Value / totalShares, 2)))
                     .ToList();
 
                 var sharesRemainder = totalAmount - shareShares.Sum(s => s.Share);

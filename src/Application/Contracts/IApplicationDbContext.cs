@@ -48,12 +48,16 @@ public interface IApplicationDbContext
     DbSet<MerchantAlias> MerchantAliases { get; }
     DbSet<Goal> Goals { get; }
     DbSet<CreditCardBill> CreditCardBills { get; }
+    DbSet<CreditCardPayment> CreditCardPayments { get; }
     DbSet<SplitGroup> SplitGroups { get; }
     DbSet<SplitGroupMember> SplitGroupMembers { get; }
     DbSet<SplitExpense> SplitExpenses { get; }
     DbSet<SplitExpensePayer> SplitExpensePayers { get; }
     DbSet<SplitExpenseParticipant> SplitExpenseParticipants { get; }
     DbSet<SplitSettlement> SplitSettlements { get; }
+    DbSet<SplitGroupInvite> SplitGroupInvites { get; }
+    DbSet<BlogPost> BlogPosts { get; }
+    DbSet<BlogImage> BlogImages { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

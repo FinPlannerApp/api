@@ -226,6 +226,7 @@ public class AccountService : IAccountService
             account.LoanDetails.TenureMonths = dto.LoanDetails.TenureMonths;
             account.LoanDetails.NextEmiDueDate = dto.LoanDetails.NextEmiDueDate;
             account.LoanDetails.StartDate = dto.LoanDetails.StartDate;
+            account.LoanDetails.DesignatedPayingAccountId = dto.LoanDetails.DesignatedPayingAccountId;
         }
         else if (account.LoanDetails != null)
         {
@@ -651,6 +652,308 @@ public class AccountService : IAccountService
         });
     }
 
+    public async Task<Result<CreditCardPaymentBatchResultDto>> MakeCreditCardPaymentBatchAsync(
+        string userId, MakeCreditCardPaymentBatchDto dto)
+    {
+        if (dto.Payments == null || dto.Payments.Count == 0)
+            return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                "CreditCardPayment.NoPayments", "At least one payment is required."));
+
+        var ccAccount = await _context.Accounts
+            .Include(a => a.AccountCategory)
+            .Include(a => a.CreditCardDetails)
+            .FirstOrDefaultAsync(a => a.Id == dto.CreditCardAccountId);
+
+        if (ccAccount == null || ccAccount.UserId != userId)
+            return Result.Failure<CreditCardPaymentBatchResultDto>(new Error("Account.NotFound", "Credit card account not found."));
+
+        if (ccAccount.AccountCategory?.AccountType != AccountType.CreditCard || ccAccount.CreditCardDetails == null)
+            return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                "CreditCardPayment.NotACard", "This account isn't set up as a credit card."));
+
+        var outstandingBalance = Math.Abs(ccAccount.Balance);
+        var totalRequested = dto.Payments.Sum(p => p.Amount);
+
+        if (totalRequested > outstandingBalance)
+            return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                "CreditCardPayment.ExceedsPayoff",
+                $"These payments total ₹{totalRequested:F2}, more than the ₹{outstandingBalance:F2} actually owed on this card."));
+
+        var payingAccounts = new Dictionary<int, Account>();
+        foreach (var payment in dto.Payments)
+        {
+            if (payment.Amount <= 0)
+                return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                    "CreditCardPayment.InvalidAmount", "Every payment amount must be greater than zero."));
+
+            if (payment.PayingAccountId == dto.CreditCardAccountId)
+                return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                    "CreditCardPayment.SameAccount", "The credit card and the paying account can't be the same account."));
+
+            if (!payingAccounts.TryGetValue(payment.PayingAccountId, out var payingAccount))
+            {
+                payingAccount = await _context.Accounts
+                    .Include(a => a.AccountCategory)
+                    .FirstOrDefaultAsync(a => a.Id == payment.PayingAccountId);
+
+                if (payingAccount == null || payingAccount.UserId != userId)
+                    return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                        "Account.NotFound", $"Paying account {payment.PayingAccountId} not found."));
+
+                if (payingAccount.AccountCategory?.AccountType == AccountType.CreditCard)
+                    return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                        "CreditCardPayment.InvalidPayingAccount",
+                        $"{payingAccount.Name} is a credit card and can't be used to pay off another credit card."));
+
+                payingAccounts[payment.PayingAccountId] = payingAccount;
+            }
+
+            bool isLiability = payingAccount.AccountCategory?.IsLiability ?? false;
+            if (!isLiability && payingAccount.Balance < payment.Amount)
+                return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                    "CreditCardPayment.InsufficientFunds",
+                    $"{payingAccount.Name} has insufficient balance for a ₹{payment.Amount:F2} payment."));
+        }
+
+        var latestUnpaidBill = await _context.CreditCardBills
+            .Where(b => b.AccountId == dto.CreditCardAccountId && !b.IsPaid)
+            .OrderByDescending(b => b.StatementDate)
+            .FirstOrDefaultAsync();
+
+        decimal remainingInterestToAllocate = 0;
+        if (latestUnpaidBill != null)
+        {
+            var computedBreakdown = await CreditCardStatementCalculator.CalculateAsync(_context, ccAccount);
+            remainingInterestToAllocate = Math.Max(0, latestUnpaidBill.BillAmount - computedBreakdown.StatementOutstanding);
+        }
+
+        var linkTracking = new List<(CreditCardPayment Payment, Transaction? Interest, Transaction? ExpenseLeg, Transaction? IncomeLeg, Transaction? Cashback)>();
+        var results = new List<SinglePaymentResultDto>();
+        decimal totalPaid = 0, totalInterestPaid = 0, totalCashback = 0;
+
+        foreach (var payment in dto.Payments)
+        {
+            var payingAccount = payingAccounts[payment.PayingAccountId];
+
+            var interestPortion = Math.Min(remainingInterestToAllocate, payment.Amount);
+            var principalPortion = payment.Amount - interestPortion;
+            remainingInterestToAllocate -= interestPortion;
+
+            var ccPayment = new CreditCardPayment
+            {
+                UserId = userId,
+                CreditCardAccountId = dto.CreditCardAccountId,
+                PayingAccountId = payment.PayingAccountId,
+                Amount = payment.Amount,
+                Date = payment.Date,
+                PaymentAppName = payment.PaymentAppName,
+                CashbackAmount = payment.CashbackAmount,
+                CashbackType = payment.CashbackType,
+                CashbackAccountId = payment.CashbackAccountId,
+                InterestPortion = interestPortion,
+                PrincipalPortion = principalPortion
+            };
+
+            Transaction? interestTx = null, expenseLeg = null, incomeLeg = null, cashbackTx = null;
+
+            if (interestPortion > 0)
+            {
+                interestTx = new Transaction
+                {
+                    Description = $"Interest/fees — {ccAccount.Name}",
+                    Amount = interestPortion,
+                    Date = payment.Date,
+                    Type = TransactionType.Expense,
+                    AccountId = payment.PayingAccountId,
+                    UserId = userId,
+                    Kind = TransactionKind.LoanInterest
+                };
+                _context.Transactions.Add(interestTx);
+                payingAccount.Balance -= interestPortion;
+            }
+
+            if (principalPortion > 0)
+            {
+                var transferGroupId = Guid.NewGuid();
+
+                expenseLeg = new Transaction
+                {
+                    Description = $"Credit card payment — {ccAccount.Name}" +
+                        (payment.PaymentAppName != null ? $" via {payment.PaymentAppName}" : ""),
+                    Amount = principalPortion,
+                    Date = payment.Date,
+                    Type = TransactionType.Expense,
+                    AccountId = payment.PayingAccountId,
+                    UserId = userId,
+                    Kind = TransactionKind.Transfer,
+                    TransferGroupId = transferGroupId
+                };
+                payingAccount.Balance -= principalPortion;
+
+                incomeLeg = new Transaction
+                {
+                    Description = $"Payment from {payingAccount.Name}",
+                    Amount = principalPortion,
+                    Date = payment.Date,
+                    Type = TransactionType.Income,
+                    AccountId = dto.CreditCardAccountId,
+                    UserId = userId,
+                    Kind = TransactionKind.Transfer,
+                    TransferGroupId = transferGroupId
+                };
+                ccAccount.Balance += principalPortion;
+
+                _context.Transactions.Add(expenseLeg);
+                _context.Transactions.Add(incomeLeg);
+            }
+
+            if (payment.CashbackAmount.HasValue && payment.CashbackAmount > 0 &&
+                payment.CashbackType == CashbackType.Direct &&
+                payment.CashbackAccountId.HasValue)
+            {
+                var cashbackAccount = await _context.Accounts
+                    .FirstOrDefaultAsync(a => a.Id == payment.CashbackAccountId.Value && a.UserId == userId);
+
+                if (cashbackAccount != null)
+                {
+                    cashbackTx = new Transaction
+                    {
+                        Description = $"Cashback — {ccAccount.Name} payment" +
+                            (payment.PaymentAppName != null ? $" ({payment.PaymentAppName})" : ""),
+                        Amount = payment.CashbackAmount.Value,
+                        Date = payment.Date,
+                        Type = TransactionType.Income,
+                        AccountId = payment.CashbackAccountId.Value,
+                        UserId = userId
+                    };
+                    _context.Transactions.Add(cashbackTx);
+                    cashbackAccount.Balance += payment.CashbackAmount.Value;
+                    _context.Accounts.Update(cashbackAccount);
+                }
+            }
+
+            if (payment.CashbackAmount.HasValue)
+                totalCashback += payment.CashbackAmount.Value;
+
+            _context.CreditCardPayments.Add(ccPayment);
+            _context.Accounts.Update(payingAccount);
+            linkTracking.Add((ccPayment, interestTx, expenseLeg, incomeLeg, cashbackTx));
+
+            results.Add(new SinglePaymentResultDto
+            {
+                InterestPortion = interestPortion,
+                PrincipalPortion = principalPortion,
+                CashbackAmount = payment.CashbackAmount
+            });
+
+            totalPaid += payment.Amount;
+            totalInterestPaid += interestPortion;
+        }
+
+        _context.Accounts.Update(ccAccount);
+
+        bool billMarkedPaid = false;
+        if (latestUnpaidBill != null && totalPaid >= latestUnpaidBill.BillAmount)
+        {
+            latestUnpaidBill.IsPaid = true;
+            _context.CreditCardBills.Update(latestUnpaidBill);
+            billMarkedPaid = true;
+        }
+
+        var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
+        if (saveResult.IsFailure)
+            return Result.Failure<CreditCardPaymentBatchResultDto>(saveResult.Error);
+
+        foreach (var (linkedPayment, interest, expense, income, cashback) in linkTracking)
+        {
+            linkedPayment.InterestTransactionId = interest?.Id;
+            linkedPayment.PrincipalExpenseTransactionId = expense?.Id;
+            linkedPayment.PrincipalIncomeTransactionId = income?.Id;
+            linkedPayment.CashbackTransactionId = cashback?.Id;
+            _context.CreditCardPayments.Update(linkedPayment);
+        }
+        await _context.SaveChangesAsync();
+
+        await _cache.RemoveByPrefixAsync($"dash::{userId}:");
+
+        return Result.Success(new CreditCardPaymentBatchResultDto
+        {
+            Payments = results,
+            TotalPaid = totalPaid,
+            TotalInterestPaid = totalInterestPaid,
+            TotalCashbackReceived = totalCashback,
+            RemainingBalance = outstandingBalance - (totalPaid - totalInterestPaid),
+            BillMarkedPaid = billMarkedPaid
+        });
+    }
+
+    public async Task<Result<CashbackInsightsDto>> GetCashbackInsightsAsync(string userId)
+    {
+        var payments = await _context.CreditCardPayments
+            .Where(p => p.UserId == userId)
+            .ToListAsync();
+
+        var byApp = payments
+            .Where(p => p.PaymentAppName != null)
+            .GroupBy(p => p.PaymentAppName!)
+            .Select(g =>
+            {
+                var totalPaid = g.Sum(p => p.Amount);
+                var totalCashback = g.Sum(p => p.CashbackAmount ?? 0);
+                return new PaymentAppCashbackDto
+                {
+                    PaymentAppName = g.Key,
+                    TotalPaid = totalPaid,
+                    TotalCashback = totalCashback,
+                    EffectiveRatePercent = totalPaid > 0 ? Math.Round((totalCashback / totalPaid) * 100, 2) : 0,
+                    PaymentCount = g.Count()
+                };
+            })
+            .OrderByDescending(a => a.EffectiveRatePercent)
+            .ToList();
+
+        var unclaimedWalletCashback = payments
+            .Where(p => p.CashbackType == CashbackType.Indirect)
+            .Sum(p => p.CashbackAmount ?? 0);
+
+        return Result.Success(new CashbackInsightsDto
+        {
+            ByApp = byApp,
+            UnclaimedWalletCashback = unclaimedWalletCashback
+        });
+    }
+
+    public async Task<Result<List<AccountPaymentSuggestionDto>>> GetPaymentSuggestionsAsync(
+        string userId, int creditCardAccountId, decimal amount)
+    {
+        var ccAccount = await _context.Accounts
+            .FirstOrDefaultAsync(a => a.Id == creditCardAccountId);
+
+        if (ccAccount == null || ccAccount.UserId != userId)
+            return Result.Failure<List<AccountPaymentSuggestionDto>>(new Error(
+                "Account.NotFound", "Credit card account not found."));
+
+        var candidateAccounts = await _context.Accounts
+            .Include(a => a.AccountCategory)
+            .Where(a => a.UserId == userId && a.Id != creditCardAccountId &&
+                        a.AccountCategory.AccountType != AccountType.CreditCard)
+            .ToListAsync();
+
+        var suggestions = candidateAccounts
+            .Select(a => new AccountPaymentSuggestionDto
+            {
+                AccountId = a.Id,
+                AccountName = a.Name,
+                Balance = a.Balance,
+                HasSufficientBalance = a.Balance >= amount,
+                Shortfall = Math.Max(0, amount - a.Balance)
+            })
+            .OrderByDescending(s => s.Balance)
+            .ToList();
+
+        return Result.Success(suggestions);
+    }
+
     public async Task<Result<int>> BackfillOpeningBalancesAsync(string userId)
     {
         var accounts = await _context.Accounts
@@ -735,7 +1038,8 @@ public class AccountService : IAccountService
                 EmiAmount = a.LoanDetails.EmiAmount,
                 TenureMonths = a.LoanDetails.TenureMonths,
                 NextEmiDueDate = a.LoanDetails.NextEmiDueDate,
-                StartDate = a.LoanDetails.StartDate
+                StartDate = a.LoanDetails.StartDate,
+                DesignatedPayingAccountId = a.LoanDetails.DesignatedPayingAccountId
             },
             BankAccountDetails = a.BankAccountDetails is null ? null : new BankAccountDetailsDto
             {
