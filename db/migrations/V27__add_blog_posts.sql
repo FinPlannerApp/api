@@ -22,13 +22,14 @@ CREATE TABLE IF NOT EXISTS accounts."BlogImages" (
     "ContentType" VARCHAR(100) NOT NULL DEFAULT 'image/webp',
     "Data" BYTEA NOT NULL,
     "FileSize" BIGINT NOT NULL,
+    "SizeBytes" BIGINT NOT NULL DEFAULT 0,
     "CreatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "UpdatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "IsDeleted" BOOLEAN NOT NULL DEFAULT FALSE,
     "DeletedAt" TIMESTAMP WITH TIME ZONE NULL
 );
 
--- Ensure Admin role exists in AspNetRoles
-INSERT INTO "AspNetRoles" ("Id", "Name", "NormalizedName")
+-- Ensure Admin role exists in identity.Roles
+INSERT INTO identity."Roles" ("Id", "Name", "NormalizedName")
 VALUES (gen_random_uuid()::text, 'Admin', 'ADMIN')
 ON CONFLICT ("NormalizedName") DO NOTHING;
