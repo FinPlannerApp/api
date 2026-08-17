@@ -92,7 +92,16 @@ public static class InfrastructureServiceExtensions
             .UseRecommendedSerializerSettings()
             .UsePostgreSqlStorage(o => o.UseNpgsqlConnection(configuration.GetConnectionString("DefaultConnection")!)));
         
-        services.AddHangfireServer();
+        services.AddHangfireServer(options =>
+        {
+            // Default is 15 seconds — every scheduled job here runs
+            // hourly at most, so checking every 15 minutes still finds
+            // work within a few minutes of when it's actually due,
+            // while letting the database go genuinely idle between
+            // checks instead of never reaching Neon's 5-minute
+            // scale-to-zero threshold at all.
+            options.SchedulePollingInterval = TimeSpan.FromMinutes(15);
+        });
         
         services.AddScoped<RecurringTransactionJob>();
         services.AddScoped<UpdatePainVelocityJob>();
