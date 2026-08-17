@@ -31,9 +31,21 @@ public class InfrastructureMonitorWorker : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("InfrastructureMonitorWorker started.");
-        
+
         // Wait a bit for other services to initialize
         await Task.Delay(10000, stoppingToken);
+
+        // Genuinely configurable now, not just a comment claiming to be —
+        // defaults to 60 minutes if unset. At 5 minutes, this check was
+        // landing exactly at Neon's scale-to-zero idle threshold, meaning
+        // the database's 5-minute idle window never completed and it
+        // never actually suspended — burning through the entire 100
+        // CU-hour free-tier budget on its own, before any real usage.
+        // At 60 minutes, the database gets ~55 minutes of genuine idle
+        // time between checks, letting scale-to-zero actually work,
+        // while still catching an outage within an hour.
+        var intervalMinutes = _configuration.GetValue<int?>("Infrastructure:HealthCheckIntervalMinutes") ?? 60;
+        var interval = TimeSpan.FromMinutes(intervalMinutes);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -46,8 +58,7 @@ public class InfrastructureMonitorWorker : BackgroundService
                 _logger.LogError(ex, "Error during health check.");
             }
 
-            // Check every 5 minutes (configurable)
-            await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+            await Task.Delay(interval, stoppingToken);
         }
     }
 
