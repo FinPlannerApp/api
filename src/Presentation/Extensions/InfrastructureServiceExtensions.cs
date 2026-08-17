@@ -94,13 +94,12 @@ public static class InfrastructureServiceExtensions
         
         services.AddHangfireServer(options =>
         {
-            // Default is 15 seconds — every scheduled job here runs
-            // hourly at most, so checking every 15 minutes still finds
-            // work within a few minutes of when it's actually due,
-            // while letting the database go genuinely idle between
-            // checks instead of never reaching Neon's 5-minute
-            // scale-to-zero threshold at all.
-            options.SchedulePollingInterval = TimeSpan.FromMinutes(15);
+            // Matches InfrastructureMonitorWorker's interval — every
+            // job here runs hourly at most, so a 60-minute check still
+            // finds work within minutes of when it's due, while
+            // actually letting the database go idle long enough
+            // between checks for Neon's scale-to-zero to matter.
+            options.SchedulePollingInterval = TimeSpan.FromMinutes(60);
         });
         
         services.AddScoped<RecurringTransactionJob>();
