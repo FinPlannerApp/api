@@ -640,7 +640,8 @@ public class SplitService : ISplitService
     {
         var group = await _context.SplitGroups
             .Include(g => g.Members)
-            .Include(g => g.Expenses)
+            .Include(g => g.Expenses).ThenInclude(e => e.Payers)
+            .Include(g => g.Expenses).ThenInclude(e => e.Participants)
             .Include(g => g.Settlements)
             .FirstOrDefaultAsync(g => g.Id == groupId);
 
