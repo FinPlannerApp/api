@@ -11,12 +11,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
-using Hangfire.PostgreSql;
-
 namespace API.Extensions;
-
-using Hangfire;
-using Hangfire.MemoryStorage;
 using Infrastructure.BackgroundJobs;
 using StackExchange.Redis;
 
@@ -85,6 +80,7 @@ public static class InfrastructureServiceExtensions
         services.AddHostedService<EmailQueueWorker>();
         services.AddHostedService<InfrastructureMonitorWorker>();
 
+<<<<<<< Updated upstream
         // 2.4 Register Hangfire
         services.AddHangfire(config => config
             .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
@@ -104,9 +100,15 @@ public static class InfrastructureServiceExtensions
             options.ServerCheckInterval = TimeSpan.FromMinutes(10);
         });
         
+=======
+>>>>>>> Stashed changes
         services.AddScoped<RecurringTransactionJob>();
         services.AddScoped<UpdatePainVelocityJob>();
         services.AddScoped<RefreshTokenCleanupJob>();
+
+        services.AddHostedService<RecurringTransactionSchedulerWorker>();
+        services.AddHostedService<PainVelocitySchedulerWorker>();
+        services.AddHostedService<RefreshTokenCleanupSchedulerWorker>();
 
         // 3. Register Identity with STRONG password requirements (dev AND production)
         services.AddIdentityCore<ApplicationUser>(options =>
