@@ -80,12 +80,14 @@ public class ExpenseDto
 
 public class PayerLineDto
 {
+    public int MemberId { get; set; }
     public string MemberName { get; set; } = string.Empty;
     public decimal AmountPaid { get; set; }
 }
 
 public class ParticipantLineDto
 {
+    public int MemberId { get; set; }
     public string MemberName { get; set; } = string.Empty;
     public decimal ShareAmount { get; set; }
 }

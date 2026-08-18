@@ -11,6 +11,7 @@ public class SinglePaymentEntryDto
     public decimal? CashbackAmount { get; set; }
     public CashbackType? CashbackType { get; set; }
     public int? CashbackAccountId { get; set; }
+    public int? InterestCategoryId { get; set; }
 }
 
 public class MakeCreditCardPaymentBatchDto

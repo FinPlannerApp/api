@@ -76,6 +76,10 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<MemberDto>(new Error("SplitGroup.NotFound", "Group not found."));
 
+        if (group.CreatedByUserId != userId)
+            return Result.Failure<MemberDto>(new Error(
+                "SplitGroup.Forbidden", "Only the group creator can add new members."));
+
         var member = new SplitGroupMember
         {
             SplitGroupId = dto.GroupId,
@@ -117,6 +121,10 @@ public class SplitService : ISplitService
         var group = await LoadGroupForUserAsync(userId, dto.GroupId);
         if (group == null)
             return Result.Failure<ExpenseDto>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        if (group.Status != SplitGroupStatus.Active)
+            return Result.Failure<ExpenseDto>(new Error(
+                "SplitExpense.GroupNotActive", "This group is locked, settled, or archived — new expenses can't be added."));
 
         if (dto.Amount <= 0)
             return Result.Failure<ExpenseDto>(new Error("SplitExpense.InvalidAmount", "Amount must be greater than zero."));
@@ -215,6 +223,16 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<SettlementDto>(new Error("SplitGroup.NotFound", "Group not found."));
 
+        bool hasPendingForThisPair = group.Settlements.Any(s =>
+            s.FromMemberId == dto.FromMemberId &&
+            s.ToMemberId == dto.ToMemberId &&
+            (s.Status == SettlementStatus.Pending || s.Status == SettlementStatus.AwaitingConfirmation));
+
+        if (hasPendingForThisPair)
+            return Result.Failure<SettlementDto>(new Error(
+                "SplitSettlement.AlreadyPending",
+                "There's already a payment in progress between these two people — finish or wait on that one first."));
+
         if (dto.Amount <= 0)
             return Result.Failure<SettlementDto>(new Error("SplitSettlement.InvalidAmount", "Amount must be greater than zero."));
 
@@ -284,30 +302,59 @@ public class SplitService : ISplitService
         });
     }
 
-    public async Task<Result<bool>> MarkSettlementPaidAsync(string userId, int settlementId)
+    public async Task<Result<bool>> MarkPaymentSentAsync(string userId, int settlementId)
     {
         var settlement = await _context.SplitSettlements
-            .Include(s => s.SplitGroup).ThenInclude(g => g.Members) // needed for FindMemberForUser below — wasn't loaded before
+            .Include(s => s.SplitGroup).ThenInclude(g => g.Members)
             .FirstOrDefaultAsync(s => s.Id == settlementId);
 
         if (settlement == null)
             return Result.Failure<bool>(new Error("SplitSettlement.NotFound", "Settlement not found."));
 
-        // Same principle as creating a settlement: the creator can
-        // confirm on behalf of anyone; a linked member can only confirm
-        // their own payment.
+        if (settlement.Status != SettlementStatus.Pending)
+            return Result.Failure<bool>(new Error("SplitSettlement.WrongState", "This settlement has already been acted on."));
+
         if (settlement.SplitGroup.CreatedByUserId != userId)
         {
             var callerMember = FindMemberForUser(settlement.SplitGroup, userId);
             if (callerMember == null || callerMember.Id != settlement.FromMemberId)
                 return Result.Failure<bool>(new Error(
-                    "SplitGroup.Forbidden", "Only the person who made this payment can confirm it."));
+                    "SplitGroup.Forbidden", "Only the person making this payment can mark it as sent."));
+        }
+
+        settlement.Status = SettlementStatus.AwaitingConfirmation;
+        _context.SplitSettlements.Update(settlement);
+        await _context.SaveChangesAsync();
+
+        return Result.Success(true);
+    }
+
+    public async Task<Result<bool>> ConfirmPaymentReceivedAsync(string userId, int settlementId)
+    {
+        var settlement = await _context.SplitSettlements
+            .Include(s => s.SplitGroup).ThenInclude(g => g.Members)
+            .FirstOrDefaultAsync(s => s.Id == settlementId);
+
+        if (settlement == null)
+            return Result.Failure<bool>(new Error("SplitSettlement.NotFound", "Settlement not found."));
+
+        if (settlement.Status != SettlementStatus.AwaitingConfirmation)
+            return Result.Failure<bool>(new Error("SplitSettlement.WrongState", "This settlement isn't awaiting confirmation."));
+
+        if (settlement.SplitGroup.CreatedByUserId != userId)
+        {
+            var callerMember = FindMemberForUser(settlement.SplitGroup, userId);
+            if (callerMember == null || callerMember.Id != settlement.ToMemberId)
+                return Result.Failure<bool>(new Error(
+                    "SplitGroup.Forbidden", "Only the person who was owed this payment can confirm receiving it."));
         }
 
         settlement.Status = SettlementStatus.Completed;
         settlement.CompletedAt = DateTime.UtcNow;
         _context.SplitSettlements.Update(settlement);
         await _context.SaveChangesAsync();
+
+        await CheckAndAutoSettleAsync(settlement.SplitGroupId);
 
         return Result.Success(true);
     }
@@ -511,20 +558,146 @@ public class SplitService : ISplitService
         return Result.Success(true);
     }
 
-    public async Task<Result<bool>> CloseGroupAsync(string userId, int groupId)
+    public async Task<Result<ExpenseDto>> UpdateExpenseAsync(string userId, int expenseId, UpdateExpenseDto dto)
+    {
+        var expense = await _context.SplitExpenses
+            .Include(e => e.Payers)
+            .Include(e => e.Participants)
+            .Include(e => e.SplitGroup).ThenInclude(g => g.Members)
+            .FirstOrDefaultAsync(e => e.Id == expenseId);
+
+        if (expense == null)
+            return Result.Failure<ExpenseDto>(new Error("SplitExpense.NotFound", "Expense not found."));
+
+        var group = expense.SplitGroup;
+        var hasAccess = group.CreatedByUserId == userId || group.Members.Any(m => m.LinkedUserId == userId);
+        if (!hasAccess)
+            return Result.Failure<ExpenseDto>(new Error("SplitGroup.Forbidden", "You don't have access to this group."));
+
+        if (group.Status != SplitGroupStatus.Active)
+            return Result.Failure<ExpenseDto>(new Error(
+                "SplitExpense.GroupClosed", "This group is locked, settled, or archived — expenses can't be edited."));
+
+        if (dto.Amount <= 0)
+            return Result.Failure<ExpenseDto>(new Error("SplitExpense.InvalidAmount", "Amount must be greater than zero."));
+
+        var payersSum = dto.Payers.Sum(p => p.AmountPaid);
+        if (Math.Abs(payersSum - dto.Amount) > 0.01m)
+            return Result.Failure<ExpenseDto>(new Error(
+                "SplitExpense.PayersMismatch",
+                $"Payers add up to {payersSum:F2}, but the expense total is {dto.Amount:F2} — they need to match."));
+
+        var groupMemberIds = group.Members.Select(m => m.Id).ToHashSet();
+        var allReferencedIds = dto.Payers.Select(p => p.MemberId).Concat(dto.Participants.Select(p => p.MemberId));
+        if (allReferencedIds.Any(id => !groupMemberIds.Contains(id)))
+            return Result.Failure<ExpenseDto>(new Error(
+                "SplitExpense.MemberNotInGroup", "One or more payers or participants don't belong to this group."));
+
+        List<(int MemberId, decimal Share)> shares;
+        try
+        {
+            var participantInputs = dto.Participants.Select(p => new ExpenseParticipantInput
+            {
+                MemberId = p.MemberId,
+                ExactAmount = p.ExactAmount,
+                Percentage = p.Percentage,
+                Shares = p.Shares
+            }).ToList();
+
+            shares = SplitShareCalculator.ComputeShares(dto.SplitType, dto.Amount, participantInputs);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Result.Failure<ExpenseDto>(new Error("SplitExpense.InvalidSplit", ex.Message));
+        }
+
+        _context.SplitExpensePayers.RemoveRange(expense.Payers);
+        _context.SplitExpenseParticipants.RemoveRange(expense.Participants);
+
+        expense.Description = dto.Description;
+        expense.Amount = dto.Amount;
+        expense.Date = dto.Date;
+        expense.Category = dto.Category;
+        expense.SplitType = dto.SplitType;
+
+        foreach (var payer in dto.Payers)
+            expense.Payers.Add(new SplitExpensePayer { SplitGroupMemberId = payer.MemberId, AmountPaid = payer.AmountPaid });
+
+        foreach (var (memberId, share) in shares)
+            expense.Participants.Add(new SplitExpenseParticipant { SplitGroupMemberId = memberId, ShareAmount = share });
+
+        await _context.SaveChangesAsync();
+
+        return await GetExpenseDtoAsync(expense.Id);
+    }
+
+    public async Task<Result<DeleteExpenseResultDto>> DeleteExpenseAsync(string userId, int expenseId)
+    {
+        var expense = await _context.SplitExpenses
+            .Include(e => e.SplitGroup).ThenInclude(g => g.Members)
+            .Include(e => e.Participants)
+            .FirstOrDefaultAsync(e => e.Id == expenseId);
+
+        if (expense == null)
+            return Result.Failure<DeleteExpenseResultDto>(new Error("SplitExpense.NotFound", "Expense not found."));
+
+        var group = expense.SplitGroup;
+        var hasAccess = group.CreatedByUserId == userId || group.Members.Any(m => m.LinkedUserId == userId);
+        if (!hasAccess)
+            return Result.Failure<DeleteExpenseResultDto>(new Error("SplitGroup.Forbidden", "You don't have access to this group."));
+
+        if (group.Status != SplitGroupStatus.Active)
+            return Result.Failure<DeleteExpenseResultDto>(new Error(
+                "SplitExpense.GroupClosed", "This group is locked, settled, or archived — expenses can't be deleted."));
+
+        bool wasAlreadyImported = expense.Participants.Any(p => p.ImportedTransactionId != null);
+
+        expense.IsDeleted = true;
+        expense.DeletedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        return Result.Success(new DeleteExpenseResultDto { WasAlreadyImported = wasAlreadyImported });
+    }
+
+    public async Task<Result<bool>> LockGroupAsync(string userId, int groupId)
     {
         var group = await _context.SplitGroups.FirstOrDefaultAsync(g => g.Id == groupId);
         if (group == null)
             return Result.Failure<bool>(new Error("SplitGroup.NotFound", "Group not found."));
 
         if (group.CreatedByUserId != userId)
-            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can close the group."));
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can lock the group."));
 
-        group.Status = SplitGroupStatus.Settled;
+        if (group.Status != SplitGroupStatus.Active)
+            return Result.Failure<bool>(new Error("SplitGroup.WrongState", "Only an active group can be locked."));
+
+        group.Status = SplitGroupStatus.Locked;
         _context.SplitGroups.Update(group);
         await _context.SaveChangesAsync();
 
         return Result.Success(true);
+    }
+
+    private async Task CheckAndAutoSettleAsync(int groupId)
+    {
+        var group = await _context.SplitGroups
+            .Include(g => g.Members)
+            .Include(g => g.Expenses).ThenInclude(e => e.Payers)
+            .Include(g => g.Expenses).ThenInclude(e => e.Participants)
+            .Include(g => g.Settlements)
+            .FirstOrDefaultAsync(g => g.Id == groupId);
+
+        if (group == null || group.Status != SplitGroupStatus.Locked) return;
+
+        var balances = SplitBalanceCalculator.CalculateNetBalances(group);
+        bool allSettled = balances.All(b => Math.Abs(b.NetBalance) < 0.01m);
+
+        if (allSettled)
+        {
+            group.Status = SplitGroupStatus.Settled;
+            _context.SplitGroups.Update(group);
+            await _context.SaveChangesAsync();
+        }
     }
 
     public async Task<Result<ImportToLedgerResultDto>> ImportToLedgerAsync(string userId, ImportToLedgerDto dto)
@@ -695,8 +868,8 @@ public class SplitService : ISplitService
         Date = e.Date,
         Category = e.Category,
         SplitType = e.SplitType,
-        Payers = e.Payers.Select(p => new PayerLineDto { MemberName = p.SplitGroupMember.Name, AmountPaid = p.AmountPaid }).ToList(),
-        Participants = e.Participants.Select(p => new ParticipantLineDto { MemberName = p.SplitGroupMember.Name, ShareAmount = p.ShareAmount }).ToList()
+        Payers = e.Payers.Select(p => new PayerLineDto { MemberId = p.SplitGroupMemberId, MemberName = p.SplitGroupMember.Name, AmountPaid = p.AmountPaid }).ToList(),
+        Participants = e.Participants.Select(p => new ParticipantLineDto { MemberId = p.SplitGroupMemberId, MemberName = p.SplitGroupMember.Name, ShareAmount = p.ShareAmount }).ToList()
     };
 
     private static GroupDto MapToDto(SplitGroup g) => new()

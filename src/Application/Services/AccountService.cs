@@ -766,7 +766,8 @@ public class AccountService : IAccountService
                     Type = TransactionType.Expense,
                     AccountId = payment.PayingAccountId,
                     UserId = userId,
-                    Kind = TransactionKind.LoanInterest
+                    Kind = TransactionKind.LoanInterest,
+                    TransactionCategoryId = payment.InterestCategoryId
                 };
                 _context.Transactions.Add(interestTx);
                 payingAccount.Balance -= interestPortion;

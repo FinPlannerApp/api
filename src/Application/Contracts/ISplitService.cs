@@ -14,14 +14,17 @@ public interface ISplitService
     Task<Result<List<ExpenseDto>>> GetExpensesAsync(string userId, int groupId);
     Task<Result<GroupBalancesDto>> GetBalancesAsync(string userId, int groupId);
     Task<Result<SettlementDto>> CreateSettlementAsync(string userId, CreateSettlementDto dto);
-    Task<Result<bool>> MarkSettlementPaidAsync(string userId, int settlementId);
+    Task<Result<ExpenseDto>> UpdateExpenseAsync(string userId, int expenseId, UpdateExpenseDto dto);
+    Task<Result<DeleteExpenseResultDto>> DeleteExpenseAsync(string userId, int expenseId);
+    Task<Result<bool>> MarkPaymentSentAsync(string userId, int settlementId);
+    Task<Result<bool>> ConfirmPaymentReceivedAsync(string userId, int settlementId);
     Task<Result<PaymentRequestDto>> GetPaymentRequestAsync(string userId, int settlementId);
     Task<Result<PublicGroupViewDto>> GetPublicGroupViewAsync(string shareToken);
     Task<Result<InviteCreatedDto>> CreateInviteAsync(string userId, CreateInviteDto dto);
     Task<Result<InvitePreviewDto>> PreviewInviteAsync(string token);
     Task<Result<JoinGroupResultDto>> JoinViaInviteAsync(string userId, JoinGroupDto dto);
     Task<Result<bool>> RevokeInviteAsync(string userId, int inviteId);
-    Task<Result<bool>> CloseGroupAsync(string userId, int groupId);
+    Task<Result<bool>> LockGroupAsync(string userId, int groupId);
     Task<Result<ImportToLedgerResultDto>> ImportToLedgerAsync(string userId, ImportToLedgerDto dto);
     Task<Result<List<SettlementDto>>> GetSettlementHistoryAsync(string userId, int groupId);
 }

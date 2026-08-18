@@ -51,9 +51,21 @@ public class SplitController : BaseController
     public async Task<IActionResult> CreateSettlement([FromBody] CreateSettlementDto dto)
         => HandleResult(await _service.CreateSettlementAsync(UserId, dto));
 
-    [HttpPost("settlements/{settlementId}/mark-paid")]
-    public async Task<IActionResult> MarkSettlementPaid(int settlementId)
-        => HandleResult(await _service.MarkSettlementPaidAsync(UserId, settlementId));
+    [HttpPut("expenses/{id}")]
+    public async Task<IActionResult> UpdateExpense(int id, [FromBody] UpdateExpenseDto dto)
+        => HandleResult(await _service.UpdateExpenseAsync(UserId, id, dto));
+
+    [HttpDelete("expenses/{id}")]
+    public async Task<IActionResult> DeleteExpense(int id)
+        => HandleResult(await _service.DeleteExpenseAsync(UserId, id));
+
+    [HttpPost("settlements/{id}/mark-sent")]
+    public async Task<IActionResult> MarkPaymentSent(int id)
+        => HandleResult(await _service.MarkPaymentSentAsync(UserId, id));
+
+    [HttpPost("settlements/{id}/confirm-received")]
+    public async Task<IActionResult> ConfirmPaymentReceived(int id)
+        => HandleResult(await _service.ConfirmPaymentReceivedAsync(UserId, id));
 
     [HttpGet("settlements/{settlementId}/payment-request")]
     public async Task<IActionResult> GetPaymentRequest(int settlementId)
@@ -86,9 +98,9 @@ public class SplitController : BaseController
     public async Task<IActionResult> RevokeInvite(int inviteId)
         => HandleResult(await _service.RevokeInviteAsync(UserId, inviteId));
 
-    [HttpPost("groups/{groupId}/close")]
-    public async Task<IActionResult> CloseGroup(int groupId)
-        => HandleResult(await _service.CloseGroupAsync(UserId, groupId));
+    [HttpPost("groups/{groupId}/lock")]
+    public async Task<IActionResult> LockGroup(int groupId)
+        => HandleResult(await _service.LockGroupAsync(UserId, groupId));
 
     [HttpPost("import-to-ledger")]
     public async Task<IActionResult> ImportToLedger([FromBody] ImportToLedgerDto dto)
