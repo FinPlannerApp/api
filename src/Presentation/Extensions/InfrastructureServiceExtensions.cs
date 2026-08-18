@@ -80,28 +80,6 @@ public static class InfrastructureServiceExtensions
         services.AddHostedService<EmailQueueWorker>();
         services.AddHostedService<InfrastructureMonitorWorker>();
 
-<<<<<<< Updated upstream
-        // 2.4 Register Hangfire
-        services.AddHangfire(config => config
-            .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
-            .UseSimpleAssemblyNameTypeSerializer()
-            .UseRecommendedSerializerSettings()
-            .UsePostgreSqlStorage(o => o.UseNpgsqlConnection(configuration.GetConnectionString("DefaultConnection")!)));
-        
-        services.AddHangfireServer(options =>
-        {
-            // Matches InfrastructureMonitorWorker's interval — every
-            // job here runs hourly at most, so a 60-minute check still
-            // finds work within minutes of when it's due, while
-            // actually letting the database go idle long enough
-            // between checks for Neon's scale-to-zero to matter.
-            options.SchedulePollingInterval = TimeSpan.FromMinutes(60);
-            options.HeartbeatInterval = TimeSpan.FromMinutes(5);
-            options.ServerCheckInterval = TimeSpan.FromMinutes(10);
-        });
-        
-=======
->>>>>>> Stashed changes
         services.AddScoped<RecurringTransactionJob>();
         services.AddScoped<UpdatePainVelocityJob>();
         services.AddScoped<RefreshTokenCleanupJob>();
