@@ -100,6 +100,8 @@ public static class InfrastructureServiceExtensions
             // actually letting the database go idle long enough
             // between checks for Neon's scale-to-zero to matter.
             options.SchedulePollingInterval = TimeSpan.FromMinutes(60);
+            options.HeartbeatInterval = TimeSpan.FromMinutes(5);
+            options.ServerCheckInterval = TimeSpan.FromMinutes(10);
         });
         
         services.AddScoped<RecurringTransactionJob>();
