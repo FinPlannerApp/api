@@ -102,6 +102,8 @@ public class MemberBalanceDto
 {
     public int MemberId { get; set; }
     public string MemberName { get; set; } = string.Empty;
+    public decimal TotalPaid { get; set; }
+    public decimal TotalShare { get; set; }
     public decimal NetBalance { get; set; }
 }
 
@@ -160,6 +162,13 @@ public class PublicGroupViewDto
     public string GroupName { get; set; } = string.Empty;
     public string Currency { get; set; } = "INR";
     public List<MemberDto> Members { get; set; } = new();
+    public List<ExpenseDto> Expenses { get; set; } = new();
+    public GroupBalancesDto Balances { get; set; } = new();
+}
+
+public class GroupFullDetailsDto
+{
+    public GroupDto Group { get; set; } = new();
     public List<ExpenseDto> Expenses { get; set; } = new();
     public GroupBalancesDto Balances { get; set; } = new();
 }

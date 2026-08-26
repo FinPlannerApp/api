@@ -7,6 +7,9 @@ public class MemberBalance
     public int MemberId { get; set; }
     public string MemberName { get; set; } = string.Empty;
 
+    public decimal TotalPaid { get; set; }
+    public decimal TotalShare { get; set; }
+
     /// <summary>Positive = this member is owed money overall. Negative = this member owes money overall.</summary>
     public decimal NetBalance { get; set; }
 }
@@ -34,26 +37,39 @@ public static class SplitBalanceCalculator
     {
         var balances = group.Members.ToDictionary(
             m => m.Id,
-            m => new MemberBalance { MemberId = m.Id, MemberName = m.Name, NetBalance = 0 });
+            m => new MemberBalance { MemberId = m.Id, MemberName = m.Name, TotalPaid = 0, TotalShare = 0, NetBalance = 0 });
 
         foreach (var expense in group.Expenses)
         {
             foreach (var payer in expense.Payers)
             {
                 if (balances.TryGetValue(payer.SplitGroupMemberId, out var b))
+                {
+                    b.TotalPaid += payer.AmountPaid;
                     b.NetBalance += payer.AmountPaid;
+                }
             }
             foreach (var participant in expense.Participants)
             {
                 if (balances.TryGetValue(participant.SplitGroupMemberId, out var b))
+                {
+                    b.TotalShare += participant.ShareAmount;
                     b.NetBalance -= participant.ShareAmount;
+                }
             }
         }
 
         foreach (var settlement in group.Settlements.Where(s => s.Status == SettlementStatus.Completed))
         {
-            if (balances.TryGetValue(settlement.FromMemberId, out var from)) from.NetBalance += settlement.Amount;
-            if (balances.TryGetValue(settlement.ToMemberId, out var to)) to.NetBalance -= settlement.Amount;
+            if (balances.TryGetValue(settlement.FromMemberId, out var from))
+            {
+                from.TotalPaid += settlement.Amount;
+                from.NetBalance += settlement.Amount;
+            }
+            if (balances.TryGetValue(settlement.ToMemberId, out var to))
+            {
+                to.NetBalance -= settlement.Amount;
+            }
         }
 
         return balances.Values.ToList();

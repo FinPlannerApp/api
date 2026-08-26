@@ -5,6 +5,7 @@ using Application.DTOs.Split;
 using Application.DTOs.Transactions;
 using Domain.Entities.Split;
 using Domain.Enums;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace Application.Services;
@@ -13,11 +14,16 @@ public class SplitService : ISplitService
 {
     private readonly IApplicationDbContext _context;
     private readonly ITransactionService _transactionService;
+    private readonly ISplitNotifier _notifier;
 
-    public SplitService(IApplicationDbContext context, ITransactionService transactionService)
+    public SplitService(
+        IApplicationDbContext context,
+        ITransactionService transactionService,
+        ISplitNotifier notifier)
     {
         _context = context;
         _transactionService = transactionService;
+        _notifier = notifier;
     }
 
     public async Task<Result<GroupDto>> CreateGroupAsync(string userId, CreateGroupDto dto)
@@ -76,9 +82,10 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<MemberDto>(new Error("SplitGroup.NotFound", "Group not found."));
 
-        if (group.CreatedByUserId != userId)
+        var isCallerInGroup = group.CreatedByUserId == userId || group.Members.Any(m => m.LinkedUserId == userId);
+        if (!isCallerInGroup)
             return Result.Failure<MemberDto>(new Error(
-                "SplitGroup.Forbidden", "Only the group creator can add new members."));
+                "SplitGroup.Forbidden", "Only group members can add new members."));
 
         var member = new SplitGroupMember
         {
@@ -90,28 +97,36 @@ public class SplitService : ISplitService
         _context.SplitGroupMembers.Add(member);
         await _context.SaveChangesAsync();
 
+        await _notifier.NotifyMemberAddedAsync(dto.GroupId, $"👤 {dto.Name} was added to the group.", new MemberDto { Id = member.Id, Name = member.Name, UpiId = member.UpiId });
+
         return Result.Success(new MemberDto { Id = member.Id, Name = member.Name, UpiId = member.UpiId });
     }
 
     public async Task<Result<bool>> UpdateMemberUpiAsync(string userId, UpdateMemberUpiDto dto)
     {
         var member = await _context.SplitGroupMembers
-            .Include(m => m.SplitGroup)
+            .Include(m => m.SplitGroup).ThenInclude(g => g.Members)
             .FirstOrDefaultAsync(m => m.Id == dto.MemberId);
 
         if (member == null)
             return Result.Failure<bool>(new Error("SplitMember.NotFound", "Member not found."));
 
-        // The creator can manage any member's details (the V1 model for
-        // unlinked members). A linked member can additionally manage
-        // their own — better privacy and UX than routing every UPI
-        // update through the creator.
-        if (member.SplitGroup.CreatedByUserId != userId && member.LinkedUserId != userId)
+        var isCallerInGroup = member.SplitGroup.CreatedByUserId == userId ||
+                              member.SplitGroup.Members.Any(m => m.LinkedUserId == userId);
+
+        if (!isCallerInGroup)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only group members can update payment details."));
+
+        // A registered/linked user can ONLY update their own UPI ID.
+        // A manually added person (LinkedUserId == null) can have their UPI ID updated by group members.
+        if (member.LinkedUserId != null && member.LinkedUserId != userId)
             return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "You can only update your own payment details."));
 
         member.UpiId = dto.UpiId;
         _context.SplitGroupMembers.Update(member);
         await _context.SaveChangesAsync();
+
+        await _notifier.NotifyMemberUpiUpdatedAsync(member.SplitGroupId, $"💳 {member.Name} updated payment details (UPI).", member.Id, member.UpiId);
 
         return Result.Success(true);
     }
@@ -189,7 +204,19 @@ public class SplitService : ISplitService
         _context.SplitExpenses.Add(expense);
         await _context.SaveChangesAsync();
 
-        return await GetExpenseDtoAsync(expense.Id);
+        var dtoRes = await GetExpenseDtoAsync(expense.Id);
+        var updatedGroup = await _context.SplitGroups
+            .AsNoTracking()
+            .Include(g => g.Members)
+            .Include(g => g.Expenses).ThenInclude(e => e.Payers)
+            .Include(g => g.Expenses).ThenInclude(e => e.Participants)
+            .Include(g => g.Settlements)
+            .FirstOrDefaultAsync(g => g.Id == dto.GroupId);
+
+        var balances = updatedGroup != null ? ComputeBalancesDto(updatedGroup) : new GroupBalancesDto();
+        await _notifier.NotifyExpenseAddedAsync(dto.GroupId, $"Expense '{dto.Description}' (₹{dto.Amount:N2}) added.", dtoRes.Value, balances);
+
+        return dtoRes;
     }
 
     public async Task<Result<List<ExpenseDto>>> GetExpensesAsync(string userId, int groupId)
@@ -217,21 +244,34 @@ public class SplitService : ISplitService
         return Result.Success(ComputeBalancesDto(group));
     }
 
+    public async Task<Result<GroupFullDetailsDto>> GetGroupFullDetailsAsync(string userId, int groupId)
+    {
+        var group = await LoadGroupForUserAsync(userId, groupId);
+        if (group == null)
+            return Result.Failure<GroupFullDetailsDto>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        var expenses = await _context.SplitExpenses
+            .Include(e => e.Payers).ThenInclude(p => p.SplitGroupMember)
+            .Include(e => e.Participants).ThenInclude(p => p.SplitGroupMember)
+            .Where(e => e.SplitGroupId == groupId)
+            .OrderByDescending(e => e.Date)
+            .ToListAsync();
+
+        var dto = new GroupFullDetailsDto
+        {
+            Group = MapToDto(group),
+            Expenses = expenses.Select(MapExpenseToDto).ToList(),
+            Balances = ComputeBalancesDto(group)
+        };
+
+        return Result.Success(dto);
+    }
+
     public async Task<Result<SettlementDto>> CreateSettlementAsync(string userId, CreateSettlementDto dto)
     {
         var group = await LoadGroupForUserAsync(userId, dto.GroupId);
         if (group == null)
             return Result.Failure<SettlementDto>(new Error("SplitGroup.NotFound", "Group not found."));
-
-        bool hasPendingForThisPair = group.Settlements.Any(s =>
-            s.FromMemberId == dto.FromMemberId &&
-            s.ToMemberId == dto.ToMemberId &&
-            (s.Status == SettlementStatus.Pending || s.Status == SettlementStatus.AwaitingConfirmation));
-
-        if (hasPendingForThisPair)
-            return Result.Failure<SettlementDto>(new Error(
-                "SplitSettlement.AlreadyPending",
-                "There's already a payment in progress between these two people — finish or wait on that one first."));
 
         if (dto.Amount <= 0)
             return Result.Failure<SettlementDto>(new Error("SplitSettlement.InvalidAmount", "Amount must be greater than zero."));
@@ -243,6 +283,37 @@ public class SplitService : ISplitService
         var toMember = group.Members.FirstOrDefault(m => m.Id == dto.ToMemberId);
         if (fromMember == null || toMember == null)
             return Result.Failure<SettlementDto>(new Error("SplitMember.NotFound", "One or both members not found in this group."));
+
+        var existingPending = group.Settlements.FirstOrDefault(s =>
+            s.FromMemberId == dto.FromMemberId &&
+            s.ToMemberId == dto.ToMemberId &&
+            (s.Status == SettlementStatus.Pending || s.Status == SettlementStatus.AwaitingConfirmation));
+
+        if (existingPending != null)
+        {
+            existingPending.Amount = dto.Amount;
+            existingPending.Method = dto.Method;
+            existingPending.UpiIdUsed = dto.Method == SettlementMethod.Upi ? toMember.UpiId : null;
+            _context.SplitSettlements.Update(existingPending);
+            await _context.SaveChangesAsync();
+
+            var sExistingDto = new SettlementDto
+            {
+                Id = existingPending.Id,
+                FromMemberName = fromMember.Name,
+                ToMemberName = toMember.Name,
+                Amount = existingPending.Amount,
+                Method = existingPending.Method,
+                Status = existingPending.Status,
+                PaymentReference = existingPending.PaymentReference,
+                CompletedAt = existingPending.CompletedAt
+            };
+
+            var updatedBalances = ComputeBalancesDto(group);
+            await _notifier.NotifySettlementRecordedAsync(dto.GroupId, $"💸 Payment of ₹{dto.Amount:N2} updated ({fromMember.Name} → {toMember.Name}).", sExistingDto, updatedBalances);
+
+            return Result.Success(sExistingDto);
+        }
 
         // The group creator can record a settlement on behalf of any
         // member (the intended V1 model — the creator operates the app
@@ -289,7 +360,7 @@ public class SplitService : ISplitService
         _context.SplitSettlements.Add(settlement);
         await _context.SaveChangesAsync();
 
-        return Result.Success(new SettlementDto
+        var sDto = new SettlementDto
         {
             Id = settlement.Id,
             FromMemberName = fromMember.Name,
@@ -299,7 +370,12 @@ public class SplitService : ISplitService
             Status = settlement.Status,
             PaymentReference = settlement.PaymentReference,
             CompletedAt = settlement.CompletedAt
-        });
+        };
+
+        var balances = ComputeBalancesDto(group);
+        await _notifier.NotifySettlementRecordedAsync(dto.GroupId, $"💸 Payment of ₹{dto.Amount:N2} recorded ({fromMember.Name} → {toMember.Name}).", sDto, balances);
+
+        return Result.Success(sDto);
     }
 
     public async Task<Result<bool>> MarkPaymentSentAsync(string userId, int settlementId)
@@ -325,6 +401,9 @@ public class SplitService : ISplitService
         settlement.Status = SettlementStatus.AwaitingConfirmation;
         _context.SplitSettlements.Update(settlement);
         await _context.SaveChangesAsync();
+
+        var fromMemberName = settlement.SplitGroup.Members.FirstOrDefault(m => m.Id == settlement.FromMemberId)?.Name ?? "Payer";
+        await NotifyGroupUpdatedAsync(settlement.SplitGroupId, $"📲 {fromMemberName} marked payment of ₹{settlement.Amount:N2} as sent.");
 
         return Result.Success(true);
     }
@@ -353,6 +432,9 @@ public class SplitService : ISplitService
         settlement.CompletedAt = DateTime.UtcNow;
         _context.SplitSettlements.Update(settlement);
         await _context.SaveChangesAsync();
+
+        var toMemberName = settlement.SplitGroup.Members.FirstOrDefault(m => m.Id == settlement.ToMemberId)?.Name ?? "Recipient";
+        await NotifyGroupUpdatedAsync(settlement.SplitGroupId, $"✅ {toMemberName} confirmed receipt of ₹{settlement.Amount:N2}.");
 
         await CheckAndAutoSettleAsync(settlement.SplitGroupId);
 
@@ -531,6 +613,8 @@ public class SplitService : ISplitService
         _context.SplitGroupInvites.Update(invite);
         await _context.SaveChangesAsync();
 
+        await NotifyGroupUpdatedAsync(invite.SplitGroupId, $"🎉 {dto.DisplayName} joined the group!");
+
         return Result.Success(new JoinGroupResultDto
         {
             GroupId = invite.SplitGroupId,
@@ -628,7 +712,19 @@ public class SplitService : ISplitService
 
         await _context.SaveChangesAsync();
 
-        return await GetExpenseDtoAsync(expense.Id);
+        var dtoRes = await GetExpenseDtoAsync(expense.Id);
+        var updatedGroup = await _context.SplitGroups
+            .AsNoTracking()
+            .Include(g => g.Members)
+            .Include(g => g.Expenses).ThenInclude(e => e.Payers)
+            .Include(g => g.Expenses).ThenInclude(e => e.Participants)
+            .Include(g => g.Settlements)
+            .FirstOrDefaultAsync(g => g.Id == expense.SplitGroupId);
+
+        var balances = updatedGroup != null ? ComputeBalancesDto(updatedGroup) : new GroupBalancesDto();
+        await _notifier.NotifyExpenseUpdatedAsync(expense.SplitGroupId, $"Expense '{dto.Description}' (₹{dto.Amount:N2}) updated.", dtoRes.Value, balances);
+
+        return dtoRes;
     }
 
     public async Task<Result<DeleteExpenseResultDto>> DeleteExpenseAsync(string userId, int expenseId)
@@ -650,11 +746,30 @@ public class SplitService : ISplitService
             return Result.Failure<DeleteExpenseResultDto>(new Error(
                 "SplitExpense.GroupClosed", "This group is locked, settled, or archived — expenses can't be deleted."));
 
+        int groupId = expense.SplitGroupId;
+        string desc = expense.Description;
+        decimal amt = expense.Amount;
         bool wasAlreadyImported = expense.Participants.Any(p => p.ImportedTransactionId != null);
 
         expense.IsDeleted = true;
         expense.DeletedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
+
+        var updatedGroup = await _context.SplitGroups
+            .AsNoTracking()
+            .Include(g => g.Members)
+            .Include(g => g.Expenses).ThenInclude(e => e.Payers)
+            .Include(g => g.Expenses).ThenInclude(e => e.Participants)
+            .Include(g => g.Settlements)
+            .FirstOrDefaultAsync(g => g.Id == groupId);
+
+        var balances = updatedGroup != null ? ComputeBalancesDto(updatedGroup) : new GroupBalancesDto();
+
+        await _notifier.NotifyExpenseDeletedAsync(
+            groupId,
+            $"Expense '{desc}' (₹{amt:N2}) deleted.",
+            expenseId,
+            balances);
 
         return Result.Success(new DeleteExpenseResultDto { WasAlreadyImported = wasAlreadyImported });
     }
@@ -674,6 +789,8 @@ public class SplitService : ISplitService
         group.Status = SplitGroupStatus.Locked;
         _context.SplitGroups.Update(group);
         await _context.SaveChangesAsync();
+
+        await _notifier.NotifyGroupStatusChangedAsync(groupId, $"🔒 Group has been locked.", SplitGroupStatus.Locked);
 
         return Result.Success(true);
     }
@@ -697,6 +814,8 @@ public class SplitService : ISplitService
             group.Status = SplitGroupStatus.Settled;
             _context.SplitGroups.Update(group);
             await _context.SaveChangesAsync();
+
+            await _notifier.NotifyGroupStatusChangedAsync(groupId, $"🎉 All debts settled! Group is now fully settled.", SplitGroupStatus.Settled);
         }
     }
 
@@ -847,6 +966,8 @@ public class SplitService : ISplitService
             {
                 MemberId = b.MemberId,
                 MemberName = b.MemberName,
+                TotalPaid = b.TotalPaid,
+                TotalShare = b.TotalShare,
                 NetBalance = b.NetBalance
             }).ToList(),
             SimplifiedPlan = simplified.Select(s => new SimplifiedDebtDto
@@ -894,5 +1015,10 @@ public class SplitService : ISplitService
     private static string GeneratePaymentReference()
     {
         return $"FP-SET-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString("N")[..8].ToUpperInvariant()}";
+    }
+
+    private Task NotifyGroupUpdatedAsync(int groupId, string activityMessage)
+    {
+        return _notifier.NotifyGroupUpdatedAsync(groupId, activityMessage);
     }
 }

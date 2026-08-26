@@ -47,6 +47,10 @@ public class SplitController : BaseController
     public async Task<IActionResult> GetBalances(int groupId)
         => HandleResult(await _service.GetBalancesAsync(UserId, groupId));
 
+    [HttpGet("groups/{groupId}/full")]
+    public async Task<IActionResult> GetGroupFullDetails(int groupId)
+        => HandleResult(await _service.GetGroupFullDetailsAsync(UserId, groupId));
+
     [HttpPost("settlements")]
     public async Task<IActionResult> CreateSettlement([FromBody] CreateSettlementDto dto)
         => HandleResult(await _service.CreateSettlementAsync(UserId, dto));

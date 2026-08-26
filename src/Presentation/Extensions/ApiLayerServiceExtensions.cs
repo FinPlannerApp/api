@@ -14,6 +14,9 @@ public static class ApiLayerServiceExtensions
 {
     public static IServiceCollection AddApiLayerServices(this IServiceCollection services)
     {
+        services.AddSignalR();
+        services.AddScoped<Application.Contracts.ISplitNotifier, API.Services.SplitNotifier>();
+
         services.AddRateLimiter(options =>
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -85,7 +88,7 @@ public static class ApiLayerServiceExtensions
             options.HeaderName = "X-XSRF-TOKEN";
             options.Cookie.Name = "XSRF-TOKEN";
             options.Cookie.HttpOnly = false; // Must be false so Angular can read it
-            options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+            options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
             options.Cookie.SameSite = SameSiteMode.Strict;
         });
 

@@ -78,7 +78,7 @@ app.MapGet("/api/antiforgery/token", (HttpContext context) =>
     context.Response.Cookies.Append("XSRF-TOKEN", tokens.RequestToken!, new CookieOptions 
     { 
         HttpOnly = false, // Angular needs to read this
-        Secure = true,
+        Secure = context.Request.IsHttps,
         SameSite = SameSiteMode.Strict
     });
     return Results.Ok(new { token = tokens.RequestToken });
@@ -179,5 +179,6 @@ app.UseMiddleware<SessionValidationMiddleware>();
 app.UseMiddleware<UpdateLastSeenMiddleware>();
 
 app.MapControllers();
+app.MapHub<API.Hubs.SplitHub>("/hubs/split");
 
 app.Run();

@@ -8,6 +8,7 @@ public interface ISplitService
     Task<Result<GroupDto>> CreateGroupAsync(string userId, CreateGroupDto dto);
     Task<Result<List<GroupDto>>> GetMyGroupsAsync(string userId);
     Task<Result<GroupDto>> GetGroupAsync(string userId, int groupId);
+    Task<Result<GroupFullDetailsDto>> GetGroupFullDetailsAsync(string userId, int groupId);
     Task<Result<MemberDto>> AddMemberAsync(string userId, AddMemberDto dto);
     Task<Result<bool>> UpdateMemberUpiAsync(string userId, UpdateMemberUpiDto dto);
     Task<Result<ExpenseDto>> AddExpenseAsync(string userId, CreateExpenseDto dto);
