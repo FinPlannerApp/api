@@ -74,7 +74,7 @@ public class BlogService
 
     public async Task<Result<BlogPostDto>> GetBySlugAsync(string slug)
     {
-        var post = await _context.BlogPosts.FirstOrDefaultAsync(p => p.Slug == slug && p.IsPublished);
+        var post = await _context.BlogPosts.FirstOrDefaultAsync(p => p.Slug == slug && !p.IsDeleted);
         if (post == null)
             return Result.Failure<BlogPostDto>(new Error("BlogPost.NotFound", "Post not found."));
 
