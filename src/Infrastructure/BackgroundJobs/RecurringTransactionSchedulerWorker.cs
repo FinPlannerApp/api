@@ -17,10 +17,19 @@ public class RecurringTransactionSchedulerWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await Task.Delay(15000, stoppingToken); // let the app finish starting up first
-
+        // Runs once daily at 1:00 AM UTC (~6:30 AM IST) — recurring
+        // transactions only ever need daily granularity at most (no
+        // Frequency option is more frequent than Daily), and this
+        // records something that already happened financially, not
+        // something time-sensitive being triggered live.
         while (!stoppingToken.IsCancellationRequested)
         {
+            var now = DateTime.UtcNow;
+            var nextRun = now.Date.AddDays(now.Hour >= 1 ? 1 : 0).AddHours(1);
+            var delay = nextRun - now;
+
+            await Task.Delay(delay, stoppingToken);
+
             try
             {
                 using var scope = _scopeFactory.CreateScope();
@@ -31,8 +40,6 @@ public class RecurringTransactionSchedulerWorker : BackgroundService
             {
                 _logger.LogError(ex, "Recurring transaction processing failed.");
             }
-
-            await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
         }
     }
 }

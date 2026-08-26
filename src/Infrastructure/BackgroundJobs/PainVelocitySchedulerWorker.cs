@@ -17,10 +17,20 @@ public class PainVelocitySchedulerWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await Task.Delay(20000, stoppingToken); // stagger slightly from the other worker's startup delay
-
+        // Runs once daily at 3:00 AM UTC — a derived display/sorting
+        // metric, not time-sensitive in any real sense; daily
+        // recalculation is genuinely sufficient. Deliberately a
+        // different hour than the recurring-transaction worker (1 AM)
+        // and the token cleanup worker (2 AM), so all three don't fire
+        // in the same window.
         while (!stoppingToken.IsCancellationRequested)
         {
+            var now = DateTime.UtcNow;
+            var nextRun = now.Date.AddDays(now.Hour >= 3 ? 1 : 0).AddHours(3);
+            var delay = nextRun - now;
+
+            await Task.Delay(delay, stoppingToken);
+
             try
             {
                 using var scope = _scopeFactory.CreateScope();
@@ -31,8 +41,6 @@ public class PainVelocitySchedulerWorker : BackgroundService
             {
                 _logger.LogError(ex, "Pain velocity update failed.");
             }
-
-            await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
         }
     }
 }

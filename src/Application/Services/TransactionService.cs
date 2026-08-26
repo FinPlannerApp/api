@@ -210,6 +210,16 @@ public class TransactionService : ITransactionService
 
     public async Task<Result<TransactionDto>> UpsertTransactionAsync(string userId, int accountId, UpsertTransactionDto dto)
     {
+        // A negative amount here would silently invert the transaction's
+        // real effect — an "Expense" with a negative amount increases
+        // the balance instead of decreasing it, effectively becoming
+        // income while still labeled and categorized as an expense.
+        // Rejected here, once, protects every path that creates or
+        // edits a transaction through this shared method.
+        if (dto.Amount <= 0)
+            return Result.Failure<TransactionDto>(new Error(
+                "Transaction.InvalidAmount", "Amount must be greater than zero."));
+
         if (!string.IsNullOrWhiteSpace(dto.Description))
             dto.Description = ToTitleCase(dto.Description);
 
