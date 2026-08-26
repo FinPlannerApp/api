@@ -75,6 +75,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<SplitGroupInvite> SplitGroupInvites => Set<SplitGroupInvite>();
     public DbSet<BlogPost> BlogPosts => Set<BlogPost>();
     public DbSet<BlogImage> BlogImages => Set<BlogImage>();
+    public DbSet<BlogPostComment> BlogPostComments => Set<BlogPostComment>();
 
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IHttpContextAccessor httpContextAccessor) : base(options)
     {

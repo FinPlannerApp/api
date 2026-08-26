@@ -58,6 +58,7 @@ public interface IApplicationDbContext
     DbSet<SplitGroupInvite> SplitGroupInvites { get; }
     DbSet<BlogPost> BlogPosts { get; }
     DbSet<BlogImage> BlogImages { get; }
+    DbSet<BlogPostComment> BlogPostComments { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

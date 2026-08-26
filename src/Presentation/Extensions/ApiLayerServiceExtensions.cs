@@ -76,6 +76,7 @@ public static class ApiLayerServiceExtensions
         }).AddJsonOptions(options =>
         {
             options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
+            options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
         });
 
         // Anti-Forgery (CSRF Protection)

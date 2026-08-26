@@ -20,6 +20,42 @@ public class BlogService
 
     // ── Public reads — no auth required, only ever returns published posts ────
 
+    public async Task<PagedResult<BlogPostSummaryDto>> GetPublishedPagedAsync(int pageNumber = 1, int pageSize = 6, string? search = null, string? tag = null)
+    {
+        var query = _context.BlogPosts
+            .AsNoTracking()
+            .Where(p => p.IsPublished && !p.IsDeleted);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim().ToLower();
+            query = query.Where(p => p.Title.ToLower().Contains(term) || p.Excerpt.ToLower().Contains(term));
+        }
+
+        if (!string.IsNullOrWhiteSpace(tag) && !tag.Equals("All", StringComparison.OrdinalIgnoreCase))
+        {
+            var tagTerm = tag.Trim().ToLower();
+            query = query.Where(p => p.Title.ToLower().Contains(tagTerm) || p.Slug.ToLower().Contains(tagTerm));
+        }
+
+        var totalCount = await query.CountAsync();
+        var items = await query
+            .OrderByDescending(p => p.PublishedAt ?? p.CreatedAt)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .Select(p => new BlogPostSummaryDto
+            {
+                Id = p.Id,
+                Title = p.Title,
+                Slug = p.Slug,
+                Excerpt = p.Excerpt,
+                PublishedAt = p.PublishedAt
+            })
+            .ToListAsync();
+
+        return new PagedResult<BlogPostSummaryDto>(items, totalCount, pageNumber, pageSize);
+    }
+
     public async Task<List<BlogPostSummaryDto>> GetPublishedAsync()
     {
         return await _context.BlogPosts
@@ -51,6 +87,72 @@ public class BlogService
             PublishedAt = post.PublishedAt,
             ContentMarkdown = post.ContentMarkdown,
             IsPublished = post.IsPublished
+        });
+    }
+
+    public async Task<List<BlogCommentDto>> GetCommentsAsync(string slug)
+    {
+        var post = await _context.BlogPosts.FirstOrDefaultAsync(p => p.Slug == slug);
+        if (post == null) return new List<BlogCommentDto>();
+
+        var allComments = await _context.BlogPostComments
+            .Where(c => c.BlogPostId == post.Id)
+            .OrderByDescending(c => c.CreatedAt)
+            .Select(c => new BlogCommentDto
+            {
+                Id = c.Id,
+                Author = c.UserName,
+                Content = c.Content,
+                CreatedAt = c.CreatedAt.ToString("g"),
+                Likes = c.LikesCount,
+                ParentCommentId = c.ParentCommentId
+            })
+            .ToListAsync();
+
+        var commentMap = allComments.ToDictionary(c => c.Id);
+        var rootComments = new List<BlogCommentDto>();
+
+        foreach (var c in allComments)
+        {
+            if (c.ParentCommentId.HasValue && commentMap.TryGetValue(c.ParentCommentId.Value, out var parent))
+            {
+                parent.Replies.Add(c);
+            }
+            else
+            {
+                rootComments.Add(c);
+            }
+        }
+
+        return rootComments;
+    }
+
+    public async Task<Result<BlogCommentDto>> CreateCommentAsync(string userId, string userName, CreateBlogCommentDto dto)
+    {
+        var post = await _context.BlogPosts.FirstOrDefaultAsync(p => p.Slug == dto.PostSlug);
+        if (post == null) return Result.Failure<BlogCommentDto>(new Error("BlogPost.NotFound", "Post not found."));
+
+        var comment = new BlogPostComment
+        {
+            BlogPostId = post.Id,
+            UserId = userId,
+            UserName = userName,
+            Content = dto.Content.Trim(),
+            ParentCommentId = dto.ParentCommentId,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        _context.BlogPostComments.Add(comment);
+        await _context.SaveChangesAsync();
+
+        return Result.Success(new BlogCommentDto
+        {
+            Id = comment.Id,
+            Author = comment.UserName,
+            Content = comment.Content,
+            CreatedAt = "Just now",
+            Likes = 0,
+            ParentCommentId = comment.ParentCommentId
         });
     }
 

@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Application.DTOs.Blog;
 using Application.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -20,13 +21,38 @@ public class BlogController : BaseController
 
     [HttpGet("published")]
     [AllowAnonymous]
+    [ResponseCache(Duration = 300, Location = ResponseCacheLocation.Any)]
     public async Task<IActionResult> GetPublished()
         => Ok(await _blogService.GetPublishedAsync());
 
+    [HttpGet("published/paged")]
+    [AllowAnonymous]
+    [ResponseCache(Duration = 180, Location = ResponseCacheLocation.Any, VaryByQueryKeys = new[] { "pageNumber", "pageSize", "search", "tag" })]
+    public async Task<IActionResult> GetPublishedPaged(
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 6,
+        [FromQuery] string? search = null,
+        [FromQuery] string? tag = null)
+        => Ok(await _blogService.GetPublishedPagedAsync(pageNumber, pageSize, search, tag));
+
+    [HttpGet("published/{slug}/comments")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetComments(string slug)
+        => Ok(await _blogService.GetCommentsAsync(slug));
+
     [HttpGet("published/{slug}")]
     [AllowAnonymous]
+    [ResponseCache(Duration = 300, Location = ResponseCacheLocation.Any)]
     public async Task<IActionResult> GetBySlug(string slug)
         => HandleResult(await _blogService.GetBySlugAsync(slug));
+
+    [HttpPost("comments")]
+    [Authorize]
+    public async Task<IActionResult> CreateComment([FromBody] CreateBlogCommentDto dto)
+    {
+        var userName = User.Identity?.Name ?? User.FindFirstValue(System.Security.Claims.ClaimTypes.Email) ?? "Member User";
+        return HandleResult(await _blogService.CreateCommentAsync(UserId, userName, dto));
+    }
 
     [HttpGet("images/{id}")]
     [AllowAnonymous]
