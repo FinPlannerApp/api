@@ -266,7 +266,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<CreditCardBill>(e =>
         {
             e.ToTable("CreditCardBills", "accounts");
-            e.HasIndex(b => new { b.AccountId, b.StatementDate });
+            e.HasIndex(b => new { b.AccountId, b.StatementDate }).IsUnique();
             e.HasOne(b => b.Account)
                 .WithMany()
                 .HasForeignKey(b => b.AccountId)
@@ -353,6 +353,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<MerchantAlias>().HasQueryFilter(ma => !ma.IsDeleted);
         builder.Entity<Goal>().HasQueryFilter(g => !g.IsDeleted);
         builder.Entity<CreditCardBill>().HasQueryFilter(b => !b.IsDeleted);
+        builder.Entity<CreditCardPayment>().HasQueryFilter(p => !p.IsDeleted);
         builder.Entity<SplitGroup>().HasQueryFilter(g => !g.IsDeleted);
         builder.Entity<SplitGroupMember>().HasQueryFilter(m => !m.IsDeleted);
         builder.Entity<SplitExpense>().HasQueryFilter(x => !x.IsDeleted);

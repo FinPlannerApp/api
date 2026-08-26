@@ -713,6 +713,24 @@ public class AccountService : IAccountService
                 return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
                     "CreditCardPayment.InsufficientFunds",
                     $"{payingAccount.Name} has insufficient balance for a ₹{payment.Amount:F2} payment."));
+
+            if (payment.CashbackAmount.HasValue && payment.CashbackAmount.Value > 0)
+            {
+                if (payment.CashbackAmount.Value > payment.Amount)
+                    return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                        "CreditCardPayment.CashbackExceedsPayment",
+                        "Cashback can't be more than the payment amount itself."));
+
+                if (payment.CashbackType == CashbackType.Direct && !payment.CashbackAccountId.HasValue)
+                    return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                        "CreditCardPayment.MissingCashbackAccount",
+                        "Direct cashback needs an account to credit it to."));
+
+                if (payment.CashbackAccountId.HasValue && payment.CashbackAccountId.Value == dto.CreditCardAccountId)
+                    return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                        "CreditCardPayment.CashbackToSameCard",
+                        "Cashback can't be credited back to the same card being paid."));
+            }
         }
 
         var latestUnpaidBill = await _context.CreditCardBills
@@ -771,6 +789,13 @@ public class AccountService : IAccountService
                 };
                 _context.Transactions.Add(interestTx);
                 payingAccount.Balance -= interestPortion;
+
+                // The interest was already part of what the CC account
+                // owed (derived from the real statement, which already
+                // includes it) — paying it off has to credit it back
+                // here too, or the CC balance can never actually reach
+                // zero even when the full bill is paid.
+                ccAccount.Balance += interestPortion;
             }
 
             if (principalPortion > 0)

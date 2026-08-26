@@ -66,6 +66,15 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
         entity.EndDate = request.Dto.EndDate;
         entity.IsActive = request.Dto.IsActive;
         entity.IsObligation = request.Dto.IsObligation;
+        if (request.Dto.LinkedLoanAccountId.HasValue)
+        {
+            var loanBelongsToUser = await _context.Accounts
+                .AnyAsync(a => a.Id == request.Dto.LinkedLoanAccountId.Value && a.UserId == request.UserId, cancellationToken);
+            if (!loanBelongsToUser)
+                return Result.Failure<RecurringTransactionDto>(new Error(
+                    "RecurringTransaction.InvalidLoanAccount", "That loan account doesn't belong to you."));
+        }
+
         entity.LinkedLoanAccountId = request.Dto.LinkedLoanAccountId;
 
         // If it's a new entity or the start date/frequency changed, recalculate NextProcessDate

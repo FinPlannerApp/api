@@ -66,6 +66,12 @@ namespace Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<uint>("xmin")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.HasIndex("AccountCategoryId");
@@ -366,6 +372,98 @@ namespace Infrastructure.Persistence.Migrations
                     b.ToTable("BankAccountDetails", "accounts");
                 });
 
+            modelBuilder.Entity("Domain.Entities.BlogImage", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<byte[]>("Data")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<long>("FileSize")
+                        .HasColumnType("bigint");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("BlogImages", "accounts");
+                });
+
+            modelBuilder.Entity("Domain.Entities.BlogPost", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("ContentMarkdown")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Excerpt")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsPublished")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("PublishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Slug")
+                        .IsUnique();
+
+                    b.ToTable("BlogPosts", "accounts");
+                });
+
             modelBuilder.Entity("Domain.Entities.Budget", b =>
                 {
                     b.Property<int>("Id")
@@ -500,6 +598,56 @@ namespace Infrastructure.Persistence.Migrations
                     b.ToTable("CommentVotes", (string)null);
                 });
 
+            modelBuilder.Entity("Domain.Entities.CreditCardBill", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("AccountId")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("BillAmount")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DueDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsPaid")
+                        .HasColumnType("boolean");
+
+                    b.Property<decimal?>("MinimumDue")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime>("StatementDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId", "StatementDate")
+                        .IsUnique();
+
+                    b.ToTable("CreditCardBills", "accounts");
+                });
+
             modelBuilder.Entity("Domain.Entities.CreditCardDetails", b =>
                 {
                     b.Property<int>("Id")
@@ -547,6 +695,81 @@ namespace Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("CreditCardDetails", "accounts");
+                });
+
+            modelBuilder.Entity("Domain.Entities.CreditCardPayment", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric");
+
+                    b.Property<int?>("CashbackAccountId")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal?>("CashbackAmount")
+                        .HasColumnType("numeric");
+
+                    b.Property<int?>("CashbackTransactionId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("CashbackType")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("CreditCardAccountId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("Date")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal>("InterestPortion")
+                        .HasColumnType("numeric");
+
+                    b.Property<int?>("InterestTransactionId")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("PayingAccountId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("PaymentAppName")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("PrincipalExpenseTransactionId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("PrincipalIncomeTransactionId")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("PrincipalPortion")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreditCardAccountId");
+
+                    b.HasIndex("PayingAccountId");
+
+                    b.ToTable("CreditCardPayments", "accounts");
                 });
 
             modelBuilder.Entity("Domain.Entities.DecisionJournalEntry", b =>
@@ -1291,6 +1514,9 @@ namespace Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("DeletedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("DesignatedPayingAccountId")
+                        .HasColumnType("integer");
+
                     b.Property<decimal?>("EmiAmount")
                         .HasColumnType("numeric");
 
@@ -1438,6 +1664,9 @@ namespace Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("LastProcessedDate")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("LinkedLoanAccountId")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("NextProcessDate")
                         .HasColumnType("timestamp with time zone");
 
@@ -1460,6 +1689,8 @@ namespace Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("AccountId");
+
+                    b.HasIndex("LinkedLoanAccountId");
 
                     b.HasIndex("TransactionCategoryId");
 
@@ -1513,6 +1744,334 @@ namespace Infrastructure.Persistence.Migrations
                     b.HasIndex("AccountId");
 
                     b.ToTable("SavingsBuckets", "accounts");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitExpense", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric");
+
+                    b.Property<string>("Category")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("Date")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("SplitGroupId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SplitType")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SplitGroupId");
+
+                    b.ToTable("SplitExpenses", "split");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitExpenseParticipant", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("ImportedTransactionId")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<decimal>("ShareAmount")
+                        .HasColumnType("numeric");
+
+                    b.Property<int>("SplitExpenseId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SplitGroupMemberId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SplitExpenseId");
+
+                    b.HasIndex("SplitGroupMemberId");
+
+                    b.ToTable("SplitExpenseParticipants", "split");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitExpensePayer", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<decimal>("AmountPaid")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("SplitExpenseId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SplitGroupMemberId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SplitExpenseId");
+
+                    b.HasIndex("SplitGroupMemberId");
+
+                    b.ToTable("SplitExpensePayers", "split");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitGroup", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedByUserId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ShareToken")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedByUserId");
+
+                    b.HasIndex("ShareToken")
+                        .IsUnique();
+
+                    b.ToTable("SplitGroups", "split");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitGroupInvite", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedByUserId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<int?>("MaxUses")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("SplitGroupId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("UsedCount")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SplitGroupId");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.ToTable("SplitGroupInvites", "split");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitGroupMember", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("LinkedUserId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("SplitGroupId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UpiId")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LinkedUserId");
+
+                    b.HasIndex("SplitGroupId");
+
+                    b.ToTable("SplitGroupMembers", "split");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitSettlement", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("FromMemberId")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Method")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("PaymentReference")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("SplitGroupId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("ToMemberId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("UpiIdUsed")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FromMemberId");
+
+                    b.HasIndex("SplitGroupId");
+
+                    b.HasIndex("ToMemberId");
+
+                    b.ToTable("SplitSettlements", "split");
                 });
 
             modelBuilder.Entity("Domain.Entities.Subscription", b =>
@@ -1594,8 +2153,17 @@ namespace Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<bool>("IsBalanceAdjustment")
+                        .HasColumnType("boolean");
+
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
+
+                    b.Property<bool>("IsOpeningBalance")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("integer");
 
                     b.Property<int?>("MerchantId")
                         .HasColumnType("integer");
@@ -1656,6 +2224,9 @@ namespace Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<int?>("ParentCategoryId")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1664,6 +2235,8 @@ namespace Infrastructure.Persistence.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ParentCategoryId");
 
                     b.HasIndex("UserId", "Name")
                         .IsUnique();
@@ -2110,6 +2683,17 @@ namespace Infrastructure.Persistence.Migrations
                     b.Navigation("Comment");
                 });
 
+            modelBuilder.Entity("Domain.Entities.CreditCardBill", b =>
+                {
+                    b.HasOne("Domain.Entities.Account", "Account")
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Account");
+                });
+
             modelBuilder.Entity("Domain.Entities.CreditCardDetails", b =>
                 {
                     b.HasOne("Domain.Entities.Account", "Account")
@@ -2119,6 +2703,21 @@ namespace Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("Account");
+                });
+
+            modelBuilder.Entity("Domain.Entities.CreditCardPayment", b =>
+                {
+                    b.HasOne("Domain.Entities.Account", null)
+                        .WithMany()
+                        .HasForeignKey("CreditCardAccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Domain.Entities.Account", null)
+                        .WithMany()
+                        .HasForeignKey("PayingAccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Domain.Entities.Goal", b =>
@@ -2306,12 +2905,19 @@ namespace Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("Domain.Entities.Account", "LinkedLoanAccount")
+                        .WithMany()
+                        .HasForeignKey("LinkedLoanAccountId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("Domain.Entities.TransactionCategory", "TransactionCategory")
                         .WithMany()
                         .HasForeignKey("TransactionCategoryId")
                         .OnDelete(DeleteBehavior.SetNull);
 
                     b.Navigation("Account");
+
+                    b.Navigation("LinkedLoanAccount");
 
                     b.Navigation("TransactionCategory");
                 });
@@ -2325,6 +2931,104 @@ namespace Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("Account");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitExpense", b =>
+                {
+                    b.HasOne("Domain.Entities.Split.SplitGroup", "SplitGroup")
+                        .WithMany("Expenses")
+                        .HasForeignKey("SplitGroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("SplitGroup");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitExpenseParticipant", b =>
+                {
+                    b.HasOne("Domain.Entities.Split.SplitExpense", "SplitExpense")
+                        .WithMany("Participants")
+                        .HasForeignKey("SplitExpenseId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Domain.Entities.Split.SplitGroupMember", "SplitGroupMember")
+                        .WithMany("OwedExpenses")
+                        .HasForeignKey("SplitGroupMemberId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("SplitExpense");
+
+                    b.Navigation("SplitGroupMember");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitExpensePayer", b =>
+                {
+                    b.HasOne("Domain.Entities.Split.SplitExpense", "SplitExpense")
+                        .WithMany("Payers")
+                        .HasForeignKey("SplitExpenseId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Domain.Entities.Split.SplitGroupMember", "SplitGroupMember")
+                        .WithMany("PaidExpenses")
+                        .HasForeignKey("SplitGroupMemberId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("SplitExpense");
+
+                    b.Navigation("SplitGroupMember");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitGroupInvite", b =>
+                {
+                    b.HasOne("Domain.Entities.Split.SplitGroup", "SplitGroup")
+                        .WithMany()
+                        .HasForeignKey("SplitGroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("SplitGroup");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitGroupMember", b =>
+                {
+                    b.HasOne("Domain.Entities.Split.SplitGroup", "SplitGroup")
+                        .WithMany("Members")
+                        .HasForeignKey("SplitGroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("SplitGroup");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitSettlement", b =>
+                {
+                    b.HasOne("Domain.Entities.Split.SplitGroupMember", "FromMember")
+                        .WithMany()
+                        .HasForeignKey("FromMemberId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Domain.Entities.Split.SplitGroup", "SplitGroup")
+                        .WithMany("Settlements")
+                        .HasForeignKey("SplitGroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Domain.Entities.Split.SplitGroupMember", "ToMember")
+                        .WithMany()
+                        .HasForeignKey("ToMemberId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("FromMember");
+
+                    b.Navigation("SplitGroup");
+
+                    b.Navigation("ToMember");
                 });
 
             modelBuilder.Entity("Domain.Entities.Subscription", b =>
@@ -2365,6 +3069,16 @@ namespace Infrastructure.Persistence.Migrations
                     b.Navigation("Merchant");
 
                     b.Navigation("TransactionCategory");
+                });
+
+            modelBuilder.Entity("Domain.Entities.TransactionCategory", b =>
+                {
+                    b.HasOne("Domain.Entities.TransactionCategory", "ParentCategory")
+                        .WithMany("SubCategories")
+                        .HasForeignKey("ParentCategoryId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ParentCategory");
                 });
 
             modelBuilder.Entity("Domain.Entities.UserBadge", b =>
@@ -2500,6 +3214,34 @@ namespace Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Domain.Entities.RecurringTransaction", b =>
                 {
                     b.Navigation("Subscription");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitExpense", b =>
+                {
+                    b.Navigation("Participants");
+
+                    b.Navigation("Payers");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitGroup", b =>
+                {
+                    b.Navigation("Expenses");
+
+                    b.Navigation("Members");
+
+                    b.Navigation("Settlements");
+                });
+
+            modelBuilder.Entity("Domain.Entities.Split.SplitGroupMember", b =>
+                {
+                    b.Navigation("OwedExpenses");
+
+                    b.Navigation("PaidExpenses");
+                });
+
+            modelBuilder.Entity("Domain.Entities.TransactionCategory", b =>
+                {
+                    b.Navigation("SubCategories");
                 });
 #pragma warning restore 612, 618
         }

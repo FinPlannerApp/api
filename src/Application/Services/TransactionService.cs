@@ -229,6 +229,24 @@ public class TransactionService : ITransactionService
         if (account == null || account.UserId != userId)
             return Result.Failure<TransactionDto>(new Error("Account.NotFound", "Account not found."));
 
+        if (dto.TransactionCategoryId.HasValue)
+        {
+            var categoryBelongsToUser = await _context.TransactionCategories
+                .AnyAsync(c => c.Id == dto.TransactionCategoryId.Value && c.UserId == userId);
+            if (!categoryBelongsToUser)
+                return Result.Failure<TransactionDto>(new Error(
+                    "Transaction.InvalidCategory", "That category doesn't belong to you."));
+        }
+
+        if (dto.MerchantId.HasValue)
+        {
+            var merchantBelongsToUser = await _context.Merchants
+                .AnyAsync(m => m.Id == dto.MerchantId.Value && m.UserId == userId);
+            if (!merchantBelongsToUser)
+                return Result.Failure<TransactionDto>(new Error(
+                    "Transaction.InvalidMerchant", "That merchant doesn't belong to you."));
+        }
+
         Transaction? transaction = null;
         decimal oldAmount = 0;
         TransactionType oldType = TransactionType.Expense;
