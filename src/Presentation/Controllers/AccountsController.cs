@@ -110,8 +110,11 @@ public class AccountsController : BaseController
     }
 
     [HttpGet("cashback-insights")]
-    public async Task<IActionResult> GetCashbackInsights()
-        => HandleResult(await _accountService.GetCashbackInsightsAsync(UserId));
+    public async Task<IActionResult> GetCashbackInsights(
+        [FromQuery] int? accountId,
+        [FromQuery] int? month,
+        [FromQuery] int? year)
+        => HandleResult(await _accountService.GetCashbackInsightsAsync(UserId, accountId, month, year));
 
     [HttpGet("{creditCardAccountId}/payment-suggestions")]
     public async Task<IActionResult> GetPaymentSuggestions(int creditCardAccountId, [FromQuery] decimal amount)

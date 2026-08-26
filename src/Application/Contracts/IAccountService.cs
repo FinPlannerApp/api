@@ -17,7 +17,7 @@ public interface IAccountService
     Task<Result<AccountDto>> AdjustBalanceAsync(string userId, AdjustBalanceDto dto);
     Task<Result<CreditCardBillResultDto>> RecordCreditCardBillAsync(string userId, RecordCreditCardBillDto dto);
     Task<Result<CreditCardPaymentBatchResultDto>> MakeCreditCardPaymentBatchAsync(string userId, MakeCreditCardPaymentBatchDto dto);
-    Task<Result<CashbackInsightsDto>> GetCashbackInsightsAsync(string userId);
+    Task<Result<CashbackInsightsDto>> GetCashbackInsightsAsync(string userId, int? accountId = null, int? month = null, int? year = null);
     Task<Result<List<AccountPaymentSuggestionDto>>> GetPaymentSuggestionsAsync(string userId, int creditCardAccountId, decimal amount);
     Task<Result<int>> BackfillOpeningBalancesAsync(string userId);
 }

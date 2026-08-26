@@ -82,6 +82,11 @@ public class AccountService : IAccountService
             .OrderBy(a => a.Name)
             .ToListAsync();
 
+        foreach (var cc in items.Where(a => a.AccountCategory?.AccountType == AccountType.CreditCard))
+        {
+            await EnsureCreditCardPaymentTransactionsAsync(userId, cc.Id);
+        }
+
         return Result.Success(items.Select(a => MapToDto(a, null)).ToList());
     }
 
@@ -527,7 +532,28 @@ public class AccountService : IAccountService
         if (account.AccountCategory?.AccountType != AccountType.CreditCard || account.CreditCardDetails == null)
             return Result.Failure<CreditCardBreakdownDto>(new Error("CreditCard.NotACard", "This account isn't set up as a credit card."));
 
+        await EnsureCreditCardPaymentTransactionsAsync(userId, accountId);
+
         var breakdown = await CreditCardStatementCalculator.CalculateAsync(_context, account);
+
+        var latestBill = await _context.CreditCardBills
+            .Where(b => b.AccountId == accountId)
+            .OrderByDescending(b => b.StatementDate)
+            .FirstOrDefaultAsync();
+
+        decimal totalPaidForCycle = 0;
+        if (latestBill != null)
+        {
+            totalPaidForCycle = await _context.CreditCardPayments
+                .Where(p => p.CreditCardAccountId == accountId && p.Date >= latestBill.StatementDate)
+                .SumAsync(p => (decimal?)p.Amount) ?? 0;
+        }
+
+        var minDue = latestBill?.MinimumDue ?? account.CreditCardDetails.MinimumDueAmount;
+        var billAmount = latestBill?.BillAmount;
+        var remainingBillAmount = billAmount.HasValue ? Math.Max(0, billAmount.Value - totalPaidForCycle) : ((breakdown.StatementOutstanding > 0) ? Math.Max(0, breakdown.StatementOutstanding - totalPaidForCycle) : 0);
+        var isBillFullyPaid = latestBill != null && ((billAmount.HasValue && billAmount.Value > 0) ? (totalPaidForCycle >= billAmount.Value) : (latestBill.IsPaid && remainingBillAmount <= 0));
+        var isMinDuePaid = isBillFullyPaid || ((minDue.HasValue && minDue.Value > 0) ? (totalPaidForCycle >= minDue.Value) : (totalPaidForCycle > 0));
 
         return Result.Success(new CreditCardBreakdownDto
         {
@@ -535,8 +561,13 @@ public class AccountService : IAccountService
             StatementOutstanding = breakdown.StatementOutstanding,
             UnbilledOutstanding = breakdown.UnbilledOutstanding,
             MostRecentStatementDate = breakdown.MostRecentStatementDate ?? DateTime.UtcNow,
-            MinimumDueAmount = account.CreditCardDetails.MinimumDueAmount,
-            DueDate = account.CreditCardDetails.DueDate
+            MinimumDueAmount = minDue,
+            DueDate = latestBill?.DueDate ?? account.CreditCardDetails.DueDate,
+            LatestBillAmount = latestBill?.BillAmount,
+            LatestBillIsPaid = isBillFullyPaid,
+            IsMinimumDuePaid = isMinDuePaid,
+            TotalPaidForCycle = totalPaidForCycle,
+            RemainingBillAmount = remainingBillAmount
         });
     }
 
@@ -638,6 +669,19 @@ public class AccountService : IAccountService
             });
         }
 
+        if (account.CreditCardDetails != null)
+        {
+            if (dto.MinimumDue.HasValue)
+            {
+                account.CreditCardDetails.MinimumDueAmount = dto.MinimumDue.Value;
+            }
+            if (dto.DueDate.HasValue)
+            {
+                account.CreditCardDetails.DueDate = dto.DueDate.Value;
+            }
+            _context.CreditCardDetails.Update(account.CreditCardDetails);
+        }
+
         await _context.SaveChangesAsync();
         await _cache.RemoveByPrefixAsync($"dash::{userId}:");
 
@@ -671,13 +715,32 @@ public class AccountService : IAccountService
             return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
                 "CreditCardPayment.NotACard", "This account isn't set up as a credit card."));
 
-        var outstandingBalance = Math.Abs(ccAccount.Balance);
+        var computedBreakdown = await CreditCardStatementCalculator.CalculateAsync(_context, ccAccount);
+        var latestUnpaidBill = await _context.CreditCardBills
+            .Where(b => b.AccountId == dto.CreditCardAccountId && !b.IsPaid)
+            .OrderByDescending(b => b.StatementDate)
+            .FirstOrDefaultAsync();
+
+        decimal maxPayable = Math.Max(Math.Abs(ccAccount.Balance), computedBreakdown.TotalOutstanding);
+        if (latestUnpaidBill != null && latestUnpaidBill.BillAmount > maxPayable)
+        {
+            maxPayable = latestUnpaidBill.BillAmount;
+        }
+        if (maxPayable == 0 && ccAccount.CreditCardDetails?.CreditLimit.HasValue == true)
+        {
+            maxPayable = ccAccount.CreditCardDetails.CreditLimit.Value;
+        }
+        if (maxPayable == 0)
+        {
+            maxPayable = 9999999;
+        }
+
         var totalRequested = dto.Payments.Sum(p => p.Amount);
 
-        if (totalRequested > outstandingBalance)
+        if (totalRequested > maxPayable + 0.01m)
             return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
                 "CreditCardPayment.ExceedsPayoff",
-                $"These payments total ₹{totalRequested:F2}, more than the ₹{outstandingBalance:F2} actually owed on this card."));
+                $"These payments total ₹{totalRequested:F2}, which exceeds the max owed amount of ₹{maxPayable:F2} on this card."));
 
         var payingAccounts = new Dictionary<int, Account>();
         foreach (var payment in dto.Payments)
@@ -733,17 +796,15 @@ public class AccountService : IAccountService
             }
         }
 
-        var latestUnpaidBill = await _context.CreditCardBills
-            .Where(b => b.AccountId == dto.CreditCardAccountId && !b.IsPaid)
-            .OrderByDescending(b => b.StatementDate)
-            .FirstOrDefaultAsync();
-
         decimal remainingInterestToAllocate = 0;
         if (latestUnpaidBill != null)
         {
-            var computedBreakdown = await CreditCardStatementCalculator.CalculateAsync(_context, ccAccount);
             remainingInterestToAllocate = Math.Max(0, latestUnpaidBill.BillAmount - computedBreakdown.StatementOutstanding);
         }
+
+        var defaultTransferCat = await _context.TransactionCategories.FirstOrDefaultAsync(c => c.UserId == userId && c.Name == "Transfer");
+        var defaultInterestCat = await _context.TransactionCategories.FirstOrDefaultAsync(c => c.UserId == userId && (c.Name == "Interest" || c.Name == "Bank Fees" || c.Name == "Interest & Fees"));
+        var defaultCashbackCat = await _context.TransactionCategories.FirstOrDefaultAsync(c => c.UserId == userId && (c.Name == "Cashback" || c.Name == "Rewards" || c.Name == "Income" || c.Name == "Cashback & Rewards"));
 
         var linkTracking = new List<(CreditCardPayment Payment, Transaction? Interest, Transaction? ExpenseLeg, Transaction? IncomeLeg, Transaction? Cashback)>();
         var results = new List<SinglePaymentResultDto>();
@@ -785,7 +846,7 @@ public class AccountService : IAccountService
                     AccountId = payment.PayingAccountId,
                     UserId = userId,
                     Kind = TransactionKind.LoanInterest,
-                    TransactionCategoryId = payment.InterestCategoryId
+                    TransactionCategoryId = payment.InterestCategoryId ?? defaultInterestCat?.Id
                 };
                 _context.Transactions.Add(interestTx);
                 payingAccount.Balance -= interestPortion;
@@ -798,7 +859,7 @@ public class AccountService : IAccountService
                 ccAccount.Balance += interestPortion;
             }
 
-            if (principalPortion > 0)
+            if (payment.Amount > 0)
             {
                 var transferGroupId = Guid.NewGuid();
 
@@ -806,28 +867,30 @@ public class AccountService : IAccountService
                 {
                     Description = $"Credit card payment — {ccAccount.Name}" +
                         (payment.PaymentAppName != null ? $" via {payment.PaymentAppName}" : ""),
-                    Amount = principalPortion,
+                    Amount = principalPortion > 0 ? principalPortion : payment.Amount,
                     Date = payment.Date,
                     Type = TransactionType.Expense,
                     AccountId = payment.PayingAccountId,
                     UserId = userId,
                     Kind = TransactionKind.Transfer,
-                    TransferGroupId = transferGroupId
+                    TransferGroupId = transferGroupId,
+                    TransactionCategoryId = defaultTransferCat?.Id
                 };
-                payingAccount.Balance -= principalPortion;
+                if (principalPortion > 0) payingAccount.Balance -= principalPortion;
 
                 incomeLeg = new Transaction
                 {
                     Description = $"Payment from {payingAccount.Name}",
-                    Amount = principalPortion,
+                    Amount = payment.Amount,
                     Date = payment.Date,
                     Type = TransactionType.Income,
                     AccountId = dto.CreditCardAccountId,
                     UserId = userId,
                     Kind = TransactionKind.Transfer,
-                    TransferGroupId = transferGroupId
+                    TransferGroupId = transferGroupId,
+                    TransactionCategoryId = defaultTransferCat?.Id
                 };
-                ccAccount.Balance += principalPortion;
+                if (principalPortion > 0) ccAccount.Balance += principalPortion;
 
                 _context.Transactions.Add(expenseLeg);
                 _context.Transactions.Add(incomeLeg);
@@ -850,7 +913,8 @@ public class AccountService : IAccountService
                         Date = payment.Date,
                         Type = TransactionType.Income,
                         AccountId = payment.CashbackAccountId.Value,
-                        UserId = userId
+                        UserId = userId,
+                        TransactionCategoryId = defaultCashbackCat?.Id
                     };
                     _context.Transactions.Add(cashbackTx);
                     cashbackAccount.Balance += payment.CashbackAmount.Value;
@@ -879,11 +943,20 @@ public class AccountService : IAccountService
         _context.Accounts.Update(ccAccount);
 
         bool billMarkedPaid = false;
-        if (latestUnpaidBill != null && totalPaid >= latestUnpaidBill.BillAmount)
+        if (latestUnpaidBill != null)
         {
-            latestUnpaidBill.IsPaid = true;
-            _context.CreditCardBills.Update(latestUnpaidBill);
-            billMarkedPaid = true;
+            var totalPaidForThisBill = await _context.CreditCardPayments
+                .Where(p => p.CreditCardAccountId == dto.CreditCardAccountId && p.Date >= latestUnpaidBill.StatementDate)
+                .SumAsync(p => (decimal?)p.Amount) ?? 0;
+
+            totalPaidForThisBill += totalPaid;
+
+            if (totalPaidForThisBill >= latestUnpaidBill.BillAmount)
+            {
+                latestUnpaidBill.IsPaid = true;
+                _context.CreditCardBills.Update(latestUnpaidBill);
+                billMarkedPaid = true;
+            }
         }
 
         var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
@@ -908,16 +981,30 @@ public class AccountService : IAccountService
             TotalPaid = totalPaid,
             TotalInterestPaid = totalInterestPaid,
             TotalCashbackReceived = totalCashback,
-            RemainingBalance = outstandingBalance - (totalPaid - totalInterestPaid),
+            RemainingBalance = Math.Max(0, maxPayable - (totalPaid - totalInterestPaid)),
             BillMarkedPaid = billMarkedPaid
         });
     }
 
-    public async Task<Result<CashbackInsightsDto>> GetCashbackInsightsAsync(string userId)
+    public async Task<Result<CashbackInsightsDto>> GetCashbackInsightsAsync(
+        string userId, int? accountId = null, int? month = null, int? year = null)
     {
-        var payments = await _context.CreditCardPayments
-            .Where(p => p.UserId == userId)
-            .ToListAsync();
+        var query = _context.CreditCardPayments
+            .Where(p => p.UserId == userId);
+
+        if (accountId.HasValue)
+        {
+            query = query.Where(p => p.CreditCardAccountId == accountId.Value);
+        }
+
+        if (month.HasValue && year.HasValue)
+        {
+            var monthStart = new DateTime(year.Value, month.Value, 1, 0, 0, 0, DateTimeKind.Utc);
+            var monthEnd = monthStart.AddMonths(1).AddTicks(-1);
+            query = query.Where(p => p.Date >= monthStart && p.Date <= monthEnd);
+        }
+
+        var payments = await query.ToListAsync();
 
         var byApp = payments
             .Where(p => p.PaymentAppName != null)
@@ -1074,6 +1161,114 @@ public class AccountService : IAccountService
                 MinimumBalance = a.BankAccountDetails.MinimumBalance
             }
         };
+    }
+
+    private async Task EnsureCreditCardPaymentTransactionsAsync(string userId, int creditCardAccountId)
+    {
+        var payments = await _context.CreditCardPayments
+            .Where(p => p.UserId == userId && p.CreditCardAccountId == creditCardAccountId)
+            .ToListAsync();
+
+        if (payments.Count > 0)
+        {
+            var defaultTransferCat = await _context.TransactionCategories
+                .FirstOrDefaultAsync(c => c.UserId == userId && c.Name == "Transfer");
+
+            bool dirty = false;
+            foreach (var p in payments)
+            {
+                bool hasValidIncomeTx = false;
+                if (p.PrincipalIncomeTransactionId.HasValue && p.PrincipalIncomeTransactionId.Value > 0)
+                {
+                    hasValidIncomeTx = await _context.Transactions.AnyAsync(t => t.Id == p.PrincipalIncomeTransactionId.Value && t.AccountId == creditCardAccountId);
+                }
+
+                if (!hasValidIncomeTx)
+                {
+                    // Check if an unlinked matching transaction already exists on the credit card account
+                    var existingTx = await _context.Transactions.FirstOrDefaultAsync(t => t.AccountId == creditCardAccountId && t.Date == p.Date && t.Amount == p.Amount && t.Type == TransactionType.Income);
+
+                    if (existingTx != null)
+                    {
+                        p.PrincipalIncomeTransactionId = existingTx.Id;
+                        _context.CreditCardPayments.Update(p);
+                        dirty = true;
+                    }
+                    else
+                    {
+                        var payingAcc = await _context.Accounts.FirstOrDefaultAsync(a => a.Id == p.PayingAccountId);
+                        var incomeLeg = new Transaction
+                        {
+                            Description = $"Payment from {payingAcc?.Name ?? "Bank Account"}",
+                            Amount = p.Amount,
+                            Date = p.Date,
+                            Type = TransactionType.Income,
+                            AccountId = p.CreditCardAccountId,
+                            UserId = userId,
+                            Kind = TransactionKind.Transfer,
+                            TransactionCategoryId = defaultTransferCat?.Id
+                        };
+                        _context.Transactions.Add(incomeLeg);
+                        await _context.SaveChangesAsync();
+
+                        p.PrincipalIncomeTransactionId = incomeLeg.Id;
+                        _context.CreditCardPayments.Update(p);
+                        dirty = true;
+                    }
+                }
+            }
+
+            if (dirty)
+            {
+                await _context.SaveChangesAsync();
+            }
+
+            // Recalculate and sync ccAccount.Balance from CreditCardBills and transaction history
+            var ccAccount = await _context.Accounts.FirstOrDefaultAsync(a => a.Id == creditCardAccountId);
+            if (ccAccount != null)
+            {
+                var latestBill = await _context.CreditCardBills
+                    .Where(b => b.AccountId == creditCardAccountId)
+                    .OrderByDescending(b => b.StatementDate)
+                    .FirstOrDefaultAsync();
+
+                decimal realBalance = 0;
+
+                if (latestBill != null && latestBill.BillAmount > 0)
+                {
+                    decimal totalPaidForCycle = await _context.CreditCardPayments
+                        .Where(p => p.CreditCardAccountId == creditCardAccountId && p.Date >= latestBill.StatementDate)
+                        .SumAsync(p => (decimal?)p.Amount) ?? 0;
+
+                    decimal remainingDebt = Math.Max(0, latestBill.BillAmount - totalPaidForCycle);
+
+                    var unbilledTxs = await _context.Transactions
+                        .Where(t => t.AccountId == creditCardAccountId && !t.IsDeleted && t.Date > latestBill.StatementDate)
+                        .ToListAsync();
+
+                    decimal unbilledNet = unbilledTxs.Sum(t => t.Type == TransactionType.Income ? t.Amount : -t.Amount);
+
+                    realBalance = -remainingDebt + unbilledNet;
+                }
+                else
+                {
+                    var txs = await _context.Transactions
+                        .Where(t => t.AccountId == creditCardAccountId && !t.IsDeleted)
+                        .ToListAsync();
+
+                    decimal paymentsSum = txs.Where(t => t.Type == TransactionType.Income).Sum(t => t.Amount);
+                    decimal expenseTxsSum = txs.Where(t => t.Type == TransactionType.Expense).Sum(t => t.Amount);
+                    realBalance = paymentsSum - expenseTxsSum;
+                }
+
+                if (ccAccount.Balance != realBalance)
+                {
+                    ccAccount.Balance = realBalance;
+                    _context.Accounts.Update(ccAccount);
+                    await _context.SaveChangesAsync();
+                }
+            }
+        }
     }
 
     private string ToTitleCase(string input)

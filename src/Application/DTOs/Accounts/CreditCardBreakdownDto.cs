@@ -20,4 +20,9 @@ public class CreditCardBreakdownDto
     public DateTime MostRecentStatementDate { get; set; }
     public decimal? MinimumDueAmount { get; set; }
     public DateTime? DueDate { get; set; }
+    public decimal? LatestBillAmount { get; set; }
+    public bool LatestBillIsPaid { get; set; }
+    public bool IsMinimumDuePaid { get; set; }
+    public decimal TotalPaidForCycle { get; set; }
+    public decimal RemainingBillAmount { get; set; }
 }

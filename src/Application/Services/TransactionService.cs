@@ -343,21 +343,54 @@ public class TransactionService : ITransactionService
         if (transaction == null || transaction.AccountId != accountId)
             return Result.Failure<bool>(new Error("Transaction.NotFound", "Transaction not found."));
 
-        if (transaction.Kind == TransactionKind.Transfer || transaction.Kind == TransactionKind.LoanPrincipal)
+        var relatedTransactionIds = new HashSet<int> { transaction.Id };
+
+        // 1. Check TransferGroupId
+        if (transaction.TransferGroupId.HasValue)
         {
-            return Result.Failure<bool>(new Error(
-                "Transaction.PartOfPair",
-                "This transaction is one side of a transfer or loan payment and can't be deleted on its own — deleting only one leg would leave the accounting inconsistent. Contact support or use the account merge/correction tools if this needs reversing."));
+            var paired = await _context.Transactions
+                .Where(t => t.TransferGroupId == transaction.TransferGroupId.Value && !t.IsDeleted)
+                .Select(t => t.Id)
+                .ToListAsync();
+            foreach (var id in paired) relatedTransactionIds.Add(id);
         }
 
-        // Revert Balance
-        account.Balance += (transaction.Type == TransactionType.Income ? -transaction.Amount : transaction.Amount);
+        // 2. Check CreditCardPayment records linked to this transaction or any paired transaction
+        var ccPayments = await _context.CreditCardPayments
+            .Where(p => (p.PrincipalIncomeTransactionId.HasValue && relatedTransactionIds.Contains(p.PrincipalIncomeTransactionId.Value)) ||
+                        (p.PrincipalExpenseTransactionId.HasValue && relatedTransactionIds.Contains(p.PrincipalExpenseTransactionId.Value)) ||
+                        (p.InterestTransactionId.HasValue && relatedTransactionIds.Contains(p.InterestTransactionId.Value)) ||
+                        (p.CashbackTransactionId.HasValue && relatedTransactionIds.Contains(p.CashbackTransactionId.Value)))
+            .ToListAsync();
 
-        _context.Accounts.Update(account);
-        
-        transaction.IsDeleted = true;
-        transaction.DeletedAt = DateTime.UtcNow;
-        _context.Transactions.Update(transaction);
+        foreach (var p in ccPayments)
+        {
+            if (p.PrincipalIncomeTransactionId.HasValue) relatedTransactionIds.Add(p.PrincipalIncomeTransactionId.Value);
+            if (p.PrincipalExpenseTransactionId.HasValue) relatedTransactionIds.Add(p.PrincipalExpenseTransactionId.Value);
+            if (p.InterestTransactionId.HasValue) relatedTransactionIds.Add(p.InterestTransactionId.Value);
+            if (p.CashbackTransactionId.HasValue) relatedTransactionIds.Add(p.CashbackTransactionId.Value);
+
+            _context.CreditCardPayments.Remove(p);
+        }
+
+        // 3. Load all transactions to delete and revert balances
+        var allTxsToDelete = await _context.Transactions
+            .Where(t => relatedTransactionIds.Contains(t.Id) && !t.IsDeleted)
+            .ToListAsync();
+
+        foreach (var tx in allTxsToDelete)
+        {
+            var acc = await _context.Accounts.FindAsync(tx.AccountId);
+            if (acc != null)
+            {
+                acc.Balance += (tx.Type == TransactionType.Income ? -tx.Amount : tx.Amount);
+                _context.Accounts.Update(acc);
+            }
+
+            tx.IsDeleted = true;
+            tx.DeletedAt = DateTime.UtcNow;
+            _context.Transactions.Update(tx);
+        }
 
         var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
         if (saveResult.IsFailure)
@@ -634,6 +667,38 @@ public class TransactionService : ITransactionService
 
     private TransactionDto MapToDto(Transaction t)
     {
+        string? categoryName = t.TransactionCategory?.Name;
+        if (string.IsNullOrEmpty(categoryName))
+        {
+            var desc = t.Description ?? string.Empty;
+            if (t.Kind == TransactionKind.Transfer ||
+                desc.Contains("Transfer", StringComparison.OrdinalIgnoreCase) ||
+                desc.Contains("Credit card payment", StringComparison.OrdinalIgnoreCase) ||
+                desc.Contains("Payment from", StringComparison.OrdinalIgnoreCase) ||
+                desc.Contains("Loan principal", StringComparison.OrdinalIgnoreCase))
+            {
+                categoryName = "Transfer";
+            }
+            else if (t.Kind == TransactionKind.LoanInterest ||
+                     desc.StartsWith("Interest", StringComparison.OrdinalIgnoreCase) ||
+                     desc.Contains("Interest/fees", StringComparison.OrdinalIgnoreCase))
+            {
+                categoryName = "Interest & Fees";
+            }
+            else if (desc.StartsWith("Cashback", StringComparison.OrdinalIgnoreCase))
+            {
+                categoryName = "Cashback & Rewards";
+            }
+            else if (t.IsOpeningBalance || t.Kind == TransactionKind.OpeningBalance || desc.Contains("Opening Balance", StringComparison.OrdinalIgnoreCase))
+            {
+                categoryName = "Opening Balance";
+            }
+            else if (t.IsBalanceAdjustment || t.Kind == TransactionKind.BalanceAdjustment || desc.Contains("Balance Adjustment", StringComparison.OrdinalIgnoreCase))
+            {
+                categoryName = "Balance Adjustment";
+            }
+        }
+
         return new TransactionDto
         {
             Id = t.Id,
@@ -644,7 +709,7 @@ public class TransactionService : ITransactionService
             Type = t.Type,
             AccountId = t.AccountId,
             AccountName = t.Account?.Name,
-            CategoryName = t.TransactionCategory?.Name ?? (t.Description.Contains("Transfer") ? "Transfer" : null),
+            CategoryName = categoryName,
             MerchantId = t.MerchantId,
             MerchantName = t.Merchant?.Name,
             TransferGroupId = t.TransferGroupId
