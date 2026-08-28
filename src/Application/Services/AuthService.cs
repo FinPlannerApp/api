@@ -219,7 +219,7 @@ public class AuthService : IAuthService
         user.RefreshTokens.RemoveAll(rt => !rt.IsActive || rt.ExpiresUtc <= DateTime.UtcNow);
 
         user.RefreshTokens.Add(refreshToken);
-        var updateResult = await _userManager.UpdateAsync(user);
+        var updateResult = await UpdateUserWithConcurrencyRetryAsync(user);
         
         if (!updateResult.Succeeded)
         {
@@ -271,7 +271,7 @@ public class AuthService : IAuthService
         user.RefreshTokens.RemoveAll(rt => !rt.IsActive || rt.ExpiresUtc <= DateTime.UtcNow);
 
         user.RefreshTokens.Add(newRefreshToken);
-        await _userManager.UpdateAsync(user);
+        await UpdateUserWithConcurrencyRetryAsync(user);
 
         _logger.LogInformation("Token refreshed successfully for user {UserName} from IP {IpAddress}", user.UserName, ipAddress);
 
@@ -303,7 +303,7 @@ public class AuthService : IAuthService
             user.LastKnownIp = null;
             user.LastKnownUserAgent = null;
             
-            await _userManager.UpdateAsync(user);
+            await UpdateUserWithConcurrencyRetryAsync(user);
             _logger.LogInformation("Session terminated for {UserName} from IP {IpAddress}", user.UserName, ipAddress);
         }
 
@@ -489,7 +489,7 @@ public class AuthService : IAuthService
         // used for revocation elsewhere in this file.
         user.RefreshTokens.RemoveAll(rt => true);
         user.CurrentSessionId = null;
-        await _userManager.UpdateAsync(user);
+        await UpdateUserWithConcurrencyRetryAsync(user);
 
         // Invalidate OTP
         await db.KeyDeleteAsync($"otp:{dto.Email}");
@@ -528,7 +528,7 @@ public class AuthService : IAuthService
             user.EmailConfirmed = false;
         }
 
-        var updateResult = await _userManager.UpdateAsync(user);
+        var updateResult = await UpdateUserWithConcurrencyRetryAsync(user);
         if (!updateResult.Succeeded)
         {
             var errors = string.Join(", ", updateResult.Errors.Select(e => e.Description));
@@ -587,5 +587,27 @@ public class AuthService : IAuthService
             CreatedUtc = DateTime.UtcNow,
             CreatedByIp = ipAddress
         };
+    }
+
+    private async Task<IdentityResult> UpdateUserWithConcurrencyRetryAsync(ApplicationUser user)
+    {
+        var updateResult = await _userManager.UpdateAsync(user);
+        if (!updateResult.Succeeded && updateResult.Errors.Any(e => e.Code == "ConcurrencyFailure" || e.Description.Contains("Optimistic concurrency")))
+        {
+            _logger.LogWarning("Concurrency conflict detected for user {UserId}. Fetching latest ConcurrencyStamp and retrying...", user.Id);
+
+            var latestStamp = await _userManager.Users
+                .AsNoTracking()
+                .Where(u => u.Id == user.Id)
+                .Select(u => u.ConcurrencyStamp)
+                .FirstOrDefaultAsync();
+
+            if (latestStamp != null)
+            {
+                user.ConcurrencyStamp = latestStamp;
+                updateResult = await _userManager.UpdateAsync(user);
+            }
+        }
+        return updateResult;
     }
 }
