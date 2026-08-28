@@ -19,17 +19,14 @@ public class AuthController : BaseController
 
     private void SetRefreshTokenCookie(string token)
     {
-        var isHttps = Request.IsHttps ||
-                      string.Equals(Request.Headers["X-Forwarded-Proto"], "https", StringComparison.OrdinalIgnoreCase) ||
-                      string.Equals(Request.Headers["X-Forwarded-SSL"], "on", StringComparison.OrdinalIgnoreCase) ||
-                      Request.Headers["Origin"].ToString().StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
-                      Request.Headers["Referer"].ToString().StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+        var isLocalHttp = !Request.IsHttps &&
+                          (Request.Host.Host == "localhost" || Request.Host.Host == "127.0.0.1" || Request.Host.Host.StartsWith("192.168."));
 
         Response.Cookies.Append("refreshToken", token, new CookieOptions
         {
             HttpOnly = true,
-            Secure = isHttps,
-            SameSite = isHttps ? SameSiteMode.None : SameSiteMode.Lax,
+            Secure = !isLocalHttp,
+            SameSite = isLocalHttp ? SameSiteMode.Lax : SameSiteMode.None,
             Expires = DateTimeOffset.UtcNow.AddDays(30),
             Path = "/"
         });
@@ -113,17 +110,14 @@ public class AuthController : BaseController
             ? await _authService.LogoutAsync(token, GetIpAddress())
             : Result.Success(true);
 
-        var isHttps = Request.IsHttps ||
-                      string.Equals(Request.Headers["X-Forwarded-Proto"], "https", StringComparison.OrdinalIgnoreCase) ||
-                      string.Equals(Request.Headers["X-Forwarded-SSL"], "on", StringComparison.OrdinalIgnoreCase) ||
-                      Request.Headers["Origin"].ToString().StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
-                      Request.Headers["Referer"].ToString().StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+        var isLocalHttp = !Request.IsHttps &&
+                          (Request.Host.Host == "localhost" || Request.Host.Host == "127.0.0.1" || Request.Host.Host.StartsWith("192.168."));
 
         Response.Cookies.Delete("refreshToken", new CookieOptions
         {
             Path = "/",
-            Secure = isHttps,
-            SameSite = isHttps ? SameSiteMode.None : SameSiteMode.Lax
+            Secure = !isLocalHttp,
+            SameSite = isLocalHttp ? SameSiteMode.Lax : SameSiteMode.None
         });
 
         return HandleResult(result);
