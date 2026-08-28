@@ -19,7 +19,12 @@ public class AuthController : BaseController
 
     private void SetRefreshTokenCookie(string token)
     {
-        var isHttps = Request.IsHttps;
+        var isHttps = Request.IsHttps ||
+                      string.Equals(Request.Headers["X-Forwarded-Proto"], "https", StringComparison.OrdinalIgnoreCase) ||
+                      string.Equals(Request.Headers["X-Forwarded-SSL"], "on", StringComparison.OrdinalIgnoreCase) ||
+                      Request.Headers["Origin"].ToString().StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                      Request.Headers["Referer"].ToString().StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
         Response.Cookies.Append("refreshToken", token, new CookieOptions
         {
             HttpOnly = true,
@@ -108,7 +113,12 @@ public class AuthController : BaseController
             ? await _authService.LogoutAsync(token, GetIpAddress())
             : Result.Success(true);
 
-        var isHttps = Request.IsHttps;
+        var isHttps = Request.IsHttps ||
+                      string.Equals(Request.Headers["X-Forwarded-Proto"], "https", StringComparison.OrdinalIgnoreCase) ||
+                      string.Equals(Request.Headers["X-Forwarded-SSL"], "on", StringComparison.OrdinalIgnoreCase) ||
+                      Request.Headers["Origin"].ToString().StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                      Request.Headers["Referer"].ToString().StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
         Response.Cookies.Delete("refreshToken", new CookieOptions
         {
             Path = "/",
