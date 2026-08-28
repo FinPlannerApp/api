@@ -1,3 +1,4 @@
+using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Auth;
 using Microsoft.AspNetCore.Authorization;
@@ -14,6 +15,24 @@ public class AuthController : BaseController
     public AuthController(IAuthService authService)
     {
         _authService = authService;
+    }
+
+    private void SetRefreshTokenCookie(string token)
+    {
+        var isHttps = Request.IsHttps;
+        Response.Cookies.Append("refreshToken", token, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = isHttps,
+            SameSite = isHttps ? SameSiteMode.None : SameSiteMode.Lax,
+            Expires = DateTimeOffset.UtcNow.AddDays(30),
+            Path = "/"
+        });
+    }
+
+    private string? GetRefreshTokenFromCookie()
+    {
+        return Request.Cookies.TryGetValue("refreshToken", out var token) ? token : null;
     }
 
     private string GetIpAddress()
@@ -49,24 +68,54 @@ public class AuthController : BaseController
     {
         var userAgent = Request.Headers["User-Agent"].ToString();
         var result = await _authService.LoginAsync(dto, GetIpAddress(), userAgent);
+
+        if (result.IsSuccess)
+        {
+            SetRefreshTokenCookie(result.Value.RefreshToken!);
+            result.Value.RefreshToken = null!;
+        }
+
         return HandleResult(result);
     }
 
     [HttpPost("refresh")]
     [AllowAnonymous]
     [EnableRateLimiting("login")]
-    public async Task<IActionResult> Refresh([FromBody] RefreshTokenDto dto)
+    public async Task<IActionResult> Refresh()
     {
-        var result = await _authService.RefreshTokenAsync(dto.RefreshToken, GetIpAddress());
+        var token = GetRefreshTokenFromCookie();
+        if (string.IsNullOrEmpty(token))
+            return HandleResult(Result.Failure<LoginResponseDto>(new Error("Auth.NoToken", "No refresh token present.")));
+
+        var result = await _authService.RefreshTokenAsync(token, GetIpAddress());
+
+        if (result.IsSuccess)
+        {
+            SetRefreshTokenCookie(result.Value.RefreshToken!);
+            result.Value.RefreshToken = null!;
+        }
+
         return HandleResult(result);
     }
 
     [HttpPost("logout")]
     [AllowAnonymous]
     [EnableRateLimiting("login")]
-    public async Task<IActionResult> Logout([FromBody] RefreshTokenDto dto)
+    public async Task<IActionResult> Logout()
     {
-        var result = await _authService.LogoutAsync(dto.RefreshToken, GetIpAddress());
+        var token = GetRefreshTokenFromCookie();
+        var result = token != null
+            ? await _authService.LogoutAsync(token, GetIpAddress())
+            : Result.Success(true);
+
+        var isHttps = Request.IsHttps;
+        Response.Cookies.Delete("refreshToken", new CookieOptions
+        {
+            Path = "/",
+            Secure = isHttps,
+            SameSite = isHttps ? SameSiteMode.None : SameSiteMode.Lax
+        });
+
         return HandleResult(result);
     }
 
