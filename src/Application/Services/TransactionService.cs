@@ -363,12 +363,19 @@ public class TransactionService : ITransactionService
                         (p.CashbackTransactionId.HasValue && relatedTransactionIds.Contains(p.CashbackTransactionId.Value)))
             .ToListAsync();
 
+        var affectedBillIds = new HashSet<int>();
+
         foreach (var p in ccPayments)
         {
             if (p.PrincipalIncomeTransactionId.HasValue) relatedTransactionIds.Add(p.PrincipalIncomeTransactionId.Value);
             if (p.PrincipalExpenseTransactionId.HasValue) relatedTransactionIds.Add(p.PrincipalExpenseTransactionId.Value);
             if (p.InterestTransactionId.HasValue) relatedTransactionIds.Add(p.InterestTransactionId.Value);
             if (p.CashbackTransactionId.HasValue) relatedTransactionIds.Add(p.CashbackTransactionId.Value);
+
+            if (p.CreditCardBillId.HasValue)
+            {
+                affectedBillIds.Add(p.CreditCardBillId.Value);
+            }
 
             _context.CreditCardPayments.Remove(p);
         }
@@ -390,6 +397,22 @@ public class TransactionService : ITransactionService
             tx.IsDeleted = true;
             tx.DeletedAt = DateTime.UtcNow;
             _context.Transactions.Update(tx);
+        }
+
+        // 4. Re-evaluate affected CreditCardBill.IsPaid states
+        var deletingPaymentIds = ccPayments.Select(cp => cp.Id).ToHashSet();
+        foreach (var billId in affectedBillIds)
+        {
+            var bill = await _context.CreditCardBills.FindAsync(billId);
+            if (bill != null)
+            {
+                var remainingTotalPaid = await _context.CreditCardPayments
+                    .Where(p => p.CreditCardBillId == billId && !deletingPaymentIds.Contains(p.Id))
+                    .SumAsync(p => (decimal?)p.Amount) ?? 0;
+
+                bill.IsPaid = remainingTotalPaid >= bill.BillAmount;
+                _context.CreditCardBills.Update(bill);
+            }
         }
 
         var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);

@@ -3,7 +3,7 @@ namespace Domain.Entities.Split;
 public enum SplitGroupStatus { Active = 0, Locked = 1, Settled = 2, Archived = 3 }
 public enum SplitType { Equal = 0, Exact = 1, Percentage = 2, Shares = 3 }
 public enum SettlementMethod { Upi = 0, Cash = 1, BankTransfer = 2, Other = 3 }
-public enum SettlementStatus { Pending = 0, Completed = 1, AwaitingConfirmation = 2 }
+public enum SettlementStatus { Pending = 0, AwaitingConfirmation = 1, Completed = 2 }
 
 public class SplitGroup : BaseEntity
 {

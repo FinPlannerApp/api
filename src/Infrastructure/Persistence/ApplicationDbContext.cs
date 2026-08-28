@@ -698,6 +698,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         {
             e.ToTable("CreditCardPayments", "accounts");
             e.HasIndex(p => p.CreditCardAccountId);
+            e.HasIndex(p => p.CreditCardBillId);
             e.HasOne<Account>()
                 .WithMany()
                 .HasForeignKey(p => p.CreditCardAccountId)
@@ -706,6 +707,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
                 .WithMany()
                 .HasForeignKey(p => p.PayingAccountId)
                 .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(p => p.CreditCardBill)
+                .WithMany()
+                .HasForeignKey(p => p.CreditCardBillId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         builder.Entity<BlogPost>(e =>

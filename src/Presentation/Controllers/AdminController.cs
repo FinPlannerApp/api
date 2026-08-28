@@ -49,8 +49,9 @@ public class AdminController : ControllerBase
     [AllowAnonymous]
     public async Task<ActionResult> BootstrapAdmin([FromBody] BootstrapAdminDto input, [FromServices] IConfiguration config)
     {
-        // Use a secret key from configuration (or fallback for dev)
-        var expectedKey = config["AdminBootstrapKey"] ?? "admin-setup-key-2026";
+        var expectedKey = config["AdminBootstrapKey"];
+        if (string.IsNullOrWhiteSpace(expectedKey))
+            return StatusCode(500, new { message = "AdminBootstrapKey is not configured on this server." });
         
         if (input.SecretKey != expectedKey)
             return Unauthorized(new { message = "Invalid secret key." });
@@ -91,7 +92,9 @@ public class AdminController : ControllerBase
         [FromServices] IConfiguration config,
         [FromServices] ApplicationDbContext db)
     {
-        var expectedKey = config["AdminBootstrapKey"] ?? "admin-setup-key-2026";
+        var expectedKey = config["AdminBootstrapKey"];
+        if (string.IsNullOrWhiteSpace(expectedKey))
+            return StatusCode(500, new { message = "AdminBootstrapKey is not configured on this server." });
         if (input.SecretKey != expectedKey)
             return Unauthorized(new { message = "Invalid secret key." });
 
@@ -186,7 +189,9 @@ public class AdminController : ControllerBase
         [FromServices] ApplicationDbContext db,
         [FromServices] TaxonomySeederService seeder)
     {
-        var expectedKey = config["AdminBootstrapKey"] ?? "admin-setup-key-2026";
+        var expectedKey = config["AdminBootstrapKey"];
+        if (string.IsNullOrWhiteSpace(expectedKey))
+            return StatusCode(500, new { message = "AdminBootstrapKey is not configured on this server." });
         if (input.SecretKey != expectedKey)
             return Unauthorized(new { message = "Invalid secret key." });
 
@@ -301,7 +306,9 @@ public class AdminController : ControllerBase
         [FromServices] ApplicationDbContext db,
         [FromServices] TaxonomySeederService seeder)
     {
-        var expectedKey = config["AdminBootstrapKey"] ?? "admin-setup-key-2026";
+        var expectedKey = config["AdminBootstrapKey"];
+        if (string.IsNullOrWhiteSpace(expectedKey))
+            return StatusCode(500, new { message = "AdminBootstrapKey is not configured on this server." });
         if (input.SecretKey != expectedKey)
             return Unauthorized(new { message = "Invalid secret key." });
 

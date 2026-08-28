@@ -12,6 +12,7 @@ public class GroupDto
 {
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
+    public string CreatedByUserId { get; set; } = string.Empty;
     public string Currency { get; set; } = "INR";
     public SplitGroupStatus Status { get; set; }
     public string ShareToken { get; set; } = string.Empty;
@@ -128,7 +129,9 @@ public class CreateSettlementDto
 public class SettlementDto
 {
     public int Id { get; set; }
+    public int FromMemberId { get; set; }
     public string FromMemberName { get; set; } = string.Empty;
+    public int ToMemberId { get; set; }
     public string ToMemberName { get; set; } = string.Empty;
     public decimal Amount { get; set; }
     public SettlementMethod Method { get; set; }

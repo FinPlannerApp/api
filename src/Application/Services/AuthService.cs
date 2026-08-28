@@ -412,30 +412,61 @@ public class AuthService : IAuthService
         return Result.Success("If an account exists, a password reset email has been sent.");
     }
 
-    public async Task<Result<bool>> VerifyOtpAsync(VerifyOtpDto dto)
+    // Shared by every OTP-checking path so the attempt limit can't
+    // drift out of sync between them. Attempts are tracked in Redis
+    // alongside the OTP itself, with the same lifetime — no separate
+    // cleanup needed, it expires when the OTP would anyway.
+    private async Task<Result<bool>> ValidateOtpWithAttemptLimitAsync(
+        StackExchange.Redis.IDatabase db, string email, string providedOtp)
     {
-        var db = _redis.GetDatabase();
-        var storedOtp = await db.StringGetAsync($"otp:{dto.Email}");
+        const int maxAttempts = 5;
+        var attemptsKey = $"otp-attempts:{email}";
+        var otpKey = $"otp:{email}";
 
-        if (storedOtp.IsNullOrEmpty || storedOtp != dto.Otp)
+        var attempts = (int)(await db.StringGetAsync(attemptsKey));
+
+        if (attempts >= maxAttempts)
         {
+            return Result.Failure<bool>(new Error(
+                "Auth.TooManyAttempts", "Too many incorrect attempts. Request a new code."));
+        }
+
+        var storedOtp = await db.StringGetAsync(otpKey);
+
+        if (storedOtp.IsNullOrEmpty || storedOtp != providedOtp)
+        {
+            var otpTtl = await db.KeyTimeToLiveAsync(otpKey);
+            await db.StringIncrementAsync(attemptsKey);
+            await db.KeyExpireAsync(attemptsKey, otpTtl ?? TimeSpan.FromMinutes(10));
+
             return Result.Failure<bool>(new Error("Auth.InvalidToken", "Invalid or expired OTP."));
         }
 
+        // Correct on this attempt — the attempt counter no longer
+        // serves a purpose, and OTP deletion (already handled by each
+        // caller after a fully successful flow) makes it moot anyway.
+        await db.KeyDeleteAsync(attemptsKey);
+
         return Result.Success(true);
+    }
+
+    public async Task<Result<bool>> VerifyOtpAsync(VerifyOtpDto dto)
+    {
+        var db = _redis.GetDatabase();
+        return await ValidateOtpWithAttemptLimitAsync(db, dto.Email, dto.Otp);
     }
 
     public async Task<Result<bool>> ResetPasswordAsync(ResetPasswordDto dto)
     {
         var db = _redis.GetDatabase();
-        var storedOtp = await db.StringGetAsync($"otp:{dto.Email}");
+        var otpCheck = await ValidateOtpWithAttemptLimitAsync(db, dto.Email, dto.Otp);
+        if (otpCheck.IsFailure)
+            return otpCheck;
 
-        if (storedOtp.IsNullOrEmpty || storedOtp != dto.Otp)
-        {
-            return Result.Failure<bool>(new Error("Auth.InvalidToken", "Invalid or expired OTP."));
-        }
-
-        var user = await _userManager.FindByEmailAsync(dto.Email);
+        var normalizedEmail = _userManager.NormalizeEmail(dto.Email);
+        var user = await _userManager.Users
+            .Include(u => u.RefreshTokens)
+            .FirstOrDefaultAsync(u => u.NormalizedEmail == normalizedEmail);
         if (user == null)
         {
              return Result.Failure<bool>(new Error("Auth.InvalidToken", "Invalid user."));
@@ -449,6 +480,16 @@ public class AuthService : IAuthService
             var errors = string.Join(", ", result.Errors.Select(e => e.Description));
             return Result.Failure<bool>(new Error("Auth.ResetFailed", $"Password reset failed: {errors}"));
         }
+
+        // A successful reset should invalidate every existing session —
+        // otherwise a refresh token obtained before the reset (by an
+        // attacker, or on a device the real owner no longer trusts)
+        // stays valid afterward, defeating the point of resetting the
+        // password at all. Matches the same RemoveAll pattern already
+        // used for revocation elsewhere in this file.
+        user.RefreshTokens.RemoveAll(rt => true);
+        user.CurrentSessionId = null;
+        await _userManager.UpdateAsync(user);
 
         // Invalidate OTP
         await db.KeyDeleteAsync($"otp:{dto.Email}");

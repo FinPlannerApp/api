@@ -16,6 +16,8 @@ public class CreditCardPayment : BaseEntity
     public int PayingAccountId { get; set; }
     public decimal Amount { get; set; }
     public DateTime Date { get; set; }
+    public int? CreditCardBillId { get; set; }
+    public CreditCardBill? CreditCardBill { get; set; }
 
     public string? PaymentAppName { get; set; } // "GPay", "PhonePe", "Bank App", etc.
 

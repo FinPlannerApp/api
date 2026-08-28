@@ -12,7 +12,7 @@ namespace API.Extensions;
 
 public static class ApiLayerServiceExtensions
 {
-    public static IServiceCollection AddApiLayerServices(this IServiceCollection services)
+    public static IServiceCollection AddApiLayerServices(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddSignalR();
         services.AddScoped<Application.Contracts.ISplitNotifier, API.Services.SplitNotifier>();
@@ -61,12 +61,19 @@ public static class ApiLayerServiceExtensions
         services.Configure<BrotliCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
         services.Configure<GzipCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
 
+        var configuredOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+        var originsSet = new HashSet<string>(configuredOrigins, StringComparer.OrdinalIgnoreCase)
+        {
+            "https://finplanner.ska97homelab.uk",
+            "http://localhost:4200"
+        };
+
         services.AddCors(options =>
         {
             options.AddPolicy(name: "AllowSpecificOrigins",
                               policy =>
                               {
-                                  policy.SetIsOriginAllowed(origin => true)
+                                  policy.WithOrigins(originsSet.ToArray())
                                         .AllowAnyHeader()
                                         .AllowAnyMethod()
                                         .AllowCredentials();

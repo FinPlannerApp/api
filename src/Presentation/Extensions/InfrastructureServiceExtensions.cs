@@ -108,7 +108,8 @@ public static class InfrastructureServiceExtensions
         })
         .AddRoles<IdentityRole>()
         .AddRoleManager<RoleManager<IdentityRole>>()
-        .AddEntityFrameworkStores<ApplicationDbContext>();
+        .AddEntityFrameworkStores<ApplicationDbContext>()
+        .AddDefaultTokenProviders();
 
         // Overrides Identity's default PBKDF2-HMAC-SHA256 hasher with Argon2id.
         // Must be registered AFTER AddIdentityCore(...) — see Argon2PasswordHasher.cs

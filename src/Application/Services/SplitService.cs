@@ -284,6 +284,29 @@ public class SplitService : ISplitService
         if (fromMember == null || toMember == null)
             return Result.Failure<SettlementDto>(new Error("SplitMember.NotFound", "One or both members not found in this group."));
 
+        // 1. Authorization: The group creator can record a settlement on behalf of any
+        // member. A linked member can only create a settlement where they are the payer.
+        if (group.CreatedByUserId != userId)
+        {
+            var callerMember = FindMemberForUser(group, userId);
+            if (callerMember == null || callerMember.Id != dto.FromMemberId)
+                return Result.Failure<SettlementDto>(new Error(
+                    "SplitGroup.Forbidden", "You can only create a settlement where you're the one paying."));
+        }
+
+        // 2. Debt Limit Validation: Validate against the FromMember's actual overall outstanding debt
+        var currentBalances = SplitBalanceCalculator.CalculateNetBalances(group);
+        var fromMemberBalance = currentBalances.First(b => b.MemberId == dto.FromMemberId).NetBalance;
+        var fromMemberOwes = Math.Max(0, -fromMemberBalance);
+
+        if (dto.Amount > fromMemberOwes + 0.01m) // small tolerance for rounding
+        {
+            return Result.Failure<SettlementDto>(new Error(
+                "SplitSettlement.ExceedsDebt",
+                $"{fromMember.Name} owes ₹{fromMemberOwes:F2} overall — this settlement (₹{dto.Amount:F2}) exceeds that."));
+        }
+
+        // 3. Update existing pending settlement if present
         var existingPending = group.Settlements.FirstOrDefault(s =>
             s.FromMemberId == dto.FromMemberId &&
             s.ToMemberId == dto.ToMemberId &&
@@ -300,7 +323,9 @@ public class SplitService : ISplitService
             var sExistingDto = new SettlementDto
             {
                 Id = existingPending.Id,
+                FromMemberId = fromMember.Id,
                 FromMemberName = fromMember.Name,
+                ToMemberId = toMember.Id,
                 ToMemberName = toMember.Name,
                 Amount = existingPending.Amount,
                 Method = existingPending.Method,
@@ -313,36 +338,6 @@ public class SplitService : ISplitService
             await _notifier.NotifySettlementRecordedAsync(dto.GroupId, $"💸 Payment of ₹{dto.Amount:N2} updated ({fromMember.Name} → {toMember.Name}).", sExistingDto, updatedBalances);
 
             return Result.Success(sExistingDto);
-        }
-
-        // The group creator can record a settlement on behalf of any
-        // member (the intended V1 model — the creator operates the app
-        // for members who don't have their own FinPlanner login). A
-        // LINKED member, if one exists, can only create a settlement
-        // where they themselves are the one paying.
-        if (group.CreatedByUserId != userId)
-        {
-            var callerMember = FindMemberForUser(group, userId);
-            if (callerMember == null || callerMember.Id != dto.FromMemberId)
-                return Result.Failure<SettlementDto>(new Error(
-                    "SplitGroup.Forbidden", "You can only create a settlement where you're the one paying."));
-        }
-
-        // Validate against the FromMember's actual overall outstanding
-        // debt — not against the specific ToMember pairing, since a
-        // settlement can legitimately go to someone other than whoever
-        // the simplified debt plan suggested. What must hold regardless
-        // is that nobody can settle for more than they actually owe in
-        // total.
-        var currentBalances = SplitBalanceCalculator.CalculateNetBalances(group);
-        var fromMemberBalance = currentBalances.First(b => b.MemberId == dto.FromMemberId).NetBalance;
-        var fromMemberOwes = Math.Max(0, -fromMemberBalance);
-
-        if (dto.Amount > fromMemberOwes + 0.01m) // small tolerance for rounding
-        {
-            return Result.Failure<SettlementDto>(new Error(
-                "SplitSettlement.ExceedsDebt",
-                $"{fromMember.Name} owes ₹{fromMemberOwes:F2} overall — this settlement (₹{dto.Amount:F2}) exceeds that."));
         }
 
         var settlement = new SplitSettlement
@@ -363,7 +358,9 @@ public class SplitService : ISplitService
         var sDto = new SettlementDto
         {
             Id = settlement.Id,
+            FromMemberId = fromMember.Id,
             FromMemberName = fromMember.Name,
+            ToMemberId = toMember.Id,
             ToMemberName = toMember.Name,
             Amount = settlement.Amount,
             Method = settlement.Method,
@@ -899,7 +896,9 @@ public class SplitService : ISplitService
         return Result.Success(settlements.Select(s => new SettlementDto
         {
             Id = s.Id,
+            FromMemberId = s.FromMemberId,
             FromMemberName = s.FromMember.Name,
+            ToMemberId = s.ToMemberId,
             ToMemberName = s.ToMember.Name,
             Amount = s.Amount,
             Method = s.Method,
@@ -997,6 +996,7 @@ public class SplitService : ISplitService
     {
         Id = g.Id,
         Name = g.Name,
+        CreatedByUserId = g.CreatedByUserId,
         Currency = g.Currency,
         Status = g.Status,
         ShareToken = g.ShareToken,

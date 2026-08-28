@@ -118,8 +118,6 @@ using (var scope = app.Services.CreateScope())
     var services = scope.ServiceProvider;
     try
     {
-        var db = services.GetRequiredService<ApplicationDbContext>();
-        // db.Database.Migrate(); // Disabled for least-privilege user support
         var seeder = services.GetRequiredService<Application.Services.TaxonomySeederService>();
         await seeder.SeedAsync();
 
