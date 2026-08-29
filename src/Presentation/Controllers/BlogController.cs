@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Application.Common.Models;
 using Application.DTOs.Blog;
 using Application.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -23,7 +24,7 @@ public class BlogController : BaseController
     [AllowAnonymous]
     [ResponseCache(Duration = 300, Location = ResponseCacheLocation.Any)]
     public async Task<IActionResult> GetPublished()
-        => Ok(await _blogService.GetPublishedAsync());
+        => Ok(ApiResult<List<BlogPostSummaryDto>>.Success(await _blogService.GetPublishedAsync()));
 
     [HttpGet("published/paged")]
     [AllowAnonymous]
@@ -33,7 +34,7 @@ public class BlogController : BaseController
         [FromQuery] int pageSize = 6,
         [FromQuery] string? search = null,
         [FromQuery] string? tag = null)
-        => Ok(await _blogService.GetPublishedPagedAsync(pageNumber, pageSize, search, tag));
+        => Ok(ApiResult<PagedResult<BlogPostSummaryDto>>.Success(await _blogService.GetPublishedPagedAsync(pageNumber, pageSize, search, tag)));
 
     [HttpGet("published/{slug}/comments")]
     [AllowAnonymous]
