@@ -59,7 +59,7 @@ public class BlogService
     public async Task<List<BlogPostSummaryDto>> GetPublishedAsync()
     {
         return await _context.BlogPosts
-            .Where(p => p.IsPublished)
+            .Where(p => p.IsPublished && !p.IsDeleted)
             .OrderByDescending(p => p.PublishedAt)
             .Select(p => new BlogPostSummaryDto
             {
@@ -192,6 +192,7 @@ public class BlogService
     public async Task<Result<List<BlogPostDto>>> GetAllForAdminAsync()
     {
         var posts = await _context.BlogPosts
+            .Where(p => !p.IsDeleted)
             .OrderByDescending(p => p.CreatedAt)
             .ToListAsync();
 

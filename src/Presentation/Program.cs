@@ -37,6 +37,9 @@ builder.Services.AddPresentationLayerServices(builder.Configuration);
 // Add Memory Cache for Custom Rate Limiting
 builder.Services.AddMemoryCache();
 
+// Required for [ResponseCache(VaryByQueryKeys = ...)] on Blog published/paged
+builder.Services.AddResponseCaching();
+
 // Configure for Render.com reverse proxy (Cloudflare CDN + Render proxy)
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
@@ -136,6 +139,8 @@ using (var scope = app.Services.CreateScope())
     }
 }
 app.UseCors("AllowSpecificOrigins");
+
+app.UseResponseCaching();
 
 // Security Headers
 app.Use(async (context, next) =>
