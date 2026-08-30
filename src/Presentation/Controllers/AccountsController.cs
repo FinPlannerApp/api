@@ -127,6 +127,20 @@ public class AccountsController : BaseController
     public async Task<IActionResult> GetPaymentSuggestions(int creditCardAccountId, [FromQuery] decimal amount)
         => HandleResult(await _accountService.GetPaymentSuggestionsAsync(UserId, creditCardAccountId, amount));
 
+    [HttpGet("payment-app-names")]
+    public async Task<IActionResult> GetKnownPaymentAppNames()
+    {
+        var result = await _accountService.GetKnownPaymentAppNamesAsync(UserId);
+        return HandleResult(result);
+    }
+
+    [HttpGet("payment-app-wallets")]
+    public async Task<IActionResult> GetPaymentAppWallets()
+    {
+        var result = await _accountService.GetPaymentAppWalletsAsync(UserId);
+        return HandleResult(result);
+    }
+
     [HttpPost("backfill-opening-balances")]
     public async Task<IActionResult> BackfillOpeningBalances()
     {

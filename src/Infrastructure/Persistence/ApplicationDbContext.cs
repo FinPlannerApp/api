@@ -66,6 +66,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<Goal> Goals => Set<Goal>();
     public DbSet<CreditCardBill> CreditCardBills => Set<CreditCardBill>();
     public DbSet<CreditCardPayment> CreditCardPayments => Set<CreditCardPayment>();
+    public DbSet<CreditCardRewardPoints> CreditCardRewardPoints => Set<CreditCardRewardPoints>();
+    public DbSet<PaymentAppWalletLedgerEntry> PaymentAppWalletLedgerEntries => Set<PaymentAppWalletLedgerEntry>();
     public DbSet<SplitGroup> SplitGroups => Set<SplitGroup>();
     public DbSet<SplitGroupMember> SplitGroupMembers => Set<SplitGroupMember>();
     public DbSet<SplitExpense> SplitExpenses => Set<SplitExpense>();
@@ -711,6 +713,33 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
                 .WithMany()
                 .HasForeignKey(p => p.CreditCardBillId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<CreditCardRewardPoints>(e =>
+        {
+            e.ToTable("CreditCardRewardPoints", "accounts");
+            e.HasIndex(r => r.CreditCardAccountId);
+            e.HasIndex(r => r.CreditCardBillId);
+            e.HasIndex(r => r.ExpiryDate); // the auto-expiry worker queries on this
+            e.HasOne(r => r.CreditCardAccount)
+                .WithMany()
+                .HasForeignKey(r => r.CreditCardAccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(r => r.CreditCardBill)
+                .WithMany()
+                .HasForeignKey(r => r.CreditCardBillId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<PaymentAppWalletLedgerEntry>(e =>
+        {
+            e.ToTable("PaymentAppWalletLedgerEntries", "accounts");
+            e.HasIndex(w => new { w.UserId, w.PaymentAppName });
+            e.HasIndex(w => w.CreditCardPaymentId);
+            e.HasOne(w => w.CreditCardPayment)
+                .WithMany()
+                .HasForeignKey(w => w.CreditCardPaymentId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         builder.Entity<BlogPost>(e =>

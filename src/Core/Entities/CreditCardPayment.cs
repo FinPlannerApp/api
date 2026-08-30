@@ -1,6 +1,18 @@
 namespace Domain.Entities;
 
-public enum CashbackType { Direct = 0, Indirect = 1 }
+public enum CashbackType
+{
+    Direct = 0,
+    Indirect = 1,
+    // Applied by the payment app directly against this card's own
+    // balance (a statement credit) — distinct from Direct (paid out
+    // to a separate account) and Indirect (tracked as stats only,
+    // no balance effect). This is the payment-app side of cashback;
+    // separate from any statement-credit cashback the bank itself
+    // gives based on spending, which lives on the bill-generation
+    // side, not here.
+    StatementCredit = 2
+}
 
 /// <summary>
 /// One payment toward a credit card bill — a bill may be paid via

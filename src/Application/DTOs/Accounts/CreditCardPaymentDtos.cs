@@ -6,6 +6,7 @@ public class SinglePaymentEntryDto
 {
     public int PayingAccountId { get; set; }
     public decimal Amount { get; set; }
+    public decimal AppliedWalletAmount { get; set; } = 0;
     public DateTime Date { get; set; }
     public int? CreditCardBillId { get; set; }
     public string? PaymentAppName { get; set; }

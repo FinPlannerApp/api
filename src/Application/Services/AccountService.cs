@@ -826,6 +826,13 @@ public class AccountService : IAccountService
                 $"These payments total ₹{totalRequested:F2}, which exceeds the max owed amount of ₹{maxPayable:F2} on this card."));
 
         var payingAccounts = new Dictionary<int, Account>();
+
+        // Cumulative wallet usage across this whole batch, per app —
+        // needed since more than one payment row could draw from the
+        // same app's balance in a single request, and each needs
+        // validating against what's actually left after the others.
+        var walletUsageThisBatch = new Dictionary<string, decimal>();
+
         foreach (var payment in dto.Payments)
         {
             if (payment.Amount <= 0)
@@ -858,10 +865,11 @@ public class AccountService : IAccountService
                 payingAccounts[payment.PayingAccountId] = payingAccount;
             }
 
-            if (payingAccount.Balance < payment.Amount)
+            var actualCashNeeded = payment.Amount - payment.AppliedWalletAmount;
+            if (payingAccount.Balance < actualCashNeeded)
                 return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
                     "CreditCardPayment.InsufficientFunds",
-                    $"{payingAccount.Name} has insufficient balance for a ₹{payment.Amount:F2} payment. Available: ₹{payingAccount.Balance:F2}"));
+                    $"{payingAccount.Name} has insufficient balance for a ₹{actualCashNeeded:F2} payment. Available: ₹{payingAccount.Balance:F2}"));
 
             if (payment.CashbackAmount.HasValue && payment.CashbackAmount.Value > 0)
             {
@@ -879,6 +887,33 @@ public class AccountService : IAccountService
                     return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
                         "CreditCardPayment.CashbackToSameCard",
                         "Cashback can't be credited back to the same card being paid."));
+            }
+
+            if (payment.AppliedWalletAmount > 0)
+            {
+                if (string.IsNullOrWhiteSpace(payment.PaymentAppName))
+                    return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                        "CreditCardPayment.MissingAppForWalletDiscount",
+                        "Applying a wallet discount requires specifying which payment app it's from."));
+
+                if (payment.AppliedWalletAmount > payment.Amount)
+                    return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                        "CreditCardPayment.WalletDiscountExceedsPayment",
+                        "The applied wallet amount can't be more than the payment itself."));
+
+                var availableBalance = await _context.PaymentAppWalletLedgerEntries
+                    .Where(e => e.UserId == userId && e.PaymentAppName == payment.PaymentAppName)
+                    .SumAsync(e => e.Type == PaymentAppWalletEntryType.Earned ? e.Amount : -e.Amount);
+
+                walletUsageThisBatch.TryGetValue(payment.PaymentAppName!, out var alreadyUsedInBatch);
+                var remainingAfterBatch = availableBalance - alreadyUsedInBatch;
+
+                if (payment.AppliedWalletAmount > remainingAfterBatch)
+                    return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                        "CreditCardPayment.InsufficientWalletBalance",
+                        $"Only ₹{remainingAfterBatch:F2} available in {payment.PaymentAppName}'s balance."));
+
+                walletUsageThisBatch[payment.PaymentAppName!] = alreadyUsedInBatch + payment.AppliedWalletAmount;
             }
         }
 
@@ -899,6 +934,7 @@ public class AccountService : IAccountService
         var defaultCashbackCat = await _context.TransactionCategories.FirstOrDefaultAsync(c => c.UserId == userId && (c.Name == "Cashback" || c.Name == "Rewards" || c.Name == "Income" || c.Name == "Cashback & Rewards"));
 
         var linkTracking = new List<(CreditCardPayment Payment, Transaction? Interest, Transaction? ExpenseLeg, Transaction? IncomeLeg, Transaction? Cashback)>();
+        var pendingWalletEntries = new List<(PaymentAppWalletLedgerEntry Entry, CreditCardPayment Payment)>();
         var results = new List<SinglePaymentResultDto>();
         decimal totalPaid = 0, totalInterestPaid = 0, totalCashback = 0, directCashback = 0, indirectCashback = 0;
 
@@ -952,12 +988,14 @@ public class AccountService : IAccountService
             if (payment.Amount > 0)
             {
                 var transferGroupId = Guid.NewGuid();
+                var actualCashFromPayingAccount = payment.Amount - payment.AppliedWalletAmount;
 
                 expenseLeg = new Transaction
                 {
                     Description = $"Credit card payment — {ccAccount.Name}" +
-                        (payment.PaymentAppName != null ? $" via {payment.PaymentAppName}" : ""),
-                    Amount = payment.Amount,
+                        (payment.PaymentAppName != null ? $" via {payment.PaymentAppName}" : "") +
+                        (payment.AppliedWalletAmount > 0 ? $" (₹{payment.AppliedWalletAmount:F2} from wallet balance)" : ""),
+                    Amount = actualCashFromPayingAccount,
                     Date = payment.Date,
                     Type = TransactionType.Expense,
                     AccountId = payment.PayingAccountId,
@@ -966,7 +1004,7 @@ public class AccountService : IAccountService
                     TransferGroupId = transferGroupId,
                     TransactionCategoryId = defaultTransferCat?.Id
                 };
-                payingAccount.Balance -= payment.Amount;
+                payingAccount.Balance -= actualCashFromPayingAccount;
 
                 incomeLeg = new Transaction
                 {
@@ -1015,10 +1053,58 @@ public class AccountService : IAccountService
                         directCashback += payment.CashbackAmount.Value;
                     }
                 }
+                else if (payment.CashbackType == CashbackType.StatementCredit)
+                {
+                    // Applied directly against the card's own balance —
+                    // this is a real credit event, not a wallet
+                    // earning. An Income transaction on the CC account
+                    // moves its (negative) debt balance toward zero,
+                    // same convention already used for the principal
+                    // payment's own income leg above.
+                    cashbackTx = new Transaction
+                    {
+                        Description = $"Statement credit — {ccAccount.Name}" +
+                            (payment.PaymentAppName != null ? $" ({payment.PaymentAppName})" : ""),
+                        Amount = payment.CashbackAmount.Value,
+                        Date = payment.Date,
+                        Type = TransactionType.Income,
+                        AccountId = dto.CreditCardAccountId,
+                        UserId = userId,
+                        TransactionCategoryId = defaultCashbackCat?.Id
+                    };
+                    _context.Transactions.Add(cashbackTx);
+                    ccAccount.Balance += payment.CashbackAmount.Value;
+                }
                 else
                 {
                     indirectCashback += payment.CashbackAmount.Value;
+
+                    if (!string.IsNullOrWhiteSpace(payment.PaymentAppName))
+                    {
+                        var earnedEntry = new PaymentAppWalletLedgerEntry
+                        {
+                            UserId = userId,
+                            PaymentAppName = payment.PaymentAppName,
+                            Amount = payment.CashbackAmount.Value,
+                            Type = PaymentAppWalletEntryType.Earned,
+                            Date = payment.Date
+                        };
+                        pendingWalletEntries.Add((earnedEntry, ccPayment));
+                    }
                 }
+            }
+
+            if (payment.AppliedWalletAmount > 0 && !string.IsNullOrWhiteSpace(payment.PaymentAppName))
+            {
+                var appliedEntry = new PaymentAppWalletLedgerEntry
+                {
+                    UserId = userId,
+                    PaymentAppName = payment.PaymentAppName,
+                    Amount = payment.AppliedWalletAmount,
+                    Type = PaymentAppWalletEntryType.Applied,
+                    Date = payment.Date
+                };
+                pendingWalletEntries.Add((appliedEntry, ccPayment));
             }
 
             _context.CreditCardPayments.Add(ccPayment);
@@ -1068,6 +1154,12 @@ public class AccountService : IAccountService
         var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
         if (saveResult.IsFailure)
             return Result.Failure<CreditCardPaymentBatchResultDto>(saveResult.Error);
+
+        foreach (var (entry, payment) in pendingWalletEntries)
+        {
+            entry.CreditCardPaymentId = payment.Id;
+            _context.PaymentAppWalletLedgerEntries.Add(entry);
+        }
 
         foreach (var (linkedPayment, interest, expense, income, cashback) in linkTracking)
         {
@@ -1173,6 +1265,45 @@ public class AccountService : IAccountService
             .ToList();
 
         return Result.Success(suggestions);
+    }
+
+    public async Task<Result<List<string>>> GetKnownPaymentAppNamesAsync(string userId)
+    {
+        var names = await _context.CreditCardPayments
+            .Where(p => p.UserId == userId && p.PaymentAppName != null)
+            .Select(p => p.PaymentAppName!)
+            .Distinct()
+            .OrderBy(n => n)
+            .ToListAsync();
+
+        return Result.Success(names);
+    }
+
+    public async Task<Result<List<PaymentAppWalletDto>>> GetPaymentAppWalletsAsync(string userId)
+    {
+        var entries = await _context.PaymentAppWalletLedgerEntries
+            .Where(e => e.UserId == userId)
+            .OrderByDescending(e => e.Date)
+            .ToListAsync();
+
+        var result = entries
+            .GroupBy(e => e.PaymentAppName)
+            .Select(g => new PaymentAppWalletDto
+            {
+                PaymentAppName = g.Key,
+                CurrentBalance = g.Sum(e => e.Type == PaymentAppWalletEntryType.Earned ? e.Amount : -e.Amount),
+                RecentEntries = g.Take(20).Select(e => new PaymentAppWalletLedgerEntryDto
+                {
+                    Amount = e.Amount,
+                    Type = e.Type.ToString(),
+                    Date = e.Date,
+                    CreditCardPaymentId = e.CreditCardPaymentId
+                }).ToList()
+            })
+            .OrderByDescending(w => w.CurrentBalance)
+            .ToList();
+
+        return Result.Success(result);
     }
 
     public async Task<Result<int>> BackfillOpeningBalancesAsync(string userId)

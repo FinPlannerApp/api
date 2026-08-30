@@ -49,6 +49,8 @@ public interface IApplicationDbContext
     DbSet<Goal> Goals { get; }
     DbSet<CreditCardBill> CreditCardBills { get; }
     DbSet<CreditCardPayment> CreditCardPayments { get; }
+    DbSet<CreditCardRewardPoints> CreditCardRewardPoints { get; }
+    DbSet<PaymentAppWalletLedgerEntry> PaymentAppWalletLedgerEntries { get; }
     DbSet<SplitGroup> SplitGroups { get; }
     DbSet<SplitGroupMember> SplitGroupMembers { get; }
     DbSet<SplitExpense> SplitExpenses { get; }
