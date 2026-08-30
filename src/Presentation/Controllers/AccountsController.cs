@@ -88,6 +88,13 @@ public class AccountsController : BaseController
         return HandleResult(result);
     }
 
+    [HttpGet("{accountId}/outstanding-bills")]
+    public async Task<IActionResult> GetOutstandingBills(int accountId)
+    {
+        var result = await _accountService.GetOutstandingBillsAsync(UserId, accountId);
+        return HandleResult(result);
+    }
+
     [HttpPost("adjust-balance")]
     public async Task<IActionResult> AdjustBalance([FromBody] AdjustBalanceDto dto)
     {

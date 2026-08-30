@@ -149,26 +149,23 @@ app.Use(async (context, next) =>
     context.Response.Headers.Append("X-Frame-Options", "DENY");
     context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
 
-    // Dynamically allow the request's origin and host in connect-src (crucial for local network/IP hosting)
-    var origin = context.Request.Headers.Origin.ToString();
-    var host = context.Request.Host.Value;
-    var dynamicConnectSrc = "";
-    if (!string.IsNullOrEmpty(origin))
-    {
-        dynamicConnectSrc += $" {origin}";
-    }
-    if (!string.IsNullOrEmpty(host))
-    {
-        dynamicConnectSrc += $" http://{host} https://{host}";
-    }
+    // Was: read the incoming request's own Origin/Host headers and
+    // echo them into this response's CSP. Both are ordinary,
+    // attacker-controllable values — reflecting request data into a
+    // security header is worth avoiding on principle. Local-network
+    // dev testing (the apparent original purpose) is preserved
+    // instead via a broader-but-static connect-src, gated on the
+    // environment rather than on anything the request itself
+    // supplied.
+    var devConnectSrc = app.Environment.IsDevelopment() ? " http:" : "";
 
     context.Response.Headers.Append("Content-Security-Policy", 
         $"default-src 'self' https://finplanner.ska97homelab.uk; " +
-        $"script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://static.cloudflareinsights.com https://finplanner.ska97homelab.uk; " +
+        $"script-src 'self' 'unsafe-eval' https://www.googletagmanager.com https://static.cloudflareinsights.com https://finplanner.ska97homelab.uk; " +
         $"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://finplanner.ska97homelab.uk; " +
         $"img-src 'self' data: https:; " +
         $"font-src 'self' data: https://fonts.gstatic.com; " +
-        $"connect-src 'self' https: http://localhost:5018 https://localhost:7123{dynamicConnectSrc} https://www.google-analytics.com https://www.googletagmanager.com https://cloudflareinsights.com https://finplanner.ska97homelab.uk; " +
+        $"connect-src 'self' https:{devConnectSrc} https://www.google-analytics.com https://www.googletagmanager.com https://cloudflareinsights.com https://finplanner.ska97homelab.uk; " +
         $"object-src 'none'; base-uri 'self';");
 
     await next();

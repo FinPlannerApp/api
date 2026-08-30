@@ -32,3 +32,14 @@ public class CreditCardBillResultDto
 
     public DateTime StatementDate { get; set; }
 }
+
+public class OutstandingBillDto
+{
+    public int Id { get; set; }
+    public DateTime StatementDate { get; set; }
+    public decimal BillAmount { get; set; }
+    public decimal PaidAmount { get; set; }
+    public decimal RemainingAmount { get; set; }
+    public decimal? MinimumDue { get; set; }
+    public DateTime? DueDate { get; set; }
+}

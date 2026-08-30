@@ -565,6 +565,51 @@ public class AccountService : IAccountService
         });
     }
 
+    public async Task<Result<List<OutstandingBillDto>>> GetOutstandingBillsAsync(string userId, int accountId)
+    {
+        var account = await _context.Accounts
+            .FirstOrDefaultAsync(a => a.Id == accountId);
+
+        if (account == null || account.UserId != userId)
+            return Result.Failure<List<OutstandingBillDto>>(new Error("Account.NotFound", "Account not found."));
+
+        var bills = await _context.CreditCardBills
+            .Where(b => b.AccountId == accountId)
+            .OrderBy(b => b.StatementDate)
+            .ToListAsync();
+
+        var result = new List<OutstandingBillDto>();
+
+        foreach (var b in bills)
+        {
+            // Same computation as the payment method itself uses to
+            // resolve targetBill — paid amount is summed fresh from
+            // linked payments, not read from a stored running total,
+            // so this can't fall out of sync with what a real payment
+            // would actually be validated against.
+            var paid = await _context.CreditCardPayments
+                .Where(p => p.CreditCardAccountId == accountId && !p.IsDeleted &&
+                            (p.CreditCardBillId == b.Id || (p.CreditCardBillId == null && p.Date >= b.StatementDate)))
+                .SumAsync(p => (decimal?)p.Amount) ?? 0;
+
+            if (paid < b.BillAmount)
+            {
+                result.Add(new OutstandingBillDto
+                {
+                    Id = b.Id,
+                    StatementDate = b.StatementDate,
+                    BillAmount = b.BillAmount,
+                    PaidAmount = paid,
+                    RemainingAmount = b.BillAmount - paid,
+                    MinimumDue = b.MinimumDue,
+                    DueDate = b.DueDate
+                });
+            }
+        }
+
+        return Result.Success(result);
+    }
+
     public async Task<Result<AccountDto>> AdjustBalanceAsync(string userId, AdjustBalanceDto dto)
     {
         var account = await _context.Accounts

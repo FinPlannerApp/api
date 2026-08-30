@@ -1,3 +1,4 @@
+using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.RecurringTransactions;
@@ -31,6 +32,13 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
         }
 
         RecurringTransaction? entity;
+        bool isNew = !(request.Id.HasValue && request.Id.Value > 0);
+
+        // Captured only when editing — nothing to compare against for
+        // a brand-new entity, and isNew already covers that case below.
+        RecurrenceFrequency oldFrequency = default;
+        DateTime oldStartDate = default;
+        RecurrenceDayOfWeek? oldCustomDays = null;
 
         if (request.Id.HasValue && request.Id.Value > 0)
         {
@@ -41,6 +49,10 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
             {
                 return Result.Failure<RecurringTransactionDto>(new Error("RecurringTransaction.NotFound", "Recurring transaction not found."));
             }
+
+            oldFrequency = entity.Frequency;
+            oldStartDate = entity.StartDate;
+            oldCustomDays = entity.CustomDays;
         }
         else
         {
@@ -77,11 +89,33 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
 
         entity.LinkedLoanAccountId = request.Dto.LinkedLoanAccountId;
 
-        // If it's a new entity or the start date/frequency changed, recalculate NextProcessDate
-        // Simplification: Recalculate if it's new or if it's currently in the future relative to StartDate
-        if (request.Id == null || entity.NextProcessDate < entity.StartDate)
+        if (isNew)
         {
+            // Unchanged behavior for genuinely new entries — StartDate
+            // is used directly, without rolling forward past today.
+            // Deliberately different from CreateSubscriptionCommand's
+            // own roll-forward: a new recurring transaction may
+            // legitimately want to catch up on a real past StartDate,
+            // where a subscription specifically avoids that to prevent
+            // a surprise back-dated charge on save.
             entity.NextProcessDate = entity.StartDate;
+        }
+        else
+        {
+            bool scheduleChanged =
+                oldFrequency != entity.Frequency ||
+                oldStartDate != entity.StartDate ||
+                oldCustomDays != entity.CustomDays;
+
+            if (scheduleChanged)
+            {
+                // A live edit, not initial setup — roll forward to the
+                // first valid occurrence on or after today under the
+                // NEW schedule, rather than leaving NextProcessDate
+                // pointing at a date computed under the old one.
+                entity.NextProcessDate = RecurrenceCalculator.CalculateNextOccurrenceOnOrAfter(
+                    entity.StartDate, entity.Frequency, entity.CustomDays, DateTime.UtcNow);
+            }
         }
 
         await _context.SaveChangesAsync(cancellationToken);
