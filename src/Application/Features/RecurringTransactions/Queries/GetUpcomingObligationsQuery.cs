@@ -133,6 +133,57 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
             });
         }
 
+        // ── Source 4: recurring account-level charges — CC annual fee, bank periodic charges ──
+        var ccAccountsWithFee = await _context.Accounts
+            .Include(a => a.CreditCardDetails)
+            .Where(a => a.UserId == request.UserId &&
+                        a.AccountCategory.AccountType == AccountType.CreditCard &&
+                        a.CreditCardDetails!.AnnualFee.HasValue &&
+                        a.CreditCardDetails!.NextAnnualFeeDate.HasValue)
+            .ToListAsync(cancellationToken);
+
+        foreach (var account in ccAccountsWithFee)
+        {
+            var dueDate = account.CreditCardDetails!.NextAnnualFeeDate!.Value;
+            if (dueDate < today || dueDate > cutoff)
+                continue;
+
+            results.Add(new UpcomingObligationDto
+            {
+                Description = $"{account.Name} annual fee",
+                AccountName = account.Name,
+                Amount = account.CreditCardDetails.AnnualFee,
+                MinimumDueAmount = null,
+                DueDate = dueDate,
+                Source = "AccountCharge"
+            });
+        }
+
+        var bankAccountsWithCharge = await _context.Accounts
+            .Include(a => a.BankAccountDetails)
+            .Where(a => a.UserId == request.UserId &&
+                        a.AccountCategory.AccountType == AccountType.Bank &&
+                        a.BankAccountDetails!.PeriodicChargeAmount.HasValue &&
+                        a.BankAccountDetails!.NextPeriodicChargeDate.HasValue)
+            .ToListAsync(cancellationToken);
+
+        foreach (var account in bankAccountsWithCharge)
+        {
+            var dueDate = account.BankAccountDetails!.NextPeriodicChargeDate!.Value;
+            if (dueDate < today || dueDate > cutoff)
+                continue;
+
+            results.Add(new UpcomingObligationDto
+            {
+                Description = $"{account.Name} account charge",
+                AccountName = account.Name,
+                Amount = account.BankAccountDetails.PeriodicChargeAmount,
+                MinimumDueAmount = null,
+                DueDate = dueDate,
+                Source = "AccountCharge"
+            });
+        }
+
         return Result.Success(results.OrderBy(r => r.DueDate).ToList());
     }
 }

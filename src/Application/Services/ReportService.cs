@@ -173,8 +173,11 @@ public class ReportService : IReportService
         if (!txResult.IsSuccess)
             return Result.Failure<byte[]>(txResult.Error);
 
+        var utcStart = startDate.Kind == DateTimeKind.Utc ? startDate : (startDate.Kind == DateTimeKind.Local ? startDate.ToUniversalTime() : DateTime.SpecifyKind(startDate, DateTimeKind.Utc));
+        var utcEnd = endDate.Kind == DateTimeKind.Utc ? endDate : (endDate.Kind == DateTimeKind.Local ? endDate.ToUniversalTime() : DateTime.SpecifyKind(endDate, DateTimeKind.Utc));
+
         var rows = txResult.Value!.Data
-            .Where(t => t.Date >= startDate && t.Date <= endDate)
+            .Where(t => t.Date >= utcStart && t.Date <= utcEnd)
             .OrderBy(t => t.Date)
             .Select(t => new AccountStatementRow
             {

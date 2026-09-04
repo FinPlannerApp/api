@@ -59,10 +59,10 @@ public class DashboardService : IDashboardService
     private static (DateTime Start, DateTime End) ResolveMonthRange(DateTime? startDate, DateTime? endDate)
     {
         if (startDate.HasValue && endDate.HasValue)
-            return (startDate.Value, endDate.Value);
+            return (startDate.Value.EnsureUtc(), endDate.Value.EnsureUtc());
 
         var (monthStartUtc, monthEndUtc) = AppTimeZone.MonthBoundsUtc(DateTime.UtcNow);
-        return (startDate ?? monthStartUtc, endDate ?? monthEndUtc);
+        return ((startDate ?? monthStartUtc).EnsureUtc(), (endDate ?? monthEndUtc).EnsureUtc());
     }
 
     public async Task<Result<DashboardSummaryDto>> GetSummaryAsync(string userId, DateTime? startDate = null, DateTime? endDate = null)

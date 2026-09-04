@@ -265,7 +265,7 @@ public class TransactionService : ITransactionService
             oldType = transaction.Type;
             transaction.Description = dto.Description;
             transaction.Amount = dto.Amount;
-            transaction.Date = dto.Date;
+            transaction.Date = dto.Date.EnsureUtc();
             transaction.Type = dto.Type;
             transaction.TransactionCategoryId = dto.TransactionCategoryId;
             transaction.MerchantId = dto.MerchantId;
@@ -277,7 +277,7 @@ public class TransactionService : ITransactionService
             {
                 Description = dto.Description,
                 Amount = dto.Amount,
-                Date = dto.Date,
+                Date = dto.Date.EnsureUtc(),
                 Type = dto.Type,
                 TransactionCategoryId = dto.TransactionCategoryId,
                 MerchantId = dto.MerchantId,
@@ -463,7 +463,7 @@ public class TransactionService : ITransactionService
         {
             Description           = $"Transfer to {destinationAccount.Name}",
             Amount                = dto.Amount,
-            Date                  = dto.Date,
+            Date                  = dto.Date.EnsureUtc(),
             Type                  = TransactionType.Expense,
             AccountId             = sourceAccountId,
             TransactionCategoryId = dto.TransactionCategoryId,
@@ -477,7 +477,7 @@ public class TransactionService : ITransactionService
         {
             Description           = $"Transfer from {sourceAccount.Name}",
             Amount                = dto.Amount,
-            Date                  = dto.Date,
+            Date                  = dto.Date.EnsureUtc(),
             Type                  = TransactionType.Income,
             AccountId             = dto.DestinationAccountId,
             TransactionCategoryId = dto.TransactionCategoryId,

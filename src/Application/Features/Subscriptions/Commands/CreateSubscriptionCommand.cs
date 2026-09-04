@@ -1,3 +1,4 @@
+using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
 using Domain.Entities;
@@ -55,8 +56,8 @@ public class CreateSubscriptionCommandHandler : IRequestHandler<CreateSubscripti
             Amount = dto.Amount,
             Type = TransactionType.Expense, // subscriptions are expenses
             Frequency = dto.Frequency,
-            StartDate = dto.StartDate, // the REAL historical start — unchanged, this is what fixes the display/age-calculation issue
-            NextProcessDate = nextProcessDate, // the actual next occurrence, never a past date
+            StartDate = dto.StartDate.EnsureUtc(), // the REAL historical start — unchanged, this is what fixes the display/age-calculation issue
+            NextProcessDate = nextProcessDate.EnsureUtc(), // the actual next occurrence, never a past date
             IsActive = true,
             // A subscription is, by definition, a real financial
             // commitment — it should always surface in the obligation

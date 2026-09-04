@@ -74,8 +74,8 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
         entity.CustomDays = request.Dto.Frequency == RecurrenceFrequency.Custom
             ? request.Dto.CustomDays
             : null; // clear stale CustomDays if frequency changed away from Custom
-        entity.StartDate = request.Dto.StartDate;
-        entity.EndDate = request.Dto.EndDate;
+        entity.StartDate = request.Dto.StartDate.EnsureUtc();
+        entity.EndDate = request.Dto.EndDate.EnsureUtc();
         entity.IsActive = request.Dto.IsActive;
         entity.IsObligation = request.Dto.IsObligation;
         if (request.Dto.LinkedLoanAccountId.HasValue)

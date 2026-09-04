@@ -46,6 +46,25 @@ public static class AppTimeZone
     }
 
     /// <summary>
+    /// Ensures that a DateTime parameter has Kind = DateTimeKind.Utc before being written
+    /// to PostgreSQL (Npgsql) timestamptz columns or compared in EF Core queries.
+    /// </summary>
+    public static DateTime EnsureUtc(this DateTime dt)
+    {
+        if (dt.Kind == DateTimeKind.Utc)
+            return dt;
+        if (dt.Kind == DateTimeKind.Local)
+            return dt.ToUniversalTime();
+        return DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+    }
+
+    public static DateTime? EnsureUtc(this DateTime? dt)
+    {
+        if (!dt.HasValue) return null;
+        return dt.Value.EnsureUtc();
+    }
+
+    /// <summary>
     /// Local-time month boundaries [start, end] for the month containing utcInstant,
     /// returned already converted to UTC and ready for direct DB range comparison.
     /// </summary>

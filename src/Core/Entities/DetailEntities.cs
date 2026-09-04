@@ -19,6 +19,18 @@ public class CreditCardDetails : BaseEntity
     /// <summary>Annual/membership fee, if any.</summary>
     public decimal? AnnualFee { get; set; }
 
+    /// <summary>
+    /// Next date this fee is charged. Null alongside a set AnnualFee
+    /// would mean "there's a fee but no known date" — genuinely
+    /// possible if someone knows the amount but not yet when it's
+    /// charged; the obligation display should simply skip cards in
+    /// that state rather than guess. Advances by one year each time
+    /// it's processed, same pattern as LoanDetails.NextEmiDueDate.
+    /// Null AnnualFee entirely means lifetime-free — no charge to
+    /// track at all.
+    /// </summary>
+    public DateTime? NextAnnualFeeDate { get; set; }
+
     /// <summary>APR on unpaid balances.</summary>
     public decimal? InterestRate { get; set; }
 }
@@ -56,4 +68,15 @@ public class BankAccountDetails : BaseEntity
     /// <summary>Minimum balance the bank requires — informational, no
     /// automatic penalty tracking, just surfaced so it's visible.</summary>
     public decimal? MinimumBalance { get; set; }
+
+    /// <summary>
+    /// Periodic account/debit-card charge — e.g. a quarterly debit
+    /// card fee. Reuses InterestFrequency as the recurrence type since
+    /// the actual set of intervals needed (Quarterly/HalfYearly/
+    /// Yearly) is identical; the field name here makes clear it's a
+    /// charge, not interest, despite sharing the enum type.
+    /// </summary>
+    public decimal? PeriodicChargeAmount { get; set; }
+    public Domain.Enums.InterestFrequency? PeriodicChargeFrequency { get; set; }
+    public DateTime? NextPeriodicChargeDate { get; set; }
 }

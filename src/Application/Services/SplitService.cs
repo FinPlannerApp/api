@@ -438,6 +438,39 @@ public class SplitService : ISplitService
         return Result.Success(true);
     }
 
+    public async Task<Result<bool>> RejectPaymentAsync(string userId, int settlementId)
+    {
+        var settlement = await _context.SplitSettlements
+            .Include(s => s.SplitGroup).ThenInclude(g => g.Members)
+            .FirstOrDefaultAsync(s => s.Id == settlementId);
+
+        if (settlement == null)
+            return Result.Failure<bool>(new Error("SplitSettlement.NotFound", "Settlement not found."));
+
+        if (settlement.Status != SettlementStatus.AwaitingConfirmation)
+            return Result.Failure<bool>(new Error("SplitSettlement.WrongState", "This settlement isn't awaiting confirmation."));
+
+        // Same authorization as confirming receipt — only the person
+        // who was supposed to receive the money genuinely knows
+        // whether it actually arrived.
+        if (settlement.SplitGroup.CreatedByUserId != userId)
+        {
+            var callerMember = FindMemberForUser(settlement.SplitGroup, userId);
+            if (callerMember == null || callerMember.Id != settlement.ToMemberId)
+                return Result.Failure<bool>(new Error(
+                    "SplitGroup.Forbidden", "Only the person who was supposed to receive this payment can reject it."));
+        }
+
+        settlement.Status = SettlementStatus.Pending;
+        _context.SplitSettlements.Update(settlement);
+        await _context.SaveChangesAsync();
+
+        var fromMemberName = settlement.SplitGroup.Members.FirstOrDefault(m => m.Id == settlement.FromMemberId)?.Name ?? "Payer";
+        await NotifyGroupUpdatedAsync(settlement.SplitGroupId, $"❌ Payment of ₹{settlement.Amount:N2} from {fromMemberName} wasn't received — marked back as pending.");
+
+        return Result.Success(true);
+    }
+
     public async Task<Result<PaymentRequestDto>> GetPaymentRequestAsync(string userId, int settlementId)
     {
         // SECURITY: every value in the response is derived from the

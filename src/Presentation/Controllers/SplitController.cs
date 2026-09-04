@@ -71,6 +71,10 @@ public class SplitController : BaseController
     public async Task<IActionResult> ConfirmPaymentReceived(int id)
         => HandleResult(await _service.ConfirmPaymentReceivedAsync(UserId, id));
 
+    [HttpPost("settlements/{id}/reject")]
+    public async Task<IActionResult> RejectPayment(int id)
+        => HandleResult(await _service.RejectPaymentAsync(UserId, id));
+
     [HttpGet("settlements/{settlementId}/payment-request")]
     public async Task<IActionResult> GetPaymentRequest(int settlementId)
         => HandleResult(await _service.GetPaymentRequestAsync(UserId, settlementId));

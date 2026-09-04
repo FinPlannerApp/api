@@ -84,11 +84,13 @@ public static class InfrastructureServiceExtensions
         services.AddScoped<UpdatePainVelocityJob>();
         services.AddScoped<RefreshTokenCleanupJob>();
         services.AddScoped<RewardPointsExpiryJob>();
+        services.AddScoped<AccountChargeAdvanceJob>();
 
         services.AddHostedService<RecurringTransactionSchedulerWorker>();
         services.AddHostedService<PainVelocitySchedulerWorker>();
         services.AddHostedService<RefreshTokenCleanupSchedulerWorker>();
         services.AddHostedService<RewardPointsExpirySchedulerWorker>();
+        services.AddHostedService<AccountChargeAdvanceSchedulerWorker>();
 
         // 3. Register Identity with STRONG password requirements (dev AND production)
         services.AddIdentityCore<ApplicationUser>(options =>

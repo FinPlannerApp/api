@@ -19,6 +19,7 @@ public interface ISplitService
     Task<Result<DeleteExpenseResultDto>> DeleteExpenseAsync(string userId, int expenseId);
     Task<Result<bool>> MarkPaymentSentAsync(string userId, int settlementId);
     Task<Result<bool>> ConfirmPaymentReceivedAsync(string userId, int settlementId);
+    Task<Result<bool>> RejectPaymentAsync(string userId, int settlementId);
     Task<Result<PaymentRequestDto>> GetPaymentRequestAsync(string userId, int settlementId);
     Task<Result<PublicGroupViewDto>> GetPublicGroupViewAsync(string shareToken);
     Task<Result<InviteCreatedDto>> CreateInviteAsync(string userId, CreateInviteDto dto);

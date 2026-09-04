@@ -24,5 +24,6 @@ public enum InterestFrequency
     Monthly = 0,
     Quarterly = 1,
     Yearly = 2,
-    Daily = 3
+    Daily = 3,
+    HalfYearly = 4
 }
