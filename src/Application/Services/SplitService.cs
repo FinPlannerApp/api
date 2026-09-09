@@ -186,7 +186,7 @@ public class SplitService : ISplitService
             SplitGroupId = dto.GroupId,
             Description = dto.Description,
             Amount = dto.Amount,
-            Date = dto.Date,
+            Date = EnsureUtc(dto.Date),
             Category = dto.Category,
             SplitType = dto.SplitType
         };
@@ -563,7 +563,7 @@ public class SplitService : ISplitService
             SplitGroupId = dto.GroupId,
             CreatedByUserId = userId,
             TokenHash = InviteTokenHelper.Hash(token),
-            ExpiresAt = dto.ExpiresAt,
+            ExpiresAt = dto.ExpiresAt.HasValue ? EnsureUtc(dto.ExpiresAt.Value) : null,
             MaxUses = dto.MaxUses
         };
 
@@ -730,7 +730,7 @@ public class SplitService : ISplitService
 
         expense.Description = dto.Description;
         expense.Amount = dto.Amount;
-        expense.Date = dto.Date;
+        expense.Date = EnsureUtc(dto.Date);
         expense.Category = dto.Category;
         expense.SplitType = dto.SplitType;
 
@@ -1054,4 +1054,9 @@ public class SplitService : ISplitService
     {
         return _notifier.NotifyGroupUpdatedAsync(groupId, activityMessage);
     }
+
+    private static DateTime EnsureUtc(DateTime dt) =>
+        dt.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(dt, DateTimeKind.Utc)
+            : dt.ToUniversalTime();
 }

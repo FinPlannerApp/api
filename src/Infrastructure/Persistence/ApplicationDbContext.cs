@@ -6,11 +6,36 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL;
 using System.Security.Claims;
 using System.Text.Json;
 
 namespace Infrastructure.Persistence;
+
+public class UtcDateTimeConverter : ValueConverter<DateTime, DateTime>
+{
+    public UtcDateTimeConverter() : base(
+        v => v.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(v, DateTimeKind.Utc)
+            : (v.Kind == DateTimeKind.Local ? v.ToUniversalTime() : v),
+        v => DateTime.SpecifyKind(v, DateTimeKind.Utc))
+    {
+    }
+}
+
+public class NullableUtcDateTimeConverter : ValueConverter<DateTime?, DateTime?>
+{
+    public NullableUtcDateTimeConverter() : base(
+        v => !v.HasValue
+            ? v
+            : (v.Value.Kind == DateTimeKind.Unspecified
+                ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc)
+                : (v.Value.Kind == DateTimeKind.Local ? v.Value.ToUniversalTime() : v.Value)),
+        v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : v)
+    {
+    }
+}
 
 public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplicationDbContext
 {
@@ -84,13 +109,59 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         _httpContextAccessor = httpContextAccessor;
     }
 
+    protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
+    {
+        base.ConfigureConventions(configurationBuilder);
+
+        configurationBuilder
+            .Properties<DateTime>()
+            .HaveConversion<UtcDateTimeConverter>();
+
+        configurationBuilder
+            .Properties<DateTime?>()
+            .HaveConversion<NullableUtcDateTimeConverter>();
+    }
+
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
+        NormalizeDateTimeKinds();
         var auditEntries = OnBeforeSaveChanges();
         SetAuditProperties();
         var result = await base.SaveChangesAsync(cancellationToken);
         await OnAfterSaveChanges(auditEntries);
         return result;
+    }
+
+    public override int SaveChanges()
+    {
+        NormalizeDateTimeKinds();
+        var auditEntries = OnBeforeSaveChanges();
+        SetAuditProperties();
+        return base.SaveChanges();
+    }
+
+    private void NormalizeDateTimeKinds()
+    {
+        var entries = ChangeTracker.Entries()
+            .Where(e => e.State == EntityState.Added || e.State == EntityState.Modified);
+
+        foreach (var entry in entries)
+        {
+            foreach (var property in entry.Properties)
+            {
+                if (property.CurrentValue is DateTime dateTime)
+                {
+                    if (dateTime.Kind == DateTimeKind.Unspecified)
+                    {
+                        property.CurrentValue = DateTime.SpecifyKind(dateTime, DateTimeKind.Utc);
+                    }
+                    else if (dateTime.Kind == DateTimeKind.Local)
+                    {
+                        property.CurrentValue = dateTime.ToUniversalTime();
+                    }
+                }
+            }
+        }
     }
 
     private void SetAuditProperties()
