@@ -26,6 +26,10 @@ public interface ISplitService
     Task<Result<InvitePreviewDto>> PreviewInviteAsync(string token);
     Task<Result<JoinGroupResultDto>> JoinViaInviteAsync(string userId, JoinGroupDto dto);
     Task<Result<bool>> RevokeInviteAsync(string userId, int inviteId);
+    Task<Result<GroupDto>> UpdateGroupAsync(string userId, UpdateGroupDto dto);
+    Task<Result<MemberDto>> RenameMemberAsync(string userId, RenameMemberDto dto);
+    Task<Result<bool>> UnlockGroupAsync(string userId, int groupId);
+    Task<Result<bool>> CloseGroupAsync(string userId, int groupId);
     Task<Result<bool>> LockGroupAsync(string userId, int groupId);
     Task<Result<ImportToLedgerResultDto>> ImportToLedgerAsync(string userId, ImportToLedgerDto dto);
     Task<Result<List<SettlementDto>>> GetSettlementHistoryAsync(string userId, int groupId);

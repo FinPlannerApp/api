@@ -117,10 +117,11 @@ public class SplitService : ISplitService
         if (!isCallerInGroup)
             return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only group members can update payment details."));
 
-        // A registered/linked user can ONLY update their own UPI ID.
+        // A registered/linked user can ONLY update their own UPI ID unless the caller is the group admin.
         // A manually added person (LinkedUserId == null) can have their UPI ID updated by group members.
-        if (member.LinkedUserId != null && member.LinkedUserId != userId)
-            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "You can only update your own payment details."));
+        var isAdmin = member.SplitGroup.CreatedByUserId == userId;
+        if (member.LinkedUserId != null && member.LinkedUserId != userId && !isAdmin)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "You can only update your own payment details unless you are the group admin."));
 
         member.UpiId = dto.UpiId;
         _context.SplitGroupMembers.Update(member);
@@ -137,9 +138,9 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<ExpenseDto>(new Error("SplitGroup.NotFound", "Group not found."));
 
-        if (group.Status != SplitGroupStatus.Active)
+        if (group.Status == SplitGroupStatus.Settled || group.Status == SplitGroupStatus.Archived)
             return Result.Failure<ExpenseDto>(new Error(
-                "SplitExpense.GroupNotActive", "This group is locked, settled, or archived — new expenses can't be added."));
+                "SplitExpense.GroupClosed", "This group is closed — new expenses can't be added."));
 
         if (dto.Amount <= 0)
             return Result.Failure<ExpenseDto>(new Error("SplitExpense.InvalidAmount", "Amount must be greater than zero."));
@@ -825,6 +826,95 @@ public class SplitService : ISplitService
         return Result.Success(true);
     }
 
+    public async Task<Result<bool>> UnlockGroupAsync(string userId, int groupId)
+    {
+        var group = await _context.SplitGroups.FirstOrDefaultAsync(g => g.Id == groupId);
+        if (group == null)
+            return Result.Failure<bool>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        if (group.CreatedByUserId != userId)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can unlock the group."));
+
+        group.Status = SplitGroupStatus.Active;
+        _context.SplitGroups.Update(group);
+        await _context.SaveChangesAsync();
+
+        await _notifier.NotifyGroupStatusChangedAsync(groupId, $"🔓 Group has been unlocked.", SplitGroupStatus.Active);
+
+        return Result.Success(true);
+    }
+
+    public async Task<Result<bool>> CloseGroupAsync(string userId, int groupId)
+    {
+        var group = await _context.SplitGroups.FirstOrDefaultAsync(g => g.Id == groupId);
+        if (group == null)
+            return Result.Failure<bool>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        if (group.CreatedByUserId != userId)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can close the group."));
+
+        group.Status = SplitGroupStatus.Archived;
+        _context.SplitGroups.Update(group);
+        await _context.SaveChangesAsync();
+
+        await _notifier.NotifyGroupStatusChangedAsync(groupId, $"📁 Group has been closed.", SplitGroupStatus.Archived);
+
+        return Result.Success(true);
+    }
+
+    public async Task<Result<GroupDto>> UpdateGroupAsync(string userId, UpdateGroupDto dto)
+    {
+        var group = await _context.SplitGroups
+            .Include(g => g.Members)
+            .FirstOrDefaultAsync(g => g.Id == dto.GroupId);
+
+        if (group == null)
+            return Result.Failure<GroupDto>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        if (group.CreatedByUserId != userId)
+            return Result.Failure<GroupDto>(new Error("SplitGroup.Forbidden", "Only the group creator can edit trip details."));
+
+        if (string.IsNullOrWhiteSpace(dto.Name))
+            return Result.Failure<GroupDto>(new Error("SplitGroup.InvalidName", "Trip name cannot be empty."));
+
+        group.Name = dto.Name.Trim();
+        _context.SplitGroups.Update(group);
+        await _context.SaveChangesAsync();
+
+        await _notifier.NotifyGroupUpdatedAsync(group.Id, $"✏️ Trip name updated to '{group.Name}'.");
+
+        return Result.Success(MapToDto(group));
+    }
+
+    public async Task<Result<MemberDto>> RenameMemberAsync(string userId, RenameMemberDto dto)
+    {
+        var member = await _context.SplitGroupMembers
+            .Include(m => m.SplitGroup).ThenInclude(g => g.Members)
+            .FirstOrDefaultAsync(m => m.Id == dto.MemberId);
+
+        if (member == null)
+            return Result.Failure<MemberDto>(new Error("SplitMember.NotFound", "Member not found."));
+
+        var isGroupCreator = member.SplitGroup.CreatedByUserId == userId;
+        var isSelf = member.LinkedUserId == userId;
+        var isUnlinked = member.LinkedUserId == null;
+
+        if (!isGroupCreator && !isSelf && !isUnlinked)
+            return Result.Failure<MemberDto>(new Error("SplitGroup.Forbidden", "You can only rename yourself or unlinked members unless you are the admin."));
+
+        if (string.IsNullOrWhiteSpace(dto.Name))
+            return Result.Failure<MemberDto>(new Error("SplitMember.InvalidName", "Member name cannot be empty."));
+
+        var oldName = member.Name;
+        member.Name = dto.Name.Trim();
+        _context.SplitGroupMembers.Update(member);
+        await _context.SaveChangesAsync();
+
+        await _notifier.NotifyGroupUpdatedAsync(member.SplitGroupId, $"👤 {oldName} was renamed to '{member.Name}'.");
+
+        return Result.Success(new MemberDto { Id = member.Id, Name = member.Name, LinkedUserId = member.LinkedUserId, UpiId = member.UpiId });
+    }
+
     private async Task CheckAndAutoSettleAsync(int groupId)
     {
         var group = await _context.SplitGroups
@@ -943,6 +1033,8 @@ public class SplitService : ISplitService
 
     private static (bool IsValid, string? Reason) ValidateInvite(SplitGroupInvite invite)
     {
+        if (invite.SplitGroup != null && invite.SplitGroup.Status != SplitGroupStatus.Active)
+            return (false, "group is locked or closed — new users cannot join");
         if (invite.RevokedAt.HasValue) return (false, "revoked");
         if (invite.ExpiresAt.HasValue && invite.ExpiresAt.Value < DateTime.UtcNow) return (false, "expired");
         if (invite.MaxUses.HasValue && invite.UsedCount >= invite.MaxUses.Value) return (false, "fully used");

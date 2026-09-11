@@ -41,6 +41,18 @@ public class UpdateMemberUpiDto
     public required string UpiId { get; set; }
 }
 
+public class UpdateGroupDto
+{
+    public int GroupId { get; set; }
+    public required string Name { get; set; }
+}
+
+public class RenameMemberDto
+{
+    public int MemberId { get; set; }
+    public required string Name { get; set; }
+}
+
 public class ExpenseParticipantDto
 {
     public int MemberId { get; set; }

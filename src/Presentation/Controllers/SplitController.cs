@@ -110,6 +110,25 @@ public class SplitController : BaseController
     public async Task<IActionResult> LockGroup(int groupId)
         => HandleResult(await _service.LockGroupAsync(UserId, groupId));
 
+    [HttpPost("groups/{groupId}/unlock")]
+    public async Task<IActionResult> UnlockGroup(int groupId)
+        => HandleResult(await _service.UnlockGroupAsync(UserId, groupId));
+
+    [HttpPost("groups/{groupId}/close")]
+    public async Task<IActionResult> CloseGroup(int groupId)
+        => HandleResult(await _service.CloseGroupAsync(UserId, groupId));
+
+    [HttpPut("groups/{groupId}")]
+    public async Task<IActionResult> UpdateGroup(int groupId, [FromBody] UpdateGroupDto dto)
+    {
+        dto.GroupId = groupId;
+        return HandleResult(await _service.UpdateGroupAsync(UserId, dto));
+    }
+
+    [HttpPost("members/rename")]
+    public async Task<IActionResult> RenameMember([FromBody] RenameMemberDto dto)
+        => HandleResult(await _service.RenameMemberAsync(UserId, dto));
+
     [HttpPost("import-to-ledger")]
     public async Task<IActionResult> ImportToLedger([FromBody] ImportToLedgerDto dto)
         => HandleResult(await _service.ImportToLedgerAsync(UserId, dto));
