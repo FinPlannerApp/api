@@ -33,10 +33,10 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Restore dependencies
-        run: dotnet restore src/Presentation/API.csproj
+        run: dotnet restore FinancialPlanner.sln
 
       - name: Build
-        run: dotnet build src/Presentation/API.csproj -c Release --no-restore
+        run: dotnet build FinancialPlanner.sln -c Release --no-restore
 
       - name: Run Backend Unit & Integration Tests
         run: dotnet test FinancialPlanner.sln -c Release --no-build
