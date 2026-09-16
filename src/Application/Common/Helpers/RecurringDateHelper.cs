@@ -11,18 +11,18 @@ public static class RecurringDateHelper
     public static DateTime GetMostRecentOccurrence(DateTime storedDate, DateTime asOfUtc)
     {
         var dayOfMonth = storedDate.Day;
-        var asOfLocal = asOfUtc.ToLocal().Date;
+        var asOfLocal = asOfUtc.Kind == DateTimeKind.Utc ? asOfUtc.ToLocal().Date : asOfUtc.Date;
 
         var thisMonthDay = Math.Min(dayOfMonth, DateTime.DaysInMonth(asOfLocal.Year, asOfLocal.Month));
-        var thisMonthDate = new DateTime(asOfLocal.Year, asOfLocal.Month, thisMonthDay);
+        var thisMonthDate = new DateTime(asOfLocal.Year, asOfLocal.Month, thisMonthDay, 0, 0, 0, DateTimeKind.Utc);
+        var asOfDate = new DateTime(asOfLocal.Year, asOfLocal.Month, asOfLocal.Day, 0, 0, 0, DateTimeKind.Utc);
 
-        if (thisMonthDate <= asOfLocal)
-            return DateTime.SpecifyKind(thisMonthDate, DateTimeKind.Unspecified).ToUtc();
+        if (thisMonthDate <= asOfDate)
+            return thisMonthDate;
 
         var lastMonth = asOfLocal.AddMonths(-1);
         var lastMonthDay = Math.Min(dayOfMonth, DateTime.DaysInMonth(lastMonth.Year, lastMonth.Month));
-        var lastMonthDate = new DateTime(lastMonth.Year, lastMonth.Month, lastMonthDay);
 
-        return DateTime.SpecifyKind(lastMonthDate, DateTimeKind.Unspecified).ToUtc();
+        return new DateTime(lastMonth.Year, lastMonth.Month, lastMonthDay, 0, 0, 0, DateTimeKind.Utc);
     }
 }
