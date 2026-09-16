@@ -38,6 +38,9 @@ jobs:
       - name: Build
         run: dotnet build src/Presentation/API.csproj -c Release --no-restore
 
+      - name: Run Backend Unit & Integration Tests
+        run: dotnet test FinancialPlanner.sln -c Release --no-build
+
       # Run migrations on production database when pushing to main
       - name: Run Flyway Migrations (Production)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

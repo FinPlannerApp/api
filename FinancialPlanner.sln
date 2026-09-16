@@ -1,4 +1,4 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.0.11010.61 d18.0
@@ -20,6 +20,8 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Presentation", "Presentation", "{6996BBF7-DB31-59BC-C7DD-9A7CCC6138C4}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "API", "src\Presentation\API.csproj", "{3972038D-8982-402A-8889-14E8F529A47E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Application.Tests", "tests\Application.Tests\Application.Tests.csproj", "{A4B2C8D9-1E3F-4A5B-9C8D-7E6F5A4B3C2D}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -79,6 +81,10 @@ Global
 		{3972038D-8982-402A-8889-14E8F529A47E}.Release|x64.Build.0 = Release|Any CPU
 		{3972038D-8982-402A-8889-14E8F529A47E}.Release|x86.ActiveCfg = Release|Any CPU
 		{3972038D-8982-402A-8889-14E8F529A47E}.Release|x86.Build.0 = Release|Any CPU
+		{A4B2C8D9-1E3F-4A5B-9C8D-7E6F5A4B3C2D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A4B2C8D9-1E3F-4A5B-9C8D-7E6F5A4B3C2D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A4B2C8D9-1E3F-4A5B-9C8D-7E6F5A4B3C2D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A4B2C8D9-1E3F-4A5B-9C8D-7E6F5A4B3C2D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
