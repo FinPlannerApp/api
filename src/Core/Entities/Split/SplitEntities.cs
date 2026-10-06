@@ -94,6 +94,9 @@ public class SplitExpenseParticipant : BaseEntity
 
     public decimal ShareAmount { get; set; }
 
+    /// <summary>Raw value typed for Exact / Percentage / Shares splits (null for Equal). Lets an expense be edited without losing inputs.</summary>
+    public decimal? SplitValue { get; set; }
+
     /// <summary>
     /// Set once this share has been imported as a real personal
     /// transaction — a plain int, no FK constraint into Transactions,

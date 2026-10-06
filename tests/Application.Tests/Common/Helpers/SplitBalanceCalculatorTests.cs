@@ -208,4 +208,182 @@ public class SplitBalanceCalculatorTests
         result.Sum(d => d.Amount).Should().Be(300m);
         result.Should().OnlyContain(d => d.FromMemberId == 1);
     }
+    [Fact]
+    public void CalculateNetBalances_KeepsPaidShareAndSettledSeparate_SoTheyAddUpToNet()
+    {
+        var group = TwoPersonDinnerGroup(new SplitSettlement
+        {
+            FromMemberId = 2,
+            ToMemberId = 1,
+            Amount = 200,
+            PaymentReference = "r",
+            Status = SettlementStatus.Completed
+        });
+
+        var balances = SplitBalanceCalculator.CalculateNetBalances(group);
+        var alice = balances.Single(b => b.MemberId == 1);
+        var bob = balances.Single(b => b.MemberId == 2);
+
+        alice.TotalPaid.Should().Be(1000m);
+        alice.TotalShare.Should().Be(500m);
+        alice.SettledReceived.Should().Be(200m);
+        alice.NetBalance.Should().Be(300m);
+
+        bob.TotalPaid.Should().Be(0m);
+        bob.TotalShare.Should().Be(500m);
+        bob.SettledPaid.Should().Be(200m);
+        bob.NetBalance.Should().Be(-300m);
+
+        foreach (var b in balances)
+            b.NetBalance.Should().Be(b.TotalPaid - b.TotalShare + b.SettledPaid - b.SettledReceived);
+    }
+
+    [Fact]
+    public void CalculateNetBalances_AwaitingConfirmation_IsTrackedAsInTransitNotNet()
+    {
+        var group = TwoPersonDinnerGroup(new SplitSettlement
+        {
+            FromMemberId = 2,
+            ToMemberId = 1,
+            Amount = 500,
+            PaymentReference = "r",
+            Status = SettlementStatus.AwaitingConfirmation
+        });
+
+        var balances = SplitBalanceCalculator.CalculateNetBalances(group);
+
+        balances.Single(b => b.MemberId == 1).NetBalance.Should().Be(500m);
+        balances.Single(b => b.MemberId == 1).InTransit.Should().Be(-500m);
+        balances.Single(b => b.MemberId == 2).NetBalance.Should().Be(-500m);
+        balances.Single(b => b.MemberId == 2).InTransit.Should().Be(500m);
+    }
+
+    [Fact]
+    public void SimplifyDebts_PaymentInTransit_IsNotRequestedAgain()
+    {
+        var group = TwoPersonDinnerGroup(new SplitSettlement
+        {
+            FromMemberId = 2,
+            ToMemberId = 1,
+            Amount = 500,
+            PaymentReference = "r",
+            Status = SettlementStatus.AwaitingConfirmation
+        });
+
+        var plan = SplitBalanceCalculator.SimplifyDebts(SplitBalanceCalculator.CalculateNetBalances(group));
+
+        plan.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void SimplifyDebts_FindsDisjointSubgroups_ThatSettleAmongThemselves()
+    {
+        var balances = new List<MemberBalance>
+        {
+            new() { MemberId = 1, MemberName = "A", NetBalance = -100m },
+            new() { MemberId = 2, MemberName = "B", NetBalance = -200m },
+            new() { MemberId = 3, MemberName = "C", NetBalance = 100m },
+            new() { MemberId = 4, MemberName = "D", NetBalance = 200m }
+        };
+
+        var plan = SplitBalanceCalculator.SimplifyDebts(balances);
+
+        plan.Should().HaveCount(2);
+        plan.Should().Contain(d => d.FromMemberId == 1 && d.ToMemberId == 3 && d.Amount == 100m);
+        plan.Should().Contain(d => d.FromMemberId == 2 && d.ToMemberId == 4 && d.Amount == 200m);
+    }
+
+    [Fact]
+    public void SimplifyDebts_FiveMembers_UsesThreePaymentsAndClearsEveryone()
+    {
+        var balances = new List<MemberBalance>
+        {
+            new() { MemberId = 1, MemberName = "A", NetBalance = 250m },
+            new() { MemberId = 2, MemberName = "B", NetBalance = 200m },
+            new() { MemberId = 3, MemberName = "C", NetBalance = -250m },
+            new() { MemberId = 4, MemberName = "D", NetBalance = 250m },
+            new() { MemberId = 5, MemberName = "E", NetBalance = -450m }
+        };
+
+        var plan = SplitBalanceCalculator.SimplifyDebts(balances);
+
+        plan.Should().HaveCount(3);
+        AssertPlanClearsAll(balances, plan);
+    }
+
+    [Fact]
+    public void SimplifyDebts_EveryPlanClearsEveryBalance_ForManyRandomGroups()
+    {
+        var rng = new Random(12345);
+        for (var round = 0; round < 300; round++)
+        {
+            var n = rng.Next(2, 10);
+            var net = new List<decimal>();
+            for (var i = 0; i < n - 1; i++) net.Add(rng.Next(-5000, 5001) / 100m);
+            net.Add(-net.Sum());
+
+            var balances = net.Select((v, i) => new MemberBalance { MemberId = i + 1, MemberName = "M" + i, NetBalance = v }).ToList();
+            var plan = SplitBalanceCalculator.SimplifyDebts(balances);
+
+            AssertPlanClearsAll(balances, plan);
+            plan.Should().OnlyContain(d => d.Amount > 0m);
+            plan.Count.Should().BeLessThanOrEqualTo(Math.Max(0, balances.Count(b => b.NetBalance != 0m) - 1));
+        }
+    }
+
+    [Fact]
+    public void SimplifyDebts_ToleratesAPaisaOfRoundingResidue()
+    {
+        var balances = new List<MemberBalance>
+        {
+            new() { MemberId = 1, MemberName = "A", NetBalance = -50.00m },
+            new() { MemberId = 2, MemberName = "B", NetBalance = 50.01m }
+        };
+
+        var plan = SplitBalanceCalculator.SimplifyDebts(balances);
+
+        plan.Should().HaveCount(1);
+        plan[0].Amount.Should().Be(50.00m);
+    }
+
+    private static void AssertPlanClearsAll(List<MemberBalance> balances, List<SimplifiedDebt> plan)
+    {
+        var left = balances.ToDictionary(b => b.MemberId, b => b.NetBalance);
+        foreach (var d in plan)
+        {
+            left[d.FromMemberId] += d.Amount;
+            left[d.ToMemberId] -= d.Amount;
+        }
+        left.Values.Should().OnlyContain(v => Math.Abs(v) <= 0.01m);
+    }
+
+    private static SplitGroup TwoPersonDinnerGroup(SplitSettlement settlement)
+    {
+        var expense = new SplitExpense
+        {
+            Description = "Dinner",
+            Amount = 1000,
+            SplitType = SplitType.Equal,
+            Payers = new List<SplitExpensePayer> { new() { SplitGroupMemberId = 1, AmountPaid = 1000 } },
+            Participants = new List<SplitExpenseParticipant>
+            {
+                new() { SplitGroupMemberId = 1, ShareAmount = 500 },
+                new() { SplitGroupMemberId = 2, ShareAmount = 500 }
+            }
+        };
+
+        return new SplitGroup
+        {
+            Name = "Test Group",
+            CreatedByUserId = "user-1",
+            ShareToken = "token",
+            Members = new List<SplitGroupMember>
+            {
+                new() { Id = 1, Name = "Alice" },
+                new() { Id = 2, Name = "Bob" }
+            },
+            Expenses = new List<SplitExpense> { expense },
+            Settlements = new List<SplitSettlement> { settlement }
+        };
+    }
 }

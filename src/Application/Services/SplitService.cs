@@ -199,7 +199,12 @@ public class SplitService : ISplitService
 
         foreach (var (memberId, share) in shares)
         {
-            expense.Participants.Add(new SplitExpenseParticipant { SplitGroupMemberId = memberId, ShareAmount = share });
+            expense.Participants.Add(new SplitExpenseParticipant
+            {
+                SplitGroupMemberId = memberId,
+                ShareAmount = share,
+                SplitValue = SplitValueFor(dto.SplitType, dto.Participants.First(p => p.MemberId == memberId))
+            });
         }
 
         _context.SplitExpenses.Add(expense);
@@ -220,20 +225,14 @@ public class SplitService : ISplitService
         return dtoRes;
     }
 
-    public async Task<Result<List<ExpenseDto>>> GetExpensesAsync(string userId, int groupId)
+    public async Task<Result<ExpensePageDto>> GetExpensesAsync(
+        string userId, int groupId, string? cursor = null, int? limit = null, string? search = null)
     {
         var group = await LoadGroupForUserAsync(userId, groupId);
         if (group == null)
-            return Result.Failure<List<ExpenseDto>>(new Error("SplitGroup.NotFound", "Group not found."));
+            return Result.Failure<ExpensePageDto>(new Error("SplitGroup.NotFound", "Group not found."));
 
-        var expenses = await _context.SplitExpenses
-            .Include(e => e.Payers).ThenInclude(p => p.SplitGroupMember)
-            .Include(e => e.Participants).ThenInclude(p => p.SplitGroupMember)
-            .Where(e => e.SplitGroupId == groupId)
-            .OrderByDescending(e => e.Date)
-            .ToListAsync();
-
-        return Result.Success(expenses.Select(MapExpenseToDto).ToList());
+        return await QueryExpensePageAsync(groupId, cursor, limit, search);
     }
 
     public async Task<Result<GroupBalancesDto>> GetBalancesAsync(string userId, int groupId)
@@ -251,21 +250,54 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<GroupFullDetailsDto>(new Error("SplitGroup.NotFound", "Group not found."));
 
-        var expenses = await _context.SplitExpenses
-            .Include(e => e.Payers).ThenInclude(p => p.SplitGroupMember)
-            .Include(e => e.Participants).ThenInclude(p => p.SplitGroupMember)
-            .Where(e => e.SplitGroupId == groupId)
-            .OrderByDescending(e => e.Date)
-            .ToListAsync();
+        var page = await QueryExpensePageAsync(groupId, null, null, null);
+        if (!page.IsSuccess)
+            return Result.Failure<GroupFullDetailsDto>(page.Error);
 
         var dto = new GroupFullDetailsDto
         {
             Group = MapToDto(group),
-            Expenses = expenses.Select(MapExpenseToDto).ToList(),
+            Expenses = page.Value.Items,
+            NextCursor = page.Value.NextCursor,
+            TotalExpenseCount = page.Value.TotalCount,
             Balances = ComputeBalancesDto(group)
         };
 
         return Result.Success(dto);
+    }
+
+    public async Task<Result<GroupExportDto>> GetGroupExportAsync(string userId, int groupId)
+    {
+        var group = await LoadGroupForUserAsync(userId, groupId);
+        if (group == null)
+            return Result.Failure<GroupExportDto>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        var expenses = await _context.SplitExpenses
+            .AsNoTracking()
+            .Include(e => e.Payers).ThenInclude(p => p.SplitGroupMember)
+            .Include(e => e.Participants).ThenInclude(p => p.SplitGroupMember)
+            .Where(e => e.SplitGroupId == groupId)
+            .OrderBy(e => e.Date).ThenBy(e => e.Id)
+            .ToListAsync();
+
+        var settlements = await _context.SplitSettlements
+            .AsNoTracking()
+            .Include(s => s.FromMember)
+            .Include(s => s.ToMember)
+            .Where(s => s.SplitGroupId == groupId)
+            .OrderBy(s => s.CreatedAt)
+            .ToListAsync();
+
+        return Result.Success(new GroupExportDto
+        {
+            GroupName = group.Name,
+            Currency = group.Currency,
+            ExportedAtUtc = DateTime.UtcNow,
+            Members = group.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, LinkedUserId = m.LinkedUserId, UpiId = m.UpiId }).ToList(),
+            Expenses = expenses.Select(MapExpenseToDto).ToList(),
+            Settlements = settlements.Select(MapSettlementToDto).ToList(),
+            Balances = ComputeBalancesDto(group)
+        });
     }
 
     public async Task<Result<SettlementDto>> CreateSettlementAsync(string userId, CreateSettlementDto dto)
@@ -295,10 +327,14 @@ public class SplitService : ISplitService
                     "SplitGroup.Forbidden", "You can only create a settlement where you're the one paying."));
         }
 
-        // 2. Debt Limit Validation: Validate against the FromMember's actual overall outstanding debt
+        // 2. Limit validation. Payments already sent (awaiting confirmation) count
+        // against what is still owed, so the same debt can't be paid twice. The
+        // receiver must also actually be owed this much overall.
         var currentBalances = SplitBalanceCalculator.CalculateNetBalances(group);
-        var fromMemberBalance = currentBalances.First(b => b.MemberId == dto.FromMemberId).NetBalance;
-        var fromMemberOwes = Math.Max(0, -fromMemberBalance);
+        var fromEntry = currentBalances.First(b => b.MemberId == dto.FromMemberId);
+        var toEntry = currentBalances.First(b => b.MemberId == dto.ToMemberId);
+        var fromMemberOwes = Math.Max(0, -(fromEntry.NetBalance + fromEntry.InTransit));
+        var toMemberIsOwed = Math.Max(0, toEntry.NetBalance + toEntry.InTransit);
 
         if (dto.Amount > fromMemberOwes + 0.01m) // small tolerance for rounding
         {
@@ -307,11 +343,19 @@ public class SplitService : ISplitService
                 $"{fromMember.Name} owes ₹{fromMemberOwes:F2} overall — this settlement (₹{dto.Amount:F2}) exceeds that."));
         }
 
-        // 3. Update existing pending settlement if present
+        if (dto.Amount > toMemberIsOwed + 0.01m)
+        {
+            return Result.Failure<SettlementDto>(new Error(
+                "SplitSettlement.ExceedsCredit",
+                $"{toMember.Name} is only owed ₹{toMemberIsOwed:F2} overall — this settlement (₹{dto.Amount:F2}) exceeds that."));
+        }
+
+        // 3. Re-use an existing not-yet-sent settlement for the same pair. A payment
+        // that was already marked as sent is never overwritten.
         var existingPending = group.Settlements.FirstOrDefault(s =>
             s.FromMemberId == dto.FromMemberId &&
             s.ToMemberId == dto.ToMemberId &&
-            (s.Status == SettlementStatus.Pending || s.Status == SettlementStatus.AwaitingConfirmation));
+            s.Status == SettlementStatus.Pending);
 
         if (existingPending != null)
         {
@@ -527,13 +571,17 @@ public class SplitService : ISplitService
     {
         var group = await _context.SplitGroups
             .Include(g => g.Members)
-            .Include(g => g.Expenses).ThenInclude(e => e.Payers).ThenInclude(p => p.SplitGroupMember)
-            .Include(g => g.Expenses).ThenInclude(e => e.Participants).ThenInclude(p => p.SplitGroupMember)
+            .Include(g => g.Expenses).ThenInclude(e => e.Payers)
+            .Include(g => g.Expenses).ThenInclude(e => e.Participants)
             .Include(g => g.Settlements)
             .FirstOrDefaultAsync(g => g.ShareToken == shareToken);
 
         if (group == null)
             return Result.Failure<PublicGroupViewDto>(new Error("SplitGroup.NotFound", "This link doesn't point to a valid group."));
+
+        var page = await QueryExpensePageAsync(group.Id, null, null, null);
+        if (!page.IsSuccess)
+            return Result.Failure<PublicGroupViewDto>(page.Error);
 
         return Result.Success(new PublicGroupViewDto
         {
@@ -544,9 +592,24 @@ public class SplitService : ISplitService
             // to someone actually operating the group (the creator),
             // not anyone who happens to have the link.
             Members = group.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, UpiId = null }).ToList(),
-            Expenses = group.Expenses.OrderByDescending(e => e.Date).Select(MapExpenseToDto).ToList(),
+            Expenses = page.Value.Items,
+            NextCursor = page.Value.NextCursor,
+            TotalExpenseCount = page.Value.TotalCount,
             Balances = ComputeBalancesDto(group)
         });
+    }
+
+    public async Task<Result<ExpensePageDto>> GetPublicExpensesAsync(string shareToken, string? cursor, int? limit)
+    {
+        var groupId = await _context.SplitGroups
+            .Where(g => g.ShareToken == shareToken)
+            .Select(g => (int?)g.Id)
+            .FirstOrDefaultAsync();
+
+        if (groupId == null)
+            return Result.Failure<ExpensePageDto>(new Error("SplitGroup.NotFound", "This link doesn't point to a valid group."));
+
+        return await QueryExpensePageAsync(groupId.Value, cursor, limit, null);
     }
 
     public async Task<Result<InviteCreatedDto>> CreateInviteAsync(string userId, CreateInviteDto dto)
@@ -739,7 +802,14 @@ public class SplitService : ISplitService
             expense.Payers.Add(new SplitExpensePayer { SplitGroupMemberId = payer.MemberId, AmountPaid = payer.AmountPaid });
 
         foreach (var (memberId, share) in shares)
-            expense.Participants.Add(new SplitExpenseParticipant { SplitGroupMemberId = memberId, ShareAmount = share });
+        {
+            expense.Participants.Add(new SplitExpenseParticipant
+            {
+                SplitGroupMemberId = memberId,
+                ShareAmount = share,
+                SplitValue = SplitValueFor(dto.SplitType, dto.Participants.First(p => p.MemberId == memberId))
+            });
+        }
 
         await _context.SaveChangesAsync();
 
@@ -1016,19 +1086,7 @@ public class SplitService : ISplitService
             .OrderByDescending(s => s.CompletedAt ?? s.CreatedAt)
             .ToListAsync();
 
-        return Result.Success(settlements.Select(s => new SettlementDto
-        {
-            Id = s.Id,
-            FromMemberId = s.FromMemberId,
-            FromMemberName = s.FromMember.Name,
-            ToMemberId = s.ToMemberId,
-            ToMemberName = s.ToMember.Name,
-            Amount = s.Amount,
-            Method = s.Method,
-            Status = s.Status,
-            PaymentReference = s.PaymentReference,
-            CompletedAt = s.CompletedAt
-        }).ToList());
+        return Result.Success(settlements.Select(MapSettlementToDto).ToList());
     }
 
     private static (bool IsValid, string? Reason) ValidateInvite(SplitGroupInvite invite)
@@ -1092,6 +1150,9 @@ public class SplitService : ISplitService
                 MemberName = b.MemberName,
                 TotalPaid = b.TotalPaid,
                 TotalShare = b.TotalShare,
+                SettledPaid = b.SettledPaid,
+                SettledReceived = b.SettledReceived,
+                InTransit = b.InTransit,
                 NetBalance = b.NetBalance
             }).ToList(),
             SimplifiedPlan = simplified.Select(s => new SimplifiedDebtDto
@@ -1101,8 +1162,111 @@ public class SplitService : ISplitService
                 ToMemberId = s.ToMemberId,
                 ToMemberName = s.ToMemberName,
                 Amount = s.Amount
-            }).ToList()
+            }).ToList(),
+            CategoryBreakdown = SplitBalanceCalculator.CategoryTotals(group.Expenses)
+                .Select(c => new CategorySpendDto { Category = c.Category, Amount = c.Amount, Count = c.Count })
+                .ToList(),
+            ExpenseCount = group.Expenses.Count
         };
+    }
+
+    private static SettlementDto MapSettlementToDto(SplitSettlement s) => new()
+    {
+        Id = s.Id,
+        FromMemberId = s.FromMemberId,
+        FromMemberName = s.FromMember.Name,
+        ToMemberId = s.ToMemberId,
+        ToMemberName = s.ToMember.Name,
+        Amount = s.Amount,
+        Method = s.Method,
+        Status = s.Status,
+        PaymentReference = s.PaymentReference,
+        CompletedAt = s.CompletedAt
+    };
+
+    private static decimal? SplitValueFor(SplitType type, ExpenseParticipantDto p) => type switch
+    {
+        SplitType.Exact => p.ExactAmount,
+        SplitType.Percentage => p.Percentage,
+        SplitType.Shares => p.Shares,
+        _ => null
+    };
+
+    private const int DefaultPageSize = 20;
+    private const int MaxPageSize = 100;
+
+    /// <summary>
+    /// Keyset pagination over (Date desc, Id desc). An expense back-dated to an
+    /// earlier day is therefore returned at its correct place in the timeline
+    /// rather than at the top, and paging stays stable while rows are added.
+    /// </summary>
+    private async Task<Result<ExpensePageDto>> QueryExpensePageAsync(int groupId, string? cursor, int? limit, string? search)
+    {
+        var pageSize = Math.Clamp(limit ?? DefaultPageSize, 1, MaxPageSize);
+
+        var query = _context.SplitExpenses
+            .AsNoTracking()
+            .Where(e => e.SplitGroupId == groupId);
+
+        var term = search?.Trim().ToLowerInvariant();
+        if (!string.IsNullOrEmpty(term))
+        {
+            query = query.Where(e =>
+                e.Description.ToLower().Contains(term) ||
+                e.Payers.Any(p => p.SplitGroupMember.Name.ToLower().Contains(term)));
+        }
+
+        var total = await query.CountAsync();
+
+        if (!string.IsNullOrWhiteSpace(cursor))
+        {
+            if (!TryDecodeCursor(cursor, out var cursorDate, out var cursorId))
+                return Result.Failure<ExpensePageDto>(new Error("SplitExpense.InvalidCursor", "Invalid page cursor."));
+
+            query = query.Where(e => e.Date < cursorDate || (e.Date == cursorDate && e.Id < cursorId));
+        }
+
+        var rows = await query
+            .Include(e => e.Payers).ThenInclude(p => p.SplitGroupMember)
+            .Include(e => e.Participants).ThenInclude(p => p.SplitGroupMember)
+            .OrderByDescending(e => e.Date).ThenByDescending(e => e.Id)
+            .Take(pageSize + 1)
+            .ToListAsync();
+
+        var hasMore = rows.Count > pageSize;
+        var pageRows = hasMore ? rows.Take(pageSize).ToList() : rows;
+
+        return Result.Success(new ExpensePageDto
+        {
+            Items = pageRows.Select(MapExpenseToDto).ToList(),
+            NextCursor = hasMore ? EncodeCursor(pageRows[^1]) : null,
+            TotalCount = total
+        });
+    }
+
+    private static string EncodeCursor(SplitExpense e)
+    {
+        var raw = $"{e.Date.Ticks}.{e.Id}";
+        return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(raw))
+            .Replace('+', '-').Replace('/', '_').TrimEnd('=');
+    }
+
+    private static bool TryDecodeCursor(string cursor, out DateTime date, out int id)
+    {
+        date = default;
+        id = 0;
+        try
+        {
+            var b64 = cursor.Replace('-', '+').Replace('_', '/');
+            b64 = b64.PadRight(b64.Length + (4 - b64.Length % 4) % 4, '=');
+            var parts = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(b64)).Split('.');
+            if (parts.Length != 2 || !long.TryParse(parts[0], out var ticks) || !int.TryParse(parts[1], out id))
+                return false;
+            date = new DateTime(ticks, DateTimeKind.Utc);
+            return true;
+        }
+        catch (FormatException) { return false; }
+        catch (ArgumentOutOfRangeException) { return false; }
     }
 
     private static ExpenseDto MapExpenseToDto(SplitExpense e) => new()
@@ -1114,7 +1278,7 @@ public class SplitService : ISplitService
         Category = e.Category,
         SplitType = e.SplitType,
         Payers = e.Payers.Select(p => new PayerLineDto { MemberId = p.SplitGroupMemberId, MemberName = p.SplitGroupMember.Name, AmountPaid = p.AmountPaid }).ToList(),
-        Participants = e.Participants.Select(p => new ParticipantLineDto { MemberId = p.SplitGroupMemberId, MemberName = p.SplitGroupMember.Name, ShareAmount = p.ShareAmount }).ToList()
+        Participants = e.Participants.Select(p => new ParticipantLineDto { MemberId = p.SplitGroupMemberId, MemberName = p.SplitGroupMember.Name, ShareAmount = p.ShareAmount, SplitValue = p.SplitValue }).ToList()
     };
 
     private static GroupDto MapToDto(SplitGroup g) => new()

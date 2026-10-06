@@ -12,7 +12,9 @@ public interface ISplitService
     Task<Result<MemberDto>> AddMemberAsync(string userId, AddMemberDto dto);
     Task<Result<bool>> UpdateMemberUpiAsync(string userId, UpdateMemberUpiDto dto);
     Task<Result<ExpenseDto>> AddExpenseAsync(string userId, CreateExpenseDto dto);
-    Task<Result<List<ExpenseDto>>> GetExpensesAsync(string userId, int groupId);
+    Task<Result<ExpensePageDto>> GetExpensesAsync(string userId, int groupId, string? cursor = null, int? limit = null, string? search = null);
+    Task<Result<ExpensePageDto>> GetPublicExpensesAsync(string shareToken, string? cursor, int? limit);
+    Task<Result<GroupExportDto>> GetGroupExportAsync(string userId, int groupId);
     Task<Result<GroupBalancesDto>> GetBalancesAsync(string userId, int groupId);
     Task<Result<SettlementDto>> CreateSettlementAsync(string userId, CreateSettlementDto dto);
     Task<Result<ExpenseDto>> UpdateExpenseAsync(string userId, int expenseId, UpdateExpenseDto dto);

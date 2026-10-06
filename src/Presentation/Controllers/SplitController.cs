@@ -40,8 +40,13 @@ public class SplitController : BaseController
         => HandleResult(await _service.AddExpenseAsync(UserId, dto));
 
     [HttpGet("groups/{groupId}/expenses")]
-    public async Task<IActionResult> GetExpenses(int groupId)
-        => HandleResult(await _service.GetExpensesAsync(UserId, groupId));
+    public async Task<IActionResult> GetExpenses(
+    int groupId, [FromQuery] string? cursor, [FromQuery] int? limit, [FromQuery] string? search)
+    => HandleResult(await _service.GetExpensesAsync(UserId, groupId, cursor, limit, search));
+
+    [HttpGet("groups/{groupId}/export")]
+    public async Task<IActionResult> GetGroupExport(int groupId)
+        => HandleResult(await _service.GetGroupExportAsync(UserId, groupId));
 
     [HttpGet("groups/{groupId}/balances")]
     public async Task<IActionResult> GetBalances(int groupId)
@@ -88,6 +93,12 @@ public class SplitController : BaseController
     [AllowAnonymous]
     public async Task<IActionResult> GetPublicView(string shareToken)
         => HandleResult(await _service.GetPublicGroupViewAsync(shareToken));
+
+    [HttpGet("public/{shareToken}/expenses")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetPublicExpenses(
+    string shareToken, [FromQuery] string? cursor, [FromQuery] int? limit)
+    => HandleResult(await _service.GetPublicExpensesAsync(shareToken, cursor, limit));
 
     [HttpPost("invites")]
     public async Task<IActionResult> CreateInvite([FromBody] CreateInviteDto dto)

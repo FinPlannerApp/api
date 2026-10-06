@@ -103,12 +103,23 @@ public class ParticipantLineDto
     public int MemberId { get; set; }
     public string MemberName { get; set; } = string.Empty;
     public decimal ShareAmount { get; set; }
+    /// <summary>Raw input behind the share (exact / percentage / share count). Null for Equal.</summary>
+    public decimal? SplitValue { get; set; }
 }
 
 public class GroupBalancesDto
 {
     public List<MemberBalanceDto> Balances { get; set; } = new();
     public List<SimplifiedDebtDto> SimplifiedPlan { get; set; } = new();
+    public List<CategorySpendDto> CategoryBreakdown { get; set; } = new();
+    public int ExpenseCount { get; set; }
+}
+
+public class CategorySpendDto
+{
+    public string Category { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
+    public int Count { get; set; }
 }
 
 public class MemberBalanceDto
@@ -117,6 +128,10 @@ public class MemberBalanceDto
     public string MemberName { get; set; } = string.Empty;
     public decimal TotalPaid { get; set; }
     public decimal TotalShare { get; set; }
+    public decimal SettledPaid { get; set; }
+    public decimal SettledReceived { get; set; }
+    public decimal InTransit { get; set; }
+    /// <summary>TotalPaid - TotalShare + SettledPaid - SettledReceived</summary>
     public decimal NetBalance { get; set; }
 }
 
@@ -177,13 +192,34 @@ public class PublicGroupViewDto
     public string GroupName { get; set; } = string.Empty;
     public string Currency { get; set; } = "INR";
     public List<MemberDto> Members { get; set; } = new();
-    public List<ExpenseDto> Expenses { get; set; } = new();
+    public List<ExpenseDto> Expenses { get; set; } = new(); // first page only
+    public string? NextCursor { get; set; }
+    public int TotalExpenseCount { get; set; }
     public GroupBalancesDto Balances { get; set; } = new();
+}
+public class ExpensePageDto
+{
+    public List<ExpenseDto> Items { get; set; } = new();
+    public string? NextCursor { get; set; }
+    public int TotalCount { get; set; }
 }
 
 public class GroupFullDetailsDto
 {
     public GroupDto Group { get; set; } = new();
+    public List<ExpenseDto> Expenses { get; set; } = new(); // first page only
+    public string? NextCursor { get; set; }
+    public int TotalExpenseCount { get; set; }
+    public GroupBalancesDto Balances { get; set; } = new();
+}
+
+public class GroupExportDto
+{
+    public string GroupName { get; set; } = string.Empty;
+    public string Currency { get; set; } = "INR";
+    public DateTime ExportedAtUtc { get; set; }
+    public List<MemberDto> Members { get; set; } = new();
     public List<ExpenseDto> Expenses { get; set; } = new();
+    public List<SettlementDto> Settlements { get; set; } = new();
     public GroupBalancesDto Balances { get; set; } = new();
 }
