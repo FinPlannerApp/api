@@ -131,6 +131,33 @@ using (var scope = app.Services.CreateScope())
         {
             await roleManager.CreateAsync(new Microsoft.AspNetCore.Identity.IdentityRole("Admin"));
         }
+
+        // Seed Demo User & Full Realistic Demo Data
+        var userManager = services.GetRequiredService<Microsoft.AspNetCore.Identity.UserManager<Domain.Entities.ApplicationUser>>();
+        var demoUser = await userManager.FindByNameAsync("demouser");
+        if (demoUser == null)
+        {
+            demoUser = new Domain.Entities.ApplicationUser
+            {
+                Name = "Demo Planner User",
+                UserName = "demouser",
+                Email = "demo@planner.local",
+                EmailConfirmed = true,
+                DateOfBirth = DateTime.SpecifyKind(new DateTime(1992, 1, 1), DateTimeKind.Utc)
+            };
+            var createResult = await userManager.CreateAsync(demoUser, "Password123!@#");
+            if (createResult.Succeeded)
+            {
+                await userManager.AddToRoleAsync(demoUser, "Admin");
+            }
+        }
+
+        if (demoUser != null)
+        {
+            var dbContext = services.GetRequiredService<Application.Contracts.IApplicationDbContext>();
+            var demoSeeder = new Application.Services.DemoDataSeederService(dbContext);
+            await demoSeeder.SeedDemoDataAsync(demoUser.Id);
+        }
     }
     catch (Exception ex)
     {

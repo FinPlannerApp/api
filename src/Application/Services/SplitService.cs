@@ -64,7 +64,12 @@ public class SplitService : ISplitService
             .Where(g => g.CreatedByUserId == userId || g.Members.Any(m => m.LinkedUserId == userId))
             .ToListAsync();
 
-        return Result.Success(groups.Select(MapToDto).ToList());
+        // The list only needs people who are still in each group.
+        var dtos = groups.Select(MapToDto).ToList();
+        foreach (var dto in dtos)
+            dto.Members = dto.Members.Where(m => m.LeftAt == null).ToList();
+
+        return Result.Success(dtos);
     }
 
     public async Task<Result<GroupDto>> GetGroupAsync(string userId, int groupId)
@@ -163,6 +168,12 @@ public class SplitService : ISplitService
             return Result.Failure<ExpenseDto>(new Error(
                 "SplitExpense.MemberNotInGroup",
                 "One or more payers or participants don't belong to this group."));
+
+        var leftMemberIds = group.Members.Where(m => m.LeftAt != null).Select(m => m.Id).ToHashSet();
+        if (allReferencedIds.Any(leftMemberIds.Contains))
+            return Result.Failure<ExpenseDto>(new Error(
+                "SplitExpense.MemberLeft",
+                "Someone you picked has left the group — they can't be added to a new expense."));
 
         List<(int MemberId, decimal Share)> shares;
         try
@@ -293,7 +304,7 @@ public class SplitService : ISplitService
             GroupName = group.Name,
             Currency = group.Currency,
             ExportedAtUtc = DateTime.UtcNow,
-            Members = group.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, LinkedUserId = m.LinkedUserId, UpiId = m.UpiId }).ToList(),
+            Members = group.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, LinkedUserId = m.LinkedUserId, UpiId = m.UpiId, LeftAt = m.LeftAt }).ToList(),
             Expenses = expenses.Select(MapExpenseToDto).ToList(),
             Settlements = settlements.Select(MapSettlementToDto).ToList(),
             Balances = ComputeBalancesDto(group)
@@ -306,6 +317,9 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<SettlementDto>(new Error("SplitGroup.NotFound", "Group not found."));
 
+        if (group.Status == SplitGroupStatus.Archived)
+            return Result.Failure<SettlementDto>(new Error("SplitSettlement.GroupClosed", "This group is closed — payments can't be recorded."));
+
         if (dto.Amount <= 0)
             return Result.Failure<SettlementDto>(new Error("SplitSettlement.InvalidAmount", "Amount must be greater than zero."));
 
@@ -317,108 +331,220 @@ public class SplitService : ISplitService
         if (fromMember == null || toMember == null)
             return Result.Failure<SettlementDto>(new Error("SplitMember.NotFound", "One or both members not found in this group."));
 
-        // 1. Authorization: The group creator can record a settlement on behalf of any
-        // member. A linked member can only create a settlement where they are the payer.
-        if (group.CreatedByUserId != userId)
-        {
-            var callerMember = FindMemberForUser(group, userId);
-            if (callerMember == null || callerMember.Id != dto.FromMemberId)
-                return Result.Failure<SettlementDto>(new Error(
-                    "SplitGroup.Forbidden", "You can only create a settlement where you're the one paying."));
-        }
+        if (fromMember.LeftAt != null || toMember.LeftAt != null)
+            return Result.Failure<SettlementDto>(new Error("SplitSettlement.MemberLeft", "Someone in this payment has left the group."));
 
-        // 2. Limit validation. Payments already sent (awaiting confirmation) count
-        // against what is still owed, so the same debt can't be paid twice. The
-        // receiver must also actually be owed this much overall.
-        var currentBalances = SplitBalanceCalculator.CalculateNetBalances(group);
-        var fromEntry = currentBalances.First(b => b.MemberId == dto.FromMemberId);
-        var toEntry = currentBalances.First(b => b.MemberId == dto.ToMemberId);
-        var fromMemberOwes = Math.Max(0, -(fromEntry.NetBalance + fromEntry.InTransit));
-        var toMemberIsOwed = Math.Max(0, toEntry.NetBalance + toEntry.InTransit);
-
-        if (dto.Amount > fromMemberOwes + 0.01m) // small tolerance for rounding
-        {
+        // 1. Authorization: the group creator can record a payment on behalf of anyone.
+        // Everyone else can record one only if they are the payer OR the receiver.
+        var isAdmin = group.CreatedByUserId == userId;
+        var callerMember = FindMemberForUser(group, userId);
+        var callerIsPayer = callerMember != null && callerMember.Id == dto.FromMemberId;
+        var callerIsReceiver = callerMember != null && callerMember.Id == dto.ToMemberId;
+        if (!isAdmin && !callerIsPayer && !callerIsReceiver)
             return Result.Failure<SettlementDto>(new Error(
-                "SplitSettlement.ExceedsDebt",
-                $"{fromMember.Name} owes ₹{fromMemberOwes:F2} overall — this settlement (₹{dto.Amount:F2}) exceeds that."));
-        }
+                "SplitGroup.Forbidden", "You can only record a payment that you're part of."));
 
-        if (dto.Amount > toMemberIsOwed + 0.01m)
+        // 2. Limit validation (see CheckSettlementLimits).
+        var limitError = CheckSettlementLimits(group, fromMember, toMember, dto.Amount);
+        if (limitError != null)
+            return Result.Failure<SettlementDto>(limitError);
+
+        // 3. Decide the starting status. "Already paid" recorded by the receiver (or
+        // by the admin for other people) is final; recorded by the payer it still needs
+        // the receiver's confirmation, so nobody can claim a payment unilaterally.
+        var status = SettlementStatus.Pending;
+        if (dto.AlreadyPaid)
         {
-            return Result.Failure<SettlementDto>(new Error(
-                "SplitSettlement.ExceedsCredit",
-                $"{toMember.Name} is only owed ₹{toMemberIsOwed:F2} overall — this settlement (₹{dto.Amount:F2}) exceeds that."));
+            var finalByReceiverOrAdmin = callerIsReceiver || (isAdmin && !callerIsPayer);
+            status = finalByReceiverOrAdmin ? SettlementStatus.Completed : SettlementStatus.AwaitingConfirmation;
         }
 
-        // 3. Re-use an existing not-yet-sent settlement for the same pair. A payment
-        // that was already marked as sent is never overwritten.
-        var existingPending = group.Settlements.FirstOrDefault(s =>
+        // 4. Re-use an existing not-yet-sent request for the same pair. A payment that
+        // was already marked as sent is never overwritten.
+        var settlement = group.Settlements.FirstOrDefault(s =>
             s.FromMemberId == dto.FromMemberId &&
             s.ToMemberId == dto.ToMemberId &&
             s.Status == SettlementStatus.Pending);
 
-        if (existingPending != null)
+        var isUpdate = settlement != null;
+        if (settlement == null)
         {
-            existingPending.Amount = dto.Amount;
-            existingPending.Method = dto.Method;
-            existingPending.UpiIdUsed = dto.Method == SettlementMethod.Upi ? toMember.UpiId : null;
-            _context.SplitSettlements.Update(existingPending);
-            await _context.SaveChangesAsync();
-
-            var sExistingDto = new SettlementDto
+            settlement = new SplitSettlement
             {
-                Id = existingPending.Id,
-                FromMemberId = fromMember.Id,
-                FromMemberName = fromMember.Name,
-                ToMemberId = toMember.Id,
-                ToMemberName = toMember.Name,
-                Amount = existingPending.Amount,
-                Method = existingPending.Method,
-                Status = existingPending.Status,
-                PaymentReference = existingPending.PaymentReference,
-                CompletedAt = existingPending.CompletedAt
+                SplitGroupId = dto.GroupId,
+                FromMemberId = dto.FromMemberId,
+                ToMemberId = dto.ToMemberId,
+                PaymentReference = GeneratePaymentReference()
             };
-
-            var updatedBalances = ComputeBalancesDto(group);
-            await _notifier.NotifySettlementRecordedAsync(dto.GroupId, $"💸 Payment of ₹{dto.Amount:N2} updated ({fromMember.Name} → {toMember.Name}).", sExistingDto, updatedBalances);
-
-            return Result.Success(sExistingDto);
+            _context.SplitSettlements.Add(settlement);
         }
 
-        var settlement = new SplitSettlement
-        {
-            SplitGroupId = dto.GroupId,
-            FromMemberId = dto.FromMemberId,
-            ToMemberId = dto.ToMemberId,
-            Amount = dto.Amount,
-            Method = dto.Method,
-            UpiIdUsed = dto.Method == SettlementMethod.Upi ? toMember.UpiId : null,
-            PaymentReference = GeneratePaymentReference(),
-            Status = SettlementStatus.Pending
-        };
+        settlement.Amount = dto.Amount;
+        settlement.Method = dto.Method;
+        settlement.UpiIdUsed = dto.Method == SettlementMethod.Upi ? toMember.UpiId : null;
+        settlement.Status = status;
+        settlement.CompletedAt = status == SettlementStatus.Completed ? DateTime.UtcNow : null;
 
-        _context.SplitSettlements.Add(settlement);
+        if (isUpdate) _context.SplitSettlements.Update(settlement);
         await _context.SaveChangesAsync();
 
-        var sDto = new SettlementDto
-        {
-            Id = settlement.Id,
-            FromMemberId = fromMember.Id,
-            FromMemberName = fromMember.Name,
-            ToMemberId = toMember.Id,
-            ToMemberName = toMember.Name,
-            Amount = settlement.Amount,
-            Method = settlement.Method,
-            Status = settlement.Status,
-            PaymentReference = settlement.PaymentReference,
-            CompletedAt = settlement.CompletedAt
-        };
-
+        var sDto = BuildSettlementDto(settlement, fromMember, toMember);
         var balances = ComputeBalancesDto(group);
-        await _notifier.NotifySettlementRecordedAsync(dto.GroupId, $"💸 Payment of ₹{dto.Amount:N2} recorded ({fromMember.Name} → {toMember.Name}).", sDto, balances);
+        var message = status switch
+        {
+            SettlementStatus.Completed => $"✅ {fromMember.Name} → {toMember.Name}: ₹{dto.Amount:N2} payment recorded.",
+            SettlementStatus.AwaitingConfirmation => $"📲 {fromMember.Name} says they paid {toMember.Name} ₹{dto.Amount:N2} — awaiting confirmation.",
+            _ => isUpdate
+                ? $"💸 Payment of ₹{dto.Amount:N2} updated ({fromMember.Name} → {toMember.Name})."
+                : $"💸 Payment of ₹{dto.Amount:N2} recorded ({fromMember.Name} → {toMember.Name})."
+        };
+        await _notifier.NotifySettlementRecordedAsync(dto.GroupId, message, sDto, balances);
+
+        if (status == SettlementStatus.Completed)
+            await CheckAndAutoSettleAsync(group.Id);
 
         return Result.Success(sDto);
     }
+
+    /// <summary>Edit the amount / method of a payment that hasn't been sent yet.</summary>
+    public async Task<Result<SettlementDto>> UpdateSettlementAsync(string userId, int settlementId, UpdateSettlementDto dto)
+    {
+        var settlement = await _context.SplitSettlements
+            .Include(s => s.FromMember)
+            .Include(s => s.ToMember)
+            .FirstOrDefaultAsync(s => s.Id == settlementId);
+        if (settlement == null)
+            return Result.Failure<SettlementDto>(new Error("SplitSettlement.NotFound", "Settlement not found."));
+
+        var group = await LoadGroupForUserAsync(userId, settlement.SplitGroupId);
+        if (group == null)
+            return Result.Failure<SettlementDto>(new Error("SplitGroup.Forbidden", "You don't have access to this group."));
+
+        if (group.Status == SplitGroupStatus.Archived)
+            return Result.Failure<SettlementDto>(new Error("SplitSettlement.GroupClosed", "This group is closed — payments can't be changed."));
+
+        if (!CanManageSettlement(group, settlement, userId))
+            return Result.Failure<SettlementDto>(new Error("SplitGroup.Forbidden", "Only the admin, the payer or the receiver can edit this payment."));
+
+        if (settlement.Status != SettlementStatus.Pending)
+            return Result.Failure<SettlementDto>(new Error(
+                "SplitSettlement.WrongState",
+                "Only a payment that hasn't been sent yet can be edited. Delete it and record it again instead."));
+
+        if (dto.Amount <= 0)
+            return Result.Failure<SettlementDto>(new Error("SplitSettlement.InvalidAmount", "Amount must be greater than zero."));
+
+        var limitError = CheckSettlementLimits(group, settlement.FromMember, settlement.ToMember, dto.Amount);
+        if (limitError != null)
+            return Result.Failure<SettlementDto>(limitError);
+
+        settlement.Amount = dto.Amount;
+        settlement.Method = dto.Method;
+        settlement.UpiIdUsed = dto.Method == SettlementMethod.Upi ? settlement.ToMember.UpiId : null;
+        _context.SplitSettlements.Update(settlement);
+        await _context.SaveChangesAsync();
+
+        var sDto = BuildSettlementDto(settlement, settlement.FromMember, settlement.ToMember);
+        await _notifier.NotifySettlementRecordedAsync(
+            group.Id,
+            $"✏️ Payment updated: {settlement.FromMember.Name} → {settlement.ToMember.Name} is now ₹{dto.Amount:N2}.",
+            sDto,
+            ComputeBalancesDto(group));
+
+        return Result.Success(sDto);
+    }
+
+    /// <summary>
+    /// Cancels a payment in any state (pending, sent, or even completed — "undo this
+    /// payment"). Balances revert; a fully settled group re-opens for settling.
+    /// </summary>
+    public async Task<Result<bool>> DeleteSettlementAsync(string userId, int settlementId)
+    {
+        var settlement = await _context.SplitSettlements
+            .Include(s => s.FromMember)
+            .Include(s => s.ToMember)
+            .FirstOrDefaultAsync(s => s.Id == settlementId);
+        if (settlement == null)
+            return Result.Failure<bool>(new Error("SplitSettlement.NotFound", "Settlement not found."));
+
+        var group = await LoadGroupForUserAsync(userId, settlement.SplitGroupId);
+        if (group == null)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "You don't have access to this group."));
+
+        if (group.Status == SplitGroupStatus.Archived)
+            return Result.Failure<bool>(new Error("SplitSettlement.GroupClosed", "This group is closed — payments can't be changed."));
+
+        if (!CanManageSettlement(group, settlement, userId))
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the admin, the payer or the receiver can delete this payment."));
+
+        var wasCompleted = settlement.Status == SettlementStatus.Completed;
+        var text = $"{settlement.FromMember.Name} → {settlement.ToMember.Name} (₹{settlement.Amount:N2})";
+
+        settlement.IsDeleted = true;
+        settlement.DeletedAt = DateTime.UtcNow;
+
+        var reopened = group.Status == SplitGroupStatus.Settled && wasCompleted;
+        if (reopened)
+        {
+            group.Status = SplitGroupStatus.Locked;
+            _context.SplitGroups.Update(group);
+        }
+
+        await _context.SaveChangesAsync();
+
+        if (reopened)
+            await _notifier.NotifyGroupStatusChangedAsync(group.Id, $"🗑️ Payment {text} was removed — the group is open for settling again.", SplitGroupStatus.Locked);
+        else
+            await NotifyGroupUpdatedAsync(group.Id, $"🗑️ Payment {text} was removed.");
+
+        return Result.Success(true);
+    }
+
+    /// <summary>
+    /// Payments already sent (awaiting confirmation) count against what is still owed,
+    /// so the same debt can't be paid twice, and the receiver must actually be owed
+    /// this much. Returns null when the amount is fine.
+    /// </summary>
+    private static Error? CheckSettlementLimits(SplitGroup group, SplitGroupMember fromMember, SplitGroupMember toMember, decimal amount)
+    {
+        var balances = SplitBalanceCalculator.CalculateNetBalances(group);
+        var fromEntry = balances.First(b => b.MemberId == fromMember.Id);
+        var toEntry = balances.First(b => b.MemberId == toMember.Id);
+        var fromMemberOwes = Math.Max(0, -(fromEntry.NetBalance + fromEntry.InTransit));
+        var toMemberIsOwed = Math.Max(0, toEntry.NetBalance + toEntry.InTransit);
+
+        if (amount > fromMemberOwes + 0.01m) // small tolerance for rounding
+            return new Error("SplitSettlement.ExceedsDebt",
+                $"{fromMember.Name} owes ₹{fromMemberOwes:F2} overall — this payment (₹{amount:F2}) exceeds that.");
+
+        if (amount > toMemberIsOwed + 0.01m)
+            return new Error("SplitSettlement.ExceedsCredit",
+                $"{toMember.Name} is only owed ₹{toMemberIsOwed:F2} overall — this payment (₹{amount:F2}) exceeds that.");
+
+        return null;
+    }
+
+    private static bool CanManageSettlement(SplitGroup group, SplitSettlement settlement, string userId)
+    {
+        if (group.CreatedByUserId == userId) return true;
+        var caller = FindMemberForUser(group, userId);
+        return caller != null && (caller.Id == settlement.FromMemberId || caller.Id == settlement.ToMemberId);
+    }
+
+    private static SettlementDto BuildSettlementDto(SplitSettlement s, SplitGroupMember from, SplitGroupMember to) => new()
+    {
+        Id = s.Id,
+        FromMemberId = from.Id,
+        FromMemberName = from.Name,
+        ToMemberId = to.Id,
+        ToMemberName = to.Name,
+        Amount = s.Amount,
+        Method = s.Method,
+        Status = s.Status,
+        PaymentReference = s.PaymentReference,
+        CompletedAt = s.CompletedAt,
+        CreatedAt = s.CreatedAt
+    };
 
     public async Task<Result<bool>> MarkPaymentSentAsync(string userId, int settlementId)
     {
@@ -591,7 +717,7 @@ public class SplitService : ISplitService
             // no-login view. Payment identifiers should only be visible
             // to someone actually operating the group (the creator),
             // not anyone who happens to have the link.
-            Members = group.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, UpiId = null }).ToList(),
+            Members = group.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, UpiId = null, LeftAt = m.LeftAt }).ToList(),
             Expenses = page.Value.Items,
             NextCursor = page.Value.NextCursor,
             TotalExpenseCount = page.Value.TotalCount,
@@ -770,6 +896,16 @@ public class SplitService : ISplitService
         if (allReferencedIds.Any(id => !groupMemberIds.Contains(id)))
             return Result.Failure<ExpenseDto>(new Error(
                 "SplitExpense.MemberNotInGroup", "One or more payers or participants don't belong to this group."));
+
+        // A member who has since left may stay on an expense they were already on,
+        // but can't be newly added to it.
+        var alreadyOnExpense = expense.Payers.Select(p => p.SplitGroupMemberId)
+            .Concat(expense.Participants.Select(p => p.SplitGroupMemberId)).ToHashSet();
+        var leftMembers = group.Members.Where(m => m.LeftAt != null).Select(m => m.Id).ToHashSet();
+        if (allReferencedIds.Any(id => leftMembers.Contains(id) && !alreadyOnExpense.Contains(id)))
+            return Result.Failure<ExpenseDto>(new Error(
+                "SplitExpense.MemberLeft",
+                "Someone you picked has left the group — they can't be added to this expense."));
 
         List<(int MemberId, decimal Share)> shares;
         try
@@ -985,6 +1121,88 @@ public class SplitService : ISplitService
         return Result.Success(new MemberDto { Id = member.Id, Name = member.Name, LinkedUserId = member.LinkedUserId, UpiId = member.UpiId });
     }
 
+    /// <summary>
+    /// Leave the group (yourself) or remove someone (admin). Only possible once the
+    /// member is fully settled up, like Splitwise. The member's row is kept so old
+    /// expenses still show their name.
+    /// </summary>
+    public async Task<Result<bool>> RemoveMemberAsync(string userId, int memberId)
+    {
+        var groupId = await _context.SplitGroupMembers
+            .Where(m => m.Id == memberId)
+            .Select(m => (int?)m.SplitGroupId)
+            .FirstOrDefaultAsync();
+        if (groupId == null)
+            return Result.Failure<bool>(new Error("SplitMember.NotFound", "Member not found."));
+
+        var group = await LoadGroupForUserAsync(userId, groupId.Value);
+        if (group == null)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "You don't have access to this group."));
+
+        var member = group.Members.FirstOrDefault(m => m.Id == memberId);
+        if (member == null)
+            return Result.Failure<bool>(new Error("SplitMember.NotFound", "Member not found."));
+
+        var isAdmin = group.CreatedByUserId == userId;
+        var isSelf = member.LinkedUserId != null && member.LinkedUserId == userId;
+        if (!isAdmin && !isSelf)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can remove other members."));
+
+        if (member.LinkedUserId != null && member.LinkedUserId == group.CreatedByUserId)
+            return Result.Failure<bool>(new Error("SplitMember.CreatorCannotLeave", "The group creator can't leave — delete the group instead."));
+
+        if (group.Status == SplitGroupStatus.Archived)
+            return Result.Failure<bool>(new Error("SplitMember.GroupClosed", "This group is closed."));
+
+        var entry = SplitBalanceCalculator.CalculateNetBalances(group).First(b => b.MemberId == memberId);
+        if (Math.Abs(entry.NetBalance) >= 0.01m || Math.Abs(entry.InTransit) >= 0.01m)
+        {
+            var owes = entry.NetBalance + entry.InTransit;
+            return Result.Failure<bool>(new Error(
+                "SplitMember.HasBalance",
+                $"{member.Name} isn't settled up yet ({(owes < 0 ? "owes" : "is owed")} ₹{Math.Abs(owes):N2}). Settle up first, then they can leave."));
+        }
+
+        // Any payment requests that were never sent just get cancelled.
+        foreach (var s in group.Settlements
+                     .Where(s => s.Status == SettlementStatus.Pending &&
+                                 (s.FromMemberId == memberId || s.ToMemberId == memberId))
+                     .ToList())
+        {
+            s.IsDeleted = true;
+            s.DeletedAt = DateTime.UtcNow;
+        }
+
+        member.LeftAt = DateTime.UtcNow;
+        member.LinkedUserId = null; // loses access; the same person can rejoin via an invite later
+        _context.SplitGroupMembers.Update(member);
+        await _context.SaveChangesAsync();
+
+        await _notifier.NotifyGroupUpdatedAsync(group.Id,
+            isSelf ? $"👋 {member.Name} left the group." : $"👋 {member.Name} was removed from the group.");
+
+        return Result.Success(true);
+    }
+
+    /// <summary>Creator only. Soft delete — the group, its expenses and share link disappear for everyone.</summary>
+    public async Task<Result<bool>> DeleteGroupAsync(string userId, int groupId)
+    {
+        var group = await _context.SplitGroups.FirstOrDefaultAsync(g => g.Id == groupId);
+        if (group == null)
+            return Result.Failure<bool>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        if (group.CreatedByUserId != userId)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can delete the group."));
+
+        group.IsDeleted = true;
+        group.DeletedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await _notifier.NotifyGroupDeletedAsync(groupId, $"🗑️ '{group.Name}' was deleted by the group creator.");
+
+        return Result.Success(true);
+    }
+
     private async Task CheckAndAutoSettleAsync(int groupId)
     {
         var group = await _context.SplitGroups
@@ -1141,10 +1359,11 @@ public class SplitService : ISplitService
     {
         var balances = SplitBalanceCalculator.CalculateNetBalances(group);
         var simplified = SplitBalanceCalculator.SimplifyDebts(balances);
+        var leftIds = group.Members.Where(m => m.LeftAt != null).Select(m => m.Id).ToHashSet();
 
         return new GroupBalancesDto
         {
-            Balances = balances.Select(b => new MemberBalanceDto
+            Balances = balances.Where(b => !leftIds.Contains(b.MemberId)).Select(b => new MemberBalanceDto
             {
                 MemberId = b.MemberId,
                 MemberName = b.MemberName,
@@ -1181,7 +1400,8 @@ public class SplitService : ISplitService
         Method = s.Method,
         Status = s.Status,
         PaymentReference = s.PaymentReference,
-        CompletedAt = s.CompletedAt
+        CompletedAt = s.CompletedAt,
+        CreatedAt = s.CreatedAt
     };
 
     private static decimal? SplitValueFor(SplitType type, ExpenseParticipantDto p) => type switch
@@ -1289,7 +1509,7 @@ public class SplitService : ISplitService
         Currency = g.Currency,
         Status = g.Status,
         ShareToken = g.ShareToken,
-        Members = g.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, LinkedUserId = m.LinkedUserId, UpiId = m.UpiId }).ToList(),
+        Members = g.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, LinkedUserId = m.LinkedUserId, UpiId = m.UpiId, LeftAt = m.LeftAt }).ToList(),
         TotalSpend = g.Expenses.Sum(e => e.Amount)
     };
 

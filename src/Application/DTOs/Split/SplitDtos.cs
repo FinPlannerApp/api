@@ -26,6 +26,8 @@ public class MemberDto
     public string Name { get; set; } = string.Empty;
     public string? LinkedUserId { get; set; }
     public string? UpiId { get; set; }
+    /// <summary>Set when the member has left / been removed (hidden from pickers and balances).</summary>
+    public DateTime? LeftAt { get; set; }
 }
 
 public class AddMemberDto
@@ -151,6 +153,20 @@ public class CreateSettlementDto
     public int ToMemberId { get; set; }
     public decimal Amount { get; set; }
     public SettlementMethod Method { get; set; }
+
+    /// <summary>
+    /// True = "this money has already changed hands" (e.g. a cash payment).
+    /// Recorded by the receiver (or the admin on someone's behalf) it is completed
+    /// straight away; recorded by the payer it waits for the receiver to confirm.
+    /// False = a payment request that is still to be made.
+    /// </summary>
+    public bool AlreadyPaid { get; set; }
+}
+
+public class UpdateSettlementDto
+{
+    public decimal Amount { get; set; }
+    public SettlementMethod Method { get; set; }
 }
 
 public class SettlementDto
@@ -165,6 +181,7 @@ public class SettlementDto
     public SettlementStatus Status { get; set; }
     public string PaymentReference { get; set; } = string.Empty;
     public DateTime? CompletedAt { get; set; }
+    public DateTime CreatedAt { get; set; }
 }
 
 /// <summary>

@@ -147,4 +147,21 @@ public class SplitController : BaseController
     [HttpGet("groups/{groupId}/settlements")]
     public async Task<IActionResult> GetSettlementHistory(int groupId)
         => HandleResult(await _service.GetSettlementHistoryAsync(UserId, groupId));
+
+    /// <summary>Leave the group (yourself) or remove a member (admin). Needs a zero balance.</summary>
+    [HttpDelete("members/{memberId}")]
+    public async Task<IActionResult> RemoveMember(int memberId)
+        => HandleResult(await _service.RemoveMemberAsync(UserId, memberId));
+
+    [HttpDelete("groups/{groupId}")]
+    public async Task<IActionResult> DeleteGroup(int groupId)
+        => HandleResult(await _service.DeleteGroupAsync(UserId, groupId));
+
+    [HttpPut("settlements/{id}")]
+    public async Task<IActionResult> UpdateSettlement(int id, [FromBody] UpdateSettlementDto dto)
+        => HandleResult(await _service.UpdateSettlementAsync(UserId, id, dto));
+
+    [HttpDelete("settlements/{id}")]
+    public async Task<IActionResult> DeleteSettlement(int id)
+        => HandleResult(await _service.DeleteSettlementAsync(UserId, id));
 }

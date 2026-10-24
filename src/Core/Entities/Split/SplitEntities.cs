@@ -42,6 +42,14 @@ public class SplitGroupMember : BaseEntity
 
     public string? UpiId { get; set; }
 
+    /// <summary>
+    /// Set when the member left (or was removed from) the group. The row is
+    /// kept so past expenses still show their name, but they no longer have
+    /// access (LinkedUserId is cleared), can't be added to new expenses and
+    /// are hidden from the balances list.
+    /// </summary>
+    public DateTime? LeftAt { get; set; }
+
     public ICollection<SplitExpensePayer> PaidExpenses { get; set; } = new List<SplitExpensePayer>();
     public ICollection<SplitExpenseParticipant> OwedExpenses { get; set; } = new List<SplitExpenseParticipant>();
 }

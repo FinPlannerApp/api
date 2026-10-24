@@ -12,4 +12,5 @@ public interface ISplitNotifier
     Task NotifyMemberUpiUpdatedAsync(int groupId, string activityMessage, int memberId, string? upiId);
     Task NotifyGroupStatusChangedAsync(int groupId, string activityMessage, SplitGroupStatus status);
     Task NotifyGroupUpdatedAsync(int groupId, string activityMessage);
+    Task NotifyGroupDeletedAsync(int groupId, string activityMessage);
 }

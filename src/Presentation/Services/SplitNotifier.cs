@@ -106,6 +106,16 @@ public class SplitNotifier : ISplitNotifier
         });
     }
 
+    public async Task NotifyGroupDeletedAsync(int groupId, string activityMessage)
+    {
+        await BroadcastAsync(groupId, new
+        {
+            groupId,
+            eventType = "GroupDeleted",
+            activityMessage
+        });
+    }
+
     private async Task BroadcastAsync(int groupId, object payload)
     {
         try

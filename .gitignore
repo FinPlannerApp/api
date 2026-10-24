@@ -37,6 +37,8 @@ out/
 [Bb]uild/
 [Ll]og/
 [Ll]ogs/
+*.log
+
 *.db-shm
 *.db-wal
 *.db-journal

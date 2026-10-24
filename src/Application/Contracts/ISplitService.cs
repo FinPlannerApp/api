@@ -35,4 +35,8 @@ public interface ISplitService
     Task<Result<bool>> LockGroupAsync(string userId, int groupId);
     Task<Result<ImportToLedgerResultDto>> ImportToLedgerAsync(string userId, ImportToLedgerDto dto);
     Task<Result<List<SettlementDto>>> GetSettlementHistoryAsync(string userId, int groupId);
+    Task<Result<bool>> RemoveMemberAsync(string userId, int memberId);
+    Task<Result<bool>> DeleteGroupAsync(string userId, int groupId);
+    Task<Result<SettlementDto>> UpdateSettlementAsync(string userId, int settlementId, UpdateSettlementDto dto);
+    Task<Result<bool>> DeleteSettlementAsync(string userId, int settlementId);
 }
