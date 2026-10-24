@@ -155,6 +155,21 @@ public class SplitController : BaseController
     public async Task<IActionResult> MergeMembers(int sourceId, int targetId)
         => HandleResult(await _service.MergeMembersAsync(UserId, sourceId, targetId));
 
+    /// <summary>Add a friend: creates a hidden two-person ledger for expenses outside any group.</summary>
+    [HttpPost("friends")]
+    public async Task<IActionResult> CreateFriend([FromBody] CreateFriendDto dto)
+        => HandleResult(await _service.CreateFriendAsync(UserId, dto));
+
+    /// <summary>Who you owe and who owes you, summed across every group and friend ledger.</summary>
+    [HttpGet("dashboard")]
+    public async Task<IActionResult> GetDashboard()
+        => HandleResult(await _service.GetDashboardAsync(UserId));
+
+    /// <summary>Record payments settling everything with one person (one currency) across all shared groups.</summary>
+    [HttpPost("dashboard/settle")]
+    public async Task<IActionResult> SettleWithPerson([FromBody] SettleWithPersonDto dto)
+        => HandleResult(await _service.SettleWithPersonAsync(UserId, dto));
+
 
     [HttpPost("members/rename")]
     public async Task<IActionResult> RenameMember([FromBody] RenameMemberDto dto)

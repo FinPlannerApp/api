@@ -15,6 +15,7 @@ public class GroupDto
     public string CreatedByUserId { get; set; } = string.Empty;
     public string Currency { get; set; } = "INR";
     public bool SimplifyDebts { get; set; } = true;
+    public bool IsDirect { get; set; }
     public DateTime? StartDate { get; set; }
     public DateTime? EndDate { get; set; }
     public SplitGroupStatus Status { get; set; }

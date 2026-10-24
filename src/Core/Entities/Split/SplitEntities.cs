@@ -17,6 +17,12 @@ public class SplitGroup : BaseEntity
     /// </summary>
     public bool SimplifyDebts { get; set; } = true;
 
+    /// <summary>
+    /// A hidden two-person ledger ("friend") for expenses outside any trip group. It reuses all the
+    /// group machinery but never shows in the groups list.
+    /// </summary>
+    public bool IsDirect { get; set; }
+
     /// <summary>Optional trip dates (shown in the header; informational).</summary>
     public DateTime? StartDate { get; set; }
     public DateTime? EndDate { get; set; }

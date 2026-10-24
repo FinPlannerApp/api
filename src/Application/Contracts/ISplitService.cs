@@ -46,5 +46,8 @@ public interface ISplitService
     Task<Result<bool>> DeleteSettlementAsync(string userId, int settlementId);
     Task<Result<GroupDto>> UpdateGroupSettingsAsync(string userId, UpdateGroupSettingsDto dto);
     Task<Result<bool>> MergeMembersAsync(string userId, int sourceMemberId, int targetMemberId);
+    Task<Result<GroupDto>> CreateFriendAsync(string userId, CreateFriendDto dto);
+    Task<Result<SplitDashboardDto>> GetDashboardAsync(string userId);
+    Task<Result<SettleWithPersonResultDto>> SettleWithPersonAsync(string userId, SettleWithPersonDto dto);
 }
 

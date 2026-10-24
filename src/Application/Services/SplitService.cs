@@ -61,7 +61,7 @@ public class SplitService : ISplitService
         var groups = await _context.SplitGroups
             .Include(g => g.Members)
             .Include(g => g.Expenses)
-            .Where(g => g.CreatedByUserId == userId || g.Members.Any(m => m.LinkedUserId == userId))
+            .Where(g => !g.IsDirect && (g.CreatedByUserId == userId || g.Members.Any(m => m.LinkedUserId == userId)))
             .ToListAsync();
 
         // The list only needs people who are still in each group.
@@ -86,6 +86,10 @@ public class SplitService : ISplitService
         var group = await LoadGroupForUserAsync(userId, dto.GroupId);
         if (group == null)
             return Result.Failure<MemberDto>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        if (group.IsDirect)
+            return Result.Failure<MemberDto>(new Error(
+                "SplitGroup.DirectLedger", "A friend ledger is just between two people. Create a group to split with more people."));
 
         var isCallerInGroup = group.CreatedByUserId == userId || group.Members.Any(m => m.LinkedUserId == userId);
         if (!isCallerInGroup)
@@ -854,6 +858,10 @@ public class SplitService : ISplitService
                 AlreadyWasMember = true
             });
         }
+
+        if (invite.SplitGroup.IsDirect && !dto.ClaimMemberId.HasValue)
+            return Result.Failure<JoinGroupResultDto>(new Error(
+                "SplitInvite.DirectLedger", "This is a two-person ledger — pick your name to join it."));
 
         SplitGroupMember newMember;
         if (dto.ClaimMemberId.HasValue)
@@ -1703,6 +1711,94 @@ public class SplitService : ISplitService
         return Result.Success(true);
     }
 
+    // ── Friends and the cross-group dashboard ────────────────────────────────
+
+    public async Task<Result<GroupDto>> CreateFriendAsync(string userId, CreateFriendDto dto)
+    {
+        var friend = dto.FriendName?.Trim() ?? string.Empty;
+        var me = dto.MyName?.Trim() ?? string.Empty;
+        if (friend.Length == 0 || me.Length == 0)
+            return Result.Failure<GroupDto>(new Error("SplitFriend.InvalidName", "Enter your friend's name."));
+        if (friend.Length > 100)
+            return Result.Failure<GroupDto>(new Error("SplitFriend.InvalidName", "That name is too long."));
+
+        var exists = await _context.SplitGroups.AnyAsync(g =>
+            g.IsDirect && g.Status != SplitGroupStatus.Archived &&
+            g.Members.Any(m => m.LinkedUserId == userId) &&
+            g.Members.Any(m => m.LinkedUserId != userId && m.LeftAt == null && m.Name.ToLower() == friend.ToLower()));
+        if (exists)
+            return Result.Failure<GroupDto>(new Error("SplitFriend.Exists", $"You already have {friend} as a friend."));
+
+        var group = new SplitGroup
+        {
+            Name = friend,
+            CreatedByUserId = userId,
+            ShareToken = GenerateShareToken(),
+            IsDirect = true
+        };
+        group.Members.Add(new SplitGroupMember { Name = me, LinkedUserId = userId });
+        group.Members.Add(new SplitGroupMember { Name = friend });
+
+        _context.SplitGroups.Add(group);
+        await _context.SaveChangesAsync();
+        return Result.Success(MapToDto(group));
+    }
+
+    private async Task<List<SplitGroup>> LoadMyGroupsForDashboardAsync(string userId)
+        => await _context.SplitGroups
+            .Include(g => g.Members)
+            .Include(g => g.Expenses).ThenInclude(e => e.Payers)
+            .Include(g => g.Expenses).ThenInclude(e => e.Participants)
+            .Include(g => g.Settlements)
+            .Where(g => g.Status != SplitGroupStatus.Archived && g.Members.Any(m => m.LinkedUserId == userId && m.LeftAt == null))
+            .ToListAsync();
+
+    public async Task<Result<SplitDashboardDto>> GetDashboardAsync(string userId)
+    {
+        var groups = await LoadMyGroupsForDashboardAsync(userId);
+        return Result.Success(SplitDashboardBuilder.Build(userId, groups));
+    }
+
+    /// <summary>
+    /// Records "we're square" with one person in one currency: one payment per group where a
+    /// debt exists, each in the direction the money is owed. Recorded by the person owed it is
+    /// completed straight away; recorded by the one paying it waits for the receiver to confirm.
+    /// </summary>
+    public async Task<Result<SettleWithPersonResultDto>> SettleWithPersonAsync(string userId, SettleWithPersonDto dto)
+    {
+        var groups = await LoadMyGroupsForDashboardAsync(userId);
+        var debts = SplitDashboardBuilder.DebtsWith(userId, groups, dto.PersonKey, dto.Currency);
+        if (debts.Count == 0)
+            return Result.Failure<SettleWithPersonResultDto>(new Error(
+                "SplitSettlement.NothingToSettle", "There's nothing to settle with this person in that currency."));
+
+        var net = 0m;
+        foreach (var debt in debts)
+        {
+            var group = groups.First(g => g.Id == debt.GroupId);
+            var me = group.Members.First(m => m.LinkedUserId == userId && m.LeftAt == null);
+            net += debt.ToMemberId == me.Id ? debt.Amount : -debt.Amount;
+
+            var method = dto.Method;
+            if (method == SettlementMethod.Upi && !string.Equals(group.Currency, "INR", StringComparison.OrdinalIgnoreCase))
+                method = SettlementMethod.Other;
+
+            var result = await CreateSettlementAsync(userId, new CreateSettlementDto
+            {
+                GroupId = debt.GroupId,
+                FromMemberId = debt.FromMemberId,
+                ToMemberId = debt.ToMemberId,
+                Amount = debt.Amount,
+                Method = method,
+                AlreadyPaid = true
+            });
+            if (!result.IsSuccess)
+                return Result.Failure<SettleWithPersonResultDto>(result.Error);
+        }
+
+        return Result.Success(new SettleWithPersonResultDto { PaymentsRecorded = debts.Count, Net = Math.Round(net, 2) });
+    }
+
     private async Task CheckAndAutoSettleAsync(int groupId)
     {
         var group = await _context.SplitGroups
@@ -2087,6 +2183,7 @@ public class SplitService : ISplitService
         CreatedByUserId = g.CreatedByUserId,
         Currency = g.Currency,
         SimplifyDebts = g.SimplifyDebts,
+        IsDirect = g.IsDirect,
         StartDate = g.StartDate,
         EndDate = g.EndDate,
         Status = g.Status,
