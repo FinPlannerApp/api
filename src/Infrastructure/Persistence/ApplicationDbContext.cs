@@ -100,6 +100,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<SplitExpenseParticipant> SplitExpenseParticipants => Set<SplitExpenseParticipant>();
     public DbSet<SplitSettlement> SplitSettlements => Set<SplitSettlement>();
     public DbSet<SplitGroupInvite> SplitGroupInvites => Set<SplitGroupInvite>();
+    public DbSet<SplitActivity> SplitActivities => Set<SplitActivity>();
     public DbSet<BlogPost> BlogPosts => Set<BlogPost>();
     public DbSet<BlogImage> BlogImages => Set<BlogImage>();
     public DbSet<BlogPostComment> BlogPostComments => Set<BlogPostComment>();
@@ -435,6 +436,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<SplitExpenseParticipant>().HasQueryFilter(p => !p.IsDeleted);
         builder.Entity<SplitSettlement>().HasQueryFilter(s => !s.IsDeleted);
         builder.Entity<SplitGroupInvite>().HasQueryFilter(i => !i.IsDeleted);
+        builder.Entity<SplitActivity>().HasQueryFilter(a => !a.IsDeleted);
 
         // --- SPLIT MODULE SCHEMA ---
         builder.Entity<SplitGroup>(e =>
@@ -486,6 +488,14 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
                 .HasForeignKey(s => s.FromMemberId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(s => s.ToMember).WithMany()
                 .HasForeignKey(s => s.ToMemberId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<SplitActivity>(e =>
+        {
+            e.ToTable("SplitActivities", "split");
+            e.HasIndex(a => new { a.SplitGroupId, a.Id });
+            e.HasOne(a => a.SplitGroup).WithMany()
+                .HasForeignKey(a => a.SplitGroupId).OnDelete(DeleteBehavior.Cascade);
         });
 
         builder.Entity<SplitGroupInvite>(e =>

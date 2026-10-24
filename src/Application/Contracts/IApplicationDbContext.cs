@@ -58,6 +58,7 @@ public interface IApplicationDbContext
     DbSet<SplitExpenseParticipant> SplitExpenseParticipants { get; }
     DbSet<SplitSettlement> SplitSettlements { get; }
     DbSet<SplitGroupInvite> SplitGroupInvites { get; }
+    DbSet<SplitActivity> SplitActivities { get; }
     DbSet<BlogPost> BlogPosts { get; }
     DbSet<BlogImage> BlogImages { get; }
     DbSet<BlogPostComment> BlogPostComments { get; }

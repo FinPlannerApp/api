@@ -12,7 +12,7 @@ public interface ISplitService
     Task<Result<MemberDto>> AddMemberAsync(string userId, AddMemberDto dto);
     Task<Result<bool>> UpdateMemberUpiAsync(string userId, UpdateMemberUpiDto dto);
     Task<Result<ExpenseDto>> AddExpenseAsync(string userId, CreateExpenseDto dto);
-    Task<Result<ExpensePageDto>> GetExpensesAsync(string userId, int groupId, string? cursor = null, int? limit = null, string? search = null);
+    Task<Result<ExpensePageDto>> GetExpensesAsync(string userId, int groupId, ExpenseListQuery query);
     Task<Result<ExpensePageDto>> GetPublicExpensesAsync(string shareToken, string? cursor, int? limit);
     Task<Result<GroupExportDto>> GetGroupExportAsync(string userId, int groupId);
     Task<Result<GroupBalancesDto>> GetBalancesAsync(string userId, int groupId);
@@ -37,6 +37,11 @@ public interface ISplitService
     Task<Result<List<SettlementDto>>> GetSettlementHistoryAsync(string userId, int groupId);
     Task<Result<bool>> RemoveMemberAsync(string userId, int memberId);
     Task<Result<bool>> DeleteGroupAsync(string userId, int groupId);
+    Task<Result<ActivityPageDto>> GetActivityAsync(string userId, int groupId, string? cursor, int? limit);
+    Task<Result<List<ExpenseDto>>> GetDeletedExpensesAsync(string userId, int groupId);
+    Task<Result<ExpenseDto>> RestoreExpenseAsync(string userId, int expenseId);
+    Task<Result<ReceiptChangeDto>> SetReceiptAsync(string userId, int expenseId, string? receiptPath);
+    Task<Result<List<GlobalExpenseHitDto>>> SearchExpensesAcrossGroupsAsync(string userId, string query, int? limit);
     Task<Result<SettlementDto>> UpdateSettlementAsync(string userId, int settlementId, UpdateSettlementDto dto);
     Task<Result<bool>> DeleteSettlementAsync(string userId, int settlementId);
 }

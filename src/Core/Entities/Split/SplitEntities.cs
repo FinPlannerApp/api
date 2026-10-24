@@ -65,6 +65,12 @@ public class SplitExpense : BaseEntity
     public string? Category { get; set; } // plain string, deliberately not a shared TransactionCategory FK — full isolation
     public SplitType SplitType { get; set; }
 
+    /// <summary>Free-text note ("paid the guide in cash", "includes 10% tip" ...).</summary>
+    public string? Notes { get; set; }
+
+    /// <summary>Relative URL of an uploaded receipt photo, e.g. /uploads/split-receipts/12/abc.jpg.</summary>
+    public string? ReceiptPath { get; set; }
+
     public ICollection<SplitExpensePayer> Payers { get; set; } = new List<SplitExpensePayer>();
     public ICollection<SplitExpenseParticipant> Participants { get; set; } = new List<SplitExpenseParticipant>();
 }
@@ -140,4 +146,26 @@ public class SplitSettlement : BaseEntity
     public required string PaymentReference { get; set; }
     public SettlementStatus Status { get; set; } = SettlementStatus.Pending;
     public DateTime? CompletedAt { get; set; }
+}
+
+/// <summary>
+/// One line of the group's history / audit trail ("Asha edited 'Dinner' — amount
+/// ₹800 → ₹900"). Written whenever something in the group changes; never edited.
+/// The expense id is a soft reference so the trail survives the expense itself.
+/// </summary>
+public class SplitActivity : BaseEntity
+{
+    public int SplitGroupId { get; set; }
+    public SplitGroup SplitGroup { get; set; } = null!;
+
+    public string? ActorUserId { get; set; }
+    public required string ActorName { get; set; }
+
+    /// <summary>ExpenseAdded, ExpenseEdited, ExpenseDeleted, ExpenseRestored, PaymentRecorded, MemberLeft ...</summary>
+    public required string Type { get; set; }
+
+    /// <summary>What happened, without the actor — shown as "{ActorName} {Message}".</summary>
+    public required string Message { get; set; }
+
+    public int? SplitExpenseId { get; set; }
 }

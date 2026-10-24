@@ -77,6 +77,7 @@ public class CreateExpenseDto
     public DateTime Date { get; set; }
     public string? Category { get; set; }
     public SplitType SplitType { get; set; }
+    public string? Notes { get; set; }
     public List<ExpensePayerDto> Payers { get; set; } = new();
     public List<ExpenseParticipantDto> Participants { get; set; } = new();
 }
@@ -89,6 +90,11 @@ public class ExpenseDto
     public DateTime Date { get; set; }
     public string? Category { get; set; }
     public SplitType SplitType { get; set; }
+    public string? Notes { get; set; }
+    /// <summary>Relative URL of the receipt photo (prefix with the API origin), or null.</summary>
+    public string? ReceiptUrl { get; set; }
+    /// <summary>Only set in the "recently deleted" list.</summary>
+    public DateTime? DeletedAt { get; set; }
     public List<PayerLineDto> Payers { get; set; } = new();
     public List<ParticipantLineDto> Participants { get; set; } = new();
 }
@@ -239,4 +245,53 @@ public class GroupExportDto
     public List<ExpenseDto> Expenses { get; set; } = new();
     public List<SettlementDto> Settlements { get; set; } = new();
     public GroupBalancesDto Balances { get; set; } = new();
+}
+
+public class ExpenseListQuery
+{
+    public string? Cursor { get; set; }
+    public int? Limit { get; set; }
+    public string? Search { get; set; }
+    public string? Category { get; set; }
+    public int? PayerId { get; set; }
+    public int? ParticipantId { get; set; }
+    public DateTime? From { get; set; }
+    public DateTime? To { get; set; }
+    public decimal? MinAmount { get; set; }
+    public decimal? MaxAmount { get; set; }
+    public string? Sort { get; set; }
+}
+
+public class ActivityDto
+{
+    public int Id { get; set; }
+    public string ActorName { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+    public int? ExpenseId { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public class ActivityPageDto
+{
+    public List<ActivityDto> Items { get; set; } = new();
+    public string? NextCursor { get; set; }
+}
+
+public class ReceiptChangeDto
+{
+    public string? PreviousPath { get; set; }
+    public string? CurrentPath { get; set; }
+}
+
+public class GlobalExpenseHitDto
+{
+    public int ExpenseId { get; set; }
+    public int GroupId { get; set; }
+    public string GroupName { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
+    public DateTime Date { get; set; }
+    public string? Category { get; set; }
+    public string PaidBy { get; set; } = string.Empty;
 }

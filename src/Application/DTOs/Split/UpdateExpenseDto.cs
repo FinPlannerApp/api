@@ -9,6 +9,7 @@ public class UpdateExpenseDto
     public DateTime Date { get; set; }
     public string? Category { get; set; }
     public SplitType SplitType { get; set; }
+    public string? Notes { get; set; }
     public List<ExpensePayerDto> Payers { get; set; } = new();
     public List<ExpenseParticipantDto> Participants { get; set; } = new();
 }

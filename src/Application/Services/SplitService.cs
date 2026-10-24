@@ -103,6 +103,7 @@ public class SplitService : ISplitService
         await _context.SaveChangesAsync();
 
         await _notifier.NotifyMemberAddedAsync(dto.GroupId, $"👤 {dto.Name} was added to the group.", new MemberDto { Id = member.Id, Name = member.Name, UpiId = member.UpiId });
+        await RecordActivityAsync(dto.GroupId, userId, "MemberAdded", $"added {dto.Name} to the group.");
 
         return Result.Success(new MemberDto { Id = member.Id, Name = member.Name, UpiId = member.UpiId });
     }
@@ -200,7 +201,8 @@ public class SplitService : ISplitService
             Amount = dto.Amount,
             Date = EnsureUtc(dto.Date),
             Category = dto.Category,
-            SplitType = dto.SplitType
+            SplitType = dto.SplitType,
+            Notes = NormalizeNotes(dto.Notes)
         };
 
         foreach (var payer in dto.Payers)
@@ -232,18 +234,18 @@ public class SplitService : ISplitService
 
         var balances = updatedGroup != null ? ComputeBalancesDto(updatedGroup) : new GroupBalancesDto();
         await _notifier.NotifyExpenseAddedAsync(dto.GroupId, $"Expense '{dto.Description}' (₹{dto.Amount:N2}) added.", dtoRes.Value, balances);
+        await RecordActivityAsync(dto.GroupId, userId, "ExpenseAdded", $"added '{dto.Description}' (₹{dto.Amount:N2}).", expense.Id);
 
         return dtoRes;
     }
 
-    public async Task<Result<ExpensePageDto>> GetExpensesAsync(
-        string userId, int groupId, string? cursor = null, int? limit = null, string? search = null)
+    public async Task<Result<ExpensePageDto>> GetExpensesAsync(string userId, int groupId, ExpenseListQuery query)
     {
         var group = await LoadGroupForUserAsync(userId, groupId);
         if (group == null)
             return Result.Failure<ExpensePageDto>(new Error("SplitGroup.NotFound", "Group not found."));
 
-        return await QueryExpensePageAsync(groupId, cursor, limit, search);
+        return await QueryExpensePageAsync(groupId, query);
     }
 
     public async Task<Result<GroupBalancesDto>> GetBalancesAsync(string userId, int groupId)
@@ -261,7 +263,7 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<GroupFullDetailsDto>(new Error("SplitGroup.NotFound", "Group not found."));
 
-        var page = await QueryExpensePageAsync(groupId, null, null, null);
+        var page = await QueryExpensePageAsync(groupId, new ExpenseListQuery());
         if (!page.IsSuccess)
             return Result.Failure<GroupFullDetailsDto>(page.Error);
 
@@ -399,6 +401,12 @@ public class SplitService : ISplitService
                 : $"💸 Payment of ₹{dto.Amount:N2} recorded ({fromMember.Name} → {toMember.Name})."
         };
         await _notifier.NotifySettlementRecordedAsync(dto.GroupId, message, sDto, balances);
+        await RecordActivityAsync(dto.GroupId, userId, "PaymentRecorded", status switch
+        {
+            SettlementStatus.Completed => $"recorded a ₹{dto.Amount:N2} payment: {fromMember.Name} → {toMember.Name}.",
+            SettlementStatus.AwaitingConfirmation => $"said {fromMember.Name} paid {toMember.Name} ₹{dto.Amount:N2} (awaiting confirmation).",
+            _ => $"asked for a ₹{dto.Amount:N2} payment: {fromMember.Name} → {toMember.Name}."
+        });
 
         if (status == SettlementStatus.Completed)
             await CheckAndAutoSettleAsync(group.Id);
@@ -450,6 +458,8 @@ public class SplitService : ISplitService
             $"✏️ Payment updated: {settlement.FromMember.Name} → {settlement.ToMember.Name} is now ₹{dto.Amount:N2}.",
             sDto,
             ComputeBalancesDto(group));
+        await RecordActivityAsync(group.Id, userId, "PaymentEdited",
+            $"changed the payment {settlement.FromMember.Name} → {settlement.ToMember.Name} to ₹{dto.Amount:N2}.");
 
         return Result.Success(sDto);
     }
@@ -496,6 +506,7 @@ public class SplitService : ISplitService
             await _notifier.NotifyGroupStatusChangedAsync(group.Id, $"🗑️ Payment {text} was removed — the group is open for settling again.", SplitGroupStatus.Locked);
         else
             await NotifyGroupUpdatedAsync(group.Id, $"🗑️ Payment {text} was removed.");
+        await RecordActivityAsync(group.Id, userId, "PaymentDeleted", $"removed the payment {text}.");
 
         return Result.Success(true);
     }
@@ -572,6 +583,7 @@ public class SplitService : ISplitService
 
         var fromMemberName = settlement.SplitGroup.Members.FirstOrDefault(m => m.Id == settlement.FromMemberId)?.Name ?? "Payer";
         await NotifyGroupUpdatedAsync(settlement.SplitGroupId, $"📲 {fromMemberName} marked payment of ₹{settlement.Amount:N2} as sent.");
+        await RecordActivityAsync(settlement.SplitGroupId, userId, "PaymentSent", $"marked ₹{settlement.Amount:N2} as sent to {settlement.SplitGroup.Members.FirstOrDefault(m => m.Id == settlement.ToMemberId)?.Name ?? "the receiver"}.");
 
         return Result.Success(true);
     }
@@ -603,6 +615,7 @@ public class SplitService : ISplitService
 
         var toMemberName = settlement.SplitGroup.Members.FirstOrDefault(m => m.Id == settlement.ToMemberId)?.Name ?? "Recipient";
         await NotifyGroupUpdatedAsync(settlement.SplitGroupId, $"✅ {toMemberName} confirmed receipt of ₹{settlement.Amount:N2}.");
+        await RecordActivityAsync(settlement.SplitGroupId, userId, "PaymentConfirmed", $"confirmed receiving ₹{settlement.Amount:N2} from {settlement.SplitGroup.Members.FirstOrDefault(m => m.Id == settlement.FromMemberId)?.Name ?? "the payer"}.");
 
         await CheckAndAutoSettleAsync(settlement.SplitGroupId);
 
@@ -638,6 +651,7 @@ public class SplitService : ISplitService
 
         var fromMemberName = settlement.SplitGroup.Members.FirstOrDefault(m => m.Id == settlement.FromMemberId)?.Name ?? "Payer";
         await NotifyGroupUpdatedAsync(settlement.SplitGroupId, $"❌ Payment of ₹{settlement.Amount:N2} from {fromMemberName} wasn't received — marked back as pending.");
+        await RecordActivityAsync(settlement.SplitGroupId, userId, "PaymentRejected", $"reported that ₹{settlement.Amount:N2} from {fromMemberName} wasn't received.");
 
         return Result.Success(true);
     }
@@ -705,7 +719,8 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<PublicGroupViewDto>(new Error("SplitGroup.NotFound", "This link doesn't point to a valid group."));
 
-        var page = await QueryExpensePageAsync(group.Id, null, null, null);
+        var page = await QueryExpensePageAsync(group.Id, new ExpenseListQuery());
+        if (page.IsSuccess) HidePrivateFields(page.Value.Items);
         if (!page.IsSuccess)
             return Result.Failure<PublicGroupViewDto>(page.Error);
 
@@ -735,7 +750,9 @@ public class SplitService : ISplitService
         if (groupId == null)
             return Result.Failure<ExpensePageDto>(new Error("SplitGroup.NotFound", "This link doesn't point to a valid group."));
 
-        return await QueryExpensePageAsync(groupId.Value, cursor, limit, null);
+        var publicPage = await QueryExpensePageAsync(groupId.Value, new ExpenseListQuery { Cursor = cursor, Limit = limit });
+        if (publicPage.IsSuccess) HidePrivateFields(publicPage.Value.Items);
+        return publicPage;
     }
 
     public async Task<Result<InviteCreatedDto>> CreateInviteAsync(string userId, CreateInviteDto dto)
@@ -834,6 +851,7 @@ public class SplitService : ISplitService
         await _context.SaveChangesAsync();
 
         await NotifyGroupUpdatedAsync(invite.SplitGroupId, $"🎉 {dto.DisplayName} joined the group!");
+        await RecordActivityAsync(invite.SplitGroupId, userId, "MemberJoined", "joined the group.");
 
         return Result.Success(new JoinGroupResultDto
         {
@@ -925,9 +943,16 @@ public class SplitService : ISplitService
             return Result.Failure<ExpenseDto>(new Error("SplitExpense.InvalidSplit", ex.Message));
         }
 
+        var before = new ExpenseSnapshot(
+            expense.Description, expense.Amount, expense.Date, expense.Category, expense.SplitType,
+            expense.Participants.Select(p => p.SplitGroupMemberId).ToHashSet(),
+            PayerKey(expense.Payers.Select(p => (p.SplitGroupMemberId, p.AmountPaid))),
+            expense.Notes);
+
         _context.SplitExpensePayers.RemoveRange(expense.Payers);
         _context.SplitExpenseParticipants.RemoveRange(expense.Participants);
 
+        expense.Notes = NormalizeNotes(dto.Notes);
         expense.Description = dto.Description;
         expense.Amount = dto.Amount;
         expense.Date = EnsureUtc(dto.Date);
@@ -960,6 +985,7 @@ public class SplitService : ISplitService
 
         var balances = updatedGroup != null ? ComputeBalancesDto(updatedGroup) : new GroupBalancesDto();
         await _notifier.NotifyExpenseUpdatedAsync(expense.SplitGroupId, $"Expense '{dto.Description}' (₹{dto.Amount:N2}) updated.", dtoRes.Value, balances);
+        await RecordActivityAsync(expense.SplitGroupId, userId, "ExpenseEdited", DescribeExpenseEdit(before, dto), expense.Id);
 
         return dtoRes;
     }
@@ -1007,6 +1033,7 @@ public class SplitService : ISplitService
             $"Expense '{desc}' (₹{amt:N2}) deleted.",
             expenseId,
             balances);
+        await RecordActivityAsync(groupId, userId, "ExpenseDeleted", $"deleted '{desc}' (₹{amt:N2}).", expenseId);
 
         return Result.Success(new DeleteExpenseResultDto { WasAlreadyImported = wasAlreadyImported });
     }
@@ -1028,6 +1055,7 @@ public class SplitService : ISplitService
         await _context.SaveChangesAsync();
 
         await _notifier.NotifyGroupStatusChangedAsync(groupId, $"🔒 Group has been locked.", SplitGroupStatus.Locked);
+        await RecordActivityAsync(groupId, userId, "GroupLocked", "locked the group.");
 
         return Result.Success(true);
     }
@@ -1046,6 +1074,7 @@ public class SplitService : ISplitService
         await _context.SaveChangesAsync();
 
         await _notifier.NotifyGroupStatusChangedAsync(groupId, $"🔓 Group has been unlocked.", SplitGroupStatus.Active);
+        await RecordActivityAsync(groupId, userId, "GroupUnlocked", "unlocked the group.");
 
         return Result.Success(true);
     }
@@ -1064,6 +1093,7 @@ public class SplitService : ISplitService
         await _context.SaveChangesAsync();
 
         await _notifier.NotifyGroupStatusChangedAsync(groupId, $"📁 Group has been closed.", SplitGroupStatus.Archived);
+        await RecordActivityAsync(groupId, userId, "GroupClosed", "closed the group.");
 
         return Result.Success(true);
     }
@@ -1088,6 +1118,7 @@ public class SplitService : ISplitService
         await _context.SaveChangesAsync();
 
         await _notifier.NotifyGroupUpdatedAsync(group.Id, $"✏️ Trip name updated to '{group.Name}'.");
+        await RecordActivityAsync(group.Id, userId, "GroupRenamed", $"renamed the trip to '{group.Name}'.");
 
         return Result.Success(MapToDto(group));
     }
@@ -1117,6 +1148,7 @@ public class SplitService : ISplitService
         await _context.SaveChangesAsync();
 
         await _notifier.NotifyGroupUpdatedAsync(member.SplitGroupId, $"👤 {oldName} was renamed to '{member.Name}'.");
+        await RecordActivityAsync(member.SplitGroupId, userId, "MemberRenamed", $"renamed {oldName} to '{member.Name}'.");
 
         return Result.Success(new MemberDto { Id = member.Id, Name = member.Name, LinkedUserId = member.LinkedUserId, UpiId = member.UpiId });
     }
@@ -1180,6 +1212,9 @@ public class SplitService : ISplitService
 
         await _notifier.NotifyGroupUpdatedAsync(group.Id,
             isSelf ? $"👋 {member.Name} left the group." : $"👋 {member.Name} was removed from the group.");
+        await RecordActivityAsync(group.Id, userId, isSelf ? "MemberLeft" : "MemberRemoved",
+            isSelf ? "left the group." : $"removed {member.Name} from the group.",
+            actorName: isSelf ? member.Name : null);
 
         return Result.Success(true);
     }
@@ -1201,6 +1236,291 @@ public class SplitService : ISplitService
         await _notifier.NotifyGroupDeletedAsync(groupId, $"🗑️ '{group.Name}' was deleted by the group creator.");
 
         return Result.Success(true);
+    }
+
+    // ── History, undo, receipts, global search ────────────────────────────────
+
+    public async Task<Result<ActivityPageDto>> GetActivityAsync(string userId, int groupId, string? cursor, int? limit)
+    {
+        var hasAccess = await _context.SplitGroups.AnyAsync(g =>
+            g.Id == groupId && (g.CreatedByUserId == userId || g.Members.Any(m => m.LinkedUserId == userId)));
+        if (!hasAccess)
+            return Result.Failure<ActivityPageDto>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        var size = Math.Clamp(limit ?? 30, 1, 100);
+        var query = _context.SplitActivities.AsNoTracking().Where(a => a.SplitGroupId == groupId);
+        if (int.TryParse(cursor, out var beforeId))
+            query = query.Where(a => a.Id < beforeId);
+
+        var rows = await query.OrderByDescending(a => a.Id).Take(size + 1).ToListAsync();
+        var hasMore = rows.Count > size;
+        var page = hasMore ? rows.Take(size).ToList() : rows;
+
+        return Result.Success(new ActivityPageDto
+        {
+            Items = page.Select(a => new ActivityDto
+            {
+                Id = a.Id,
+                ActorName = a.ActorName,
+                Type = a.Type,
+                Message = a.Message,
+                ExpenseId = a.SplitExpenseId,
+                CreatedAt = a.CreatedAt
+            }).ToList(),
+            NextCursor = hasMore ? page[^1].Id.ToString() : null
+        });
+    }
+
+    /// <summary>Recently deleted expenses (newest first) — the "undo" list.</summary>
+    public async Task<Result<List<ExpenseDto>>> GetDeletedExpensesAsync(string userId, int groupId)
+    {
+        var hasAccess = await _context.SplitGroups.AnyAsync(g =>
+            g.Id == groupId && (g.CreatedByUserId == userId || g.Members.Any(m => m.LinkedUserId == userId)));
+        if (!hasAccess)
+            return Result.Failure<List<ExpenseDto>>(new Error("SplitGroup.NotFound", "Group not found."));
+
+        var rows = await _context.SplitExpenses
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Include(e => e.Payers).ThenInclude(p => p.SplitGroupMember)
+            .Include(e => e.Participants).ThenInclude(p => p.SplitGroupMember)
+            .Where(e => e.SplitGroupId == groupId && e.IsDeleted)
+            .OrderByDescending(e => e.DeletedAt)
+            .Take(100)
+            .ToListAsync();
+
+        // IgnoreQueryFilters also lifts the filter on the lines — keep only the live ones.
+        foreach (var e in rows)
+        {
+            e.Payers = e.Payers.Where(p => !p.IsDeleted).ToList();
+            e.Participants = e.Participants.Where(p => !p.IsDeleted).ToList();
+        }
+
+        return Result.Success(rows.Select(r =>
+        {
+            var d = MapExpenseToDto(r);
+            d.DeletedAt = r.DeletedAt;
+            return d;
+        }).ToList());
+    }
+
+    public async Task<Result<ExpenseDto>> RestoreExpenseAsync(string userId, int expenseId)
+    {
+        var expense = await _context.SplitExpenses
+            .IgnoreQueryFilters()
+            .Include(e => e.Payers)
+            .Include(e => e.Participants)
+            .FirstOrDefaultAsync(e => e.Id == expenseId && e.IsDeleted);
+        if (expense == null)
+            return Result.Failure<ExpenseDto>(new Error("SplitExpense.NotFound", "That deleted expense wasn't found."));
+
+        var group = await LoadGroupForUserAsync(userId, expense.SplitGroupId);
+        if (group == null)
+            return Result.Failure<ExpenseDto>(new Error("SplitGroup.Forbidden", "You don't have access to this group."));
+
+        if (group.Status != SplitGroupStatus.Active)
+            return Result.Failure<ExpenseDto>(new Error(
+                "SplitExpense.GroupClosed", "This group is locked, settled, or archived — expenses can't be restored."));
+
+        var involved = expense.Payers.Where(p => !p.IsDeleted).Select(p => p.SplitGroupMemberId)
+            .Concat(expense.Participants.Where(p => !p.IsDeleted).Select(p => p.SplitGroupMemberId))
+            .ToHashSet();
+        var left = group.Members.Where(m => m.LeftAt != null && involved.Contains(m.Id)).Select(m => m.Name).ToList();
+        if (left.Count > 0)
+            return Result.Failure<ExpenseDto>(new Error(
+                "SplitExpense.MemberLeft",
+                $"{string.Join(", ", left)} has left the group, so this expense can't be restored. Add it again as a new expense instead."));
+
+        expense.IsDeleted = false;
+        expense.DeletedAt = null;
+        await _context.SaveChangesAsync();
+
+        var dtoRes = await GetExpenseDtoAsync(expense.Id);
+        var balances = await BuildBalancesAsync(expense.SplitGroupId);
+        await _notifier.NotifyExpenseAddedAsync(expense.SplitGroupId,
+            $"Expense '{expense.Description}' (₹{expense.Amount:N2}) restored.", dtoRes.Value, balances);
+        await RecordActivityAsync(expense.SplitGroupId, userId, "ExpenseRestored",
+            $"restored '{expense.Description}' (₹{expense.Amount:N2}).", expense.Id);
+
+        return dtoRes;
+    }
+
+    /// <summary>
+    /// Points an expense at a newly uploaded receipt (or clears it with null). Returns the
+    /// previous file path so the caller can delete the old file from disk.
+    /// </summary>
+    public async Task<Result<ReceiptChangeDto>> SetReceiptAsync(string userId, int expenseId, string? receiptPath)
+    {
+        var expense = await _context.SplitExpenses
+            .Include(e => e.SplitGroup).ThenInclude(g => g.Members)
+            .FirstOrDefaultAsync(e => e.Id == expenseId);
+        if (expense == null)
+            return Result.Failure<ReceiptChangeDto>(new Error("SplitExpense.NotFound", "Expense not found."));
+
+        var group = expense.SplitGroup;
+        var hasAccess = group.CreatedByUserId == userId || group.Members.Any(m => m.LinkedUserId == userId);
+        if (!hasAccess)
+            return Result.Failure<ReceiptChangeDto>(new Error("SplitGroup.Forbidden", "You don't have access to this group."));
+
+        if (group.Status == SplitGroupStatus.Archived)
+            return Result.Failure<ReceiptChangeDto>(new Error("SplitExpense.GroupClosed", "This group is closed."));
+
+        var previous = expense.ReceiptPath;
+        expense.ReceiptPath = receiptPath;
+        await _context.SaveChangesAsync();
+
+        var dtoRes = await GetExpenseDtoAsync(expense.Id);
+        var balances = await BuildBalancesAsync(group.Id);
+        await _notifier.NotifyExpenseUpdatedAsync(group.Id,
+            receiptPath == null ? $"Receipt removed from '{expense.Description}'." : $"Receipt added to '{expense.Description}'.",
+            dtoRes.Value, balances);
+        await RecordActivityAsync(group.Id, userId, "ReceiptChanged",
+            receiptPath == null ? $"removed the receipt from '{expense.Description}'." : $"attached a receipt to '{expense.Description}'.",
+            expense.Id);
+
+        return Result.Success(new ReceiptChangeDto { PreviousPath = previous, CurrentPath = receiptPath });
+    }
+
+    /// <summary>Search expenses by description, note, category or payer across every group the user is in.</summary>
+    public async Task<Result<List<GlobalExpenseHitDto>>> SearchExpensesAcrossGroupsAsync(string userId, string query, int? limit)
+    {
+        var term = query?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(term) || term.Length < 2)
+            return Result.Success(new List<GlobalExpenseHitDto>());
+
+        var take = Math.Clamp(limit ?? 30, 1, 100);
+
+        var found = await _context.SplitExpenses
+            .AsNoTracking()
+            .Where(e => e.SplitGroup.CreatedByUserId == userId || e.SplitGroup.Members.Any(m => m.LinkedUserId == userId))
+            .Where(e =>
+                e.Description.ToLower().Contains(term) ||
+                (e.Notes != null && e.Notes.ToLower().Contains(term)) ||
+                (e.Category != null && e.Category.ToLower().Contains(term)) ||
+                e.Payers.Any(p => p.SplitGroupMember.Name.ToLower().Contains(term)))
+            .OrderByDescending(e => e.Date).ThenByDescending(e => e.Id)
+            .Take(take)
+            .Select(e => new
+            {
+                e.Id,
+                e.SplitGroupId,
+                GroupName = e.SplitGroup.Name,
+                e.Description,
+                e.Amount,
+                e.Date,
+                e.Category,
+                Payers = e.Payers.Select(p => p.SplitGroupMember.Name).ToList()
+            })
+            .ToListAsync();
+
+        var rows = found.Select(f => new GlobalExpenseHitDto
+        {
+            ExpenseId = f.Id,
+            GroupId = f.SplitGroupId,
+            GroupName = f.GroupName,
+            Description = f.Description,
+            Amount = f.Amount,
+            Date = f.Date,
+            Category = f.Category,
+            PaidBy = string.Join(", ", f.Payers)
+        }).ToList();
+
+        return Result.Success(rows);
+    }
+
+    private async Task<GroupBalancesDto> BuildBalancesAsync(int groupId)
+    {
+        var updatedGroup = await _context.SplitGroups
+            .AsNoTracking()
+            .Include(g => g.Members)
+            .Include(g => g.Expenses).ThenInclude(e => e.Payers)
+            .Include(g => g.Expenses).ThenInclude(e => e.Participants)
+            .Include(g => g.Settlements)
+            .FirstOrDefaultAsync(g => g.Id == groupId);
+
+        return updatedGroup != null ? ComputeBalancesDto(updatedGroup) : new GroupBalancesDto();
+    }
+
+    /// <summary>
+    /// Appends one line to the group's history. The actor's name is looked up from
+    /// their member record unless given. Never throws — the history must not be able
+    /// to break the action it describes.
+    /// </summary>
+    private async Task RecordActivityAsync(
+        int groupId, string? userId, string type, string message, int? expenseId = null, string? actorName = null)
+    {
+        try
+        {
+            if (actorName == null && userId != null)
+            {
+                actorName = await _context.SplitGroupMembers
+                    .Where(m => m.SplitGroupId == groupId && m.LinkedUserId == userId)
+                    .Select(m => m.Name)
+                    .FirstOrDefaultAsync();
+            }
+
+            _context.SplitActivities.Add(new SplitActivity
+            {
+                SplitGroupId = groupId,
+                ActorUserId = userId,
+                ActorName = actorName ?? "Someone",
+                Type = type,
+                Message = message,
+                SplitExpenseId = expenseId
+            });
+            await _context.SaveChangesAsync();
+        }
+        catch (Exception)
+        {
+            // intentionally swallowed
+        }
+    }
+
+    private sealed record ExpenseSnapshot(
+        string Description, decimal Amount, DateTime Date, string? Category, SplitType SplitType,
+        HashSet<int> Participants, string PayerKey, string? Notes);
+
+    private static string PayerKey(IEnumerable<(int MemberId, decimal Amount)> payers)
+        => string.Join(",", payers.OrderBy(p => p.MemberId).Select(p => $"{p.MemberId}:{p.Amount:F2}"));
+
+    private static string? NormalizeNotes(string? notes)
+    {
+        var trimmed = notes?.Trim();
+        if (string.IsNullOrEmpty(trimmed)) return null;
+        return trimmed.Length > 1000 ? trimmed[..1000] : trimmed;
+    }
+
+    /// <summary>"edited 'Dinner' — amount ₹800 → ₹900, date 3 Oct 2026 → 4 Oct 2026"</summary>
+    private static string DescribeExpenseEdit(ExpenseSnapshot before, UpdateExpenseDto dto)
+    {
+        var changes = new List<string>();
+
+        if (!string.Equals(before.Description, dto.Description, StringComparison.Ordinal))
+            changes.Add($"name '{before.Description}' → '{dto.Description}'");
+        if (before.Amount != dto.Amount)
+            changes.Add($"amount ₹{before.Amount:N2} → ₹{dto.Amount:N2}");
+        if (before.Date.Date != dto.Date.Date)
+            changes.Add($"date {before.Date:d MMM yyyy} → {dto.Date:d MMM yyyy}");
+
+        var oldCategory = string.IsNullOrWhiteSpace(before.Category) ? "General" : before.Category;
+        var newCategory = string.IsNullOrWhiteSpace(dto.Category) ? "General" : dto.Category;
+        if (!string.Equals(oldCategory, newCategory, StringComparison.OrdinalIgnoreCase))
+            changes.Add($"category {oldCategory} → {newCategory}");
+
+        if (before.SplitType != dto.SplitType)
+            changes.Add($"split type {before.SplitType} → {dto.SplitType}");
+
+        var newParticipants = dto.Participants.Select(p => p.MemberId).ToHashSet();
+        if (!before.Participants.SetEquals(newParticipants))
+            changes.Add($"split between {before.Participants.Count} → {newParticipants.Count} people");
+
+        if (before.PayerKey != PayerKey(dto.Payers.Select(p => (p.MemberId, p.AmountPaid))))
+            changes.Add("who paid");
+
+        if ((before.Notes ?? string.Empty) != (NormalizeNotes(dto.Notes) ?? string.Empty))
+            changes.Add("note");
+
+        return $"edited '{dto.Description}'" + (changes.Count > 0 ? " — " + string.Join(", ", changes) : string.Empty);
     }
 
     private async Task CheckAndAutoSettleAsync(int groupId)
@@ -1420,36 +1740,103 @@ public class SplitService : ISplitService
     /// earlier day is therefore returned at its correct place in the timeline
     /// rather than at the top, and paging stays stable while rows are added.
     /// </summary>
-    private async Task<Result<ExpensePageDto>> QueryExpensePageAsync(int groupId, string? cursor, int? limit, string? search)
+    private async Task<Result<ExpensePageDto>> QueryExpensePageAsync(int groupId, ExpenseListQuery q)
     {
-        var pageSize = Math.Clamp(limit ?? DefaultPageSize, 1, MaxPageSize);
+        var pageSize = Math.Clamp(q.Limit ?? DefaultPageSize, 1, MaxPageSize);
 
         var query = _context.SplitExpenses
             .AsNoTracking()
             .Where(e => e.SplitGroupId == groupId);
 
-        var term = search?.Trim().ToLowerInvariant();
+        var term = q.Search?.Trim().ToLowerInvariant();
         if (!string.IsNullOrEmpty(term))
         {
             query = query.Where(e =>
                 e.Description.ToLower().Contains(term) ||
+                (e.Notes != null && e.Notes.ToLower().Contains(term)) ||
                 e.Payers.Any(p => p.SplitGroupMember.Name.ToLower().Contains(term)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(q.Category))
+        {
+            var category = q.Category.Trim();
+            query = category.Equals("General", StringComparison.OrdinalIgnoreCase)
+                ? query.Where(e => e.Category == null || e.Category == "" || e.Category == category)
+                : query.Where(e => e.Category == category);
+        }
+
+        if (q.PayerId.HasValue)
+        {
+            var payerId = q.PayerId.Value;
+            query = query.Where(e => e.Payers.Any(p => p.SplitGroupMemberId == payerId));
+        }
+
+        if (q.ParticipantId.HasValue)
+        {
+            var participantId = q.ParticipantId.Value;
+            query = query.Where(e => e.Participants.Any(p => p.SplitGroupMemberId == participantId));
+        }
+
+        if (q.From.HasValue)
+        {
+            var from = DateTime.SpecifyKind(q.From.Value.Date, DateTimeKind.Utc);
+            query = query.Where(e => e.Date >= from);
+        }
+
+        if (q.To.HasValue)
+        {
+            var toExclusive = DateTime.SpecifyKind(q.To.Value.Date, DateTimeKind.Utc).AddDays(1);
+            query = query.Where(e => e.Date < toExclusive);
+        }
+
+        if (q.MinAmount.HasValue)
+        {
+            var min = q.MinAmount.Value;
+            query = query.Where(e => e.Amount >= min);
+        }
+
+        if (q.MaxAmount.HasValue)
+        {
+            var max = q.MaxAmount.Value;
+            query = query.Where(e => e.Amount <= max);
         }
 
         var total = await query.CountAsync();
 
-        if (!string.IsNullOrWhiteSpace(cursor))
-        {
-            if (!TryDecodeCursor(cursor, out var cursorDate, out var cursorId))
-                return Result.Failure<ExpensePageDto>(new Error("SplitExpense.InvalidCursor", "Invalid page cursor."));
+        var sort = (q.Sort ?? "date_desc").Trim().ToLowerInvariant();
+        var keyset = sort == "date_desc";
+        var offset = 0;
 
-            query = query.Where(e => e.Date < cursorDate || (e.Date == cursorDate && e.Id < cursorId));
+        if (!string.IsNullOrWhiteSpace(q.Cursor))
+        {
+            if (keyset)
+            {
+                if (!TryDecodeCursor(q.Cursor, out var cursorDate, out var cursorId))
+                    return Result.Failure<ExpensePageDto>(new Error("SplitExpense.InvalidCursor", "Invalid page cursor."));
+
+                query = query.Where(e => e.Date < cursorDate || (e.Date == cursorDate && e.Id < cursorId));
+            }
+            else if (!q.Cursor.StartsWith("o:") || !int.TryParse(q.Cursor.AsSpan(2), out offset) || offset < 0)
+            {
+                return Result.Failure<ExpensePageDto>(new Error("SplitExpense.InvalidCursor", "Invalid page cursor."));
+            }
         }
 
-        var rows = await query
+        var withLines = query
             .Include(e => e.Payers).ThenInclude(p => p.SplitGroupMember)
-            .Include(e => e.Participants).ThenInclude(p => p.SplitGroupMember)
-            .OrderByDescending(e => e.Date).ThenByDescending(e => e.Id)
+            .Include(e => e.Participants).ThenInclude(p => p.SplitGroupMember);
+
+        IOrderedQueryable<SplitExpense> ordered = sort switch
+        {
+            "date_asc" => withLines.OrderBy(e => e.Date).ThenBy(e => e.Id),
+            "amount_desc" => withLines.OrderByDescending(e => e.Amount).ThenByDescending(e => e.Id),
+            "amount_asc" => withLines.OrderBy(e => e.Amount).ThenBy(e => e.Id),
+            _ => withLines.OrderByDescending(e => e.Date).ThenByDescending(e => e.Id)
+        };
+
+        // The default order pages by keyset (stable while rows are added); the other
+        // orders use a simple offset.
+        var rows = await (keyset ? ordered : ordered.Skip(offset))
             .Take(pageSize + 1)
             .ToListAsync();
 
@@ -1459,9 +1846,19 @@ public class SplitService : ISplitService
         return Result.Success(new ExpensePageDto
         {
             Items = pageRows.Select(MapExpenseToDto).ToList(),
-            NextCursor = hasMore ? EncodeCursor(pageRows[^1]) : null,
+            NextCursor = !hasMore ? null : keyset ? EncodeCursor(pageRows[^1]) : $"o:{offset + pageSize}",
             TotalCount = total
         });
+    }
+
+    /// <summary>Notes and receipts are for group members only — never exposed on the public share link.</summary>
+    private static void HidePrivateFields(IEnumerable<ExpenseDto> expenses)
+    {
+        foreach (var e in expenses)
+        {
+            e.Notes = null;
+            e.ReceiptUrl = null;
+        }
     }
 
     private static string EncodeCursor(SplitExpense e)
@@ -1497,6 +1894,8 @@ public class SplitService : ISplitService
         Date = e.Date,
         Category = e.Category,
         SplitType = e.SplitType,
+        Notes = e.Notes,
+        ReceiptUrl = e.ReceiptPath,
         Payers = e.Payers.Select(p => new PayerLineDto { MemberId = p.SplitGroupMemberId, MemberName = p.SplitGroupMember.Name, AmountPaid = p.AmountPaid }).ToList(),
         Participants = e.Participants.Select(p => new ParticipantLineDto { MemberId = p.SplitGroupMemberId, MemberName = p.SplitGroupMember.Name, ShareAmount = p.ShareAmount, SplitValue = p.SplitValue }).ToList()
     };

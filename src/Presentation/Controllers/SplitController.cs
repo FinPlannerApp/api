@@ -1,3 +1,4 @@
+using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Split;
 using Microsoft.AspNetCore.Authorization;
@@ -39,10 +40,15 @@ public class SplitController : BaseController
     public async Task<IActionResult> AddExpense([FromBody] CreateExpenseDto dto)
         => HandleResult(await _service.AddExpenseAsync(UserId, dto));
 
+    /// <summary>
+    /// Paged expense list, newest day first by default. Pass the previous response's
+    /// nextCursor as <c>cursor</c> to load the next page (infinite scroll). Optional
+    /// filters: search, category, payerId, participantId, from, to, minAmount, maxAmount;
+    /// sort = date_desc | date_asc | amount_desc | amount_asc.
+    /// </summary>
     [HttpGet("groups/{groupId}/expenses")]
-    public async Task<IActionResult> GetExpenses(
-    int groupId, [FromQuery] string? cursor, [FromQuery] int? limit, [FromQuery] string? search)
-    => HandleResult(await _service.GetExpensesAsync(UserId, groupId, cursor, limit, search));
+    public async Task<IActionResult> GetExpenses(int groupId, [FromQuery] ExpenseListQuery query)
+        => HandleResult(await _service.GetExpensesAsync(UserId, groupId, query));
 
     [HttpGet("groups/{groupId}/export")]
     public async Task<IActionResult> GetGroupExport(int groupId)
@@ -164,4 +170,95 @@ public class SplitController : BaseController
     [HttpDelete("settlements/{id}")]
     public async Task<IActionResult> DeleteSettlement(int id)
         => HandleResult(await _service.DeleteSettlementAsync(UserId, id));
+
+    /// <summary>The group's history / audit trail, newest first.</summary>
+    [HttpGet("groups/{groupId}/activity")]
+    public async Task<IActionResult> GetActivity(int groupId, [FromQuery] string? cursor, [FromQuery] int? limit)
+        => HandleResult(await _service.GetActivityAsync(UserId, groupId, cursor, limit));
+
+    /// <summary>Recently deleted expenses, for "undo".</summary>
+    [HttpGet("groups/{groupId}/expenses/deleted")]
+    public async Task<IActionResult> GetDeletedExpenses(int groupId)
+        => HandleResult(await _service.GetDeletedExpensesAsync(UserId, groupId));
+
+    [HttpPost("expenses/{id}/restore")]
+    public async Task<IActionResult> RestoreExpense(int id)
+        => HandleResult(await _service.RestoreExpenseAsync(UserId, id));
+
+    /// <summary>Search expenses across every group the caller belongs to.</summary>
+    [HttpGet("search")]
+    public async Task<IActionResult> SearchAcrossGroups([FromQuery] string q, [FromQuery] int? limit)
+        => HandleResult(await _service.SearchExpensesAcrossGroupsAsync(UserId, q, limit));
+
+    private static readonly Dictionary<string, string> ReceiptTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [".jpg"] = "image/jpeg",
+        [".jpeg"] = "image/jpeg",
+        [".png"] = "image/png",
+        [".webp"] = "image/webp"
+    };
+
+    private const long MaxReceiptBytes = 5 * 1024 * 1024;
+    private const string ReceiptUrlPrefix = "/uploads/split-receipts/";
+
+    /// <summary>Attach (or replace) a receipt photo: JPG, PNG or WebP up to 5 MB.</summary>
+    [HttpPost("expenses/{id}/receipt")]
+    [RequestSizeLimit(MaxReceiptBytes + 1024 * 1024)]
+    public async Task<IActionResult> UploadReceipt(int id, [FromForm] IFormFile file)
+    {
+        if (file == null || file.Length == 0)
+            return ReceiptError("Choose an image to upload.");
+        if (file.Length > MaxReceiptBytes)
+            return ReceiptError("The receipt must be 5 MB or smaller.");
+
+        var extension = Path.GetExtension(file.FileName);
+        if (!ReceiptTypes.TryGetValue(extension, out var expectedType) ||
+            !string.Equals(file.ContentType, expectedType, StringComparison.OrdinalIgnoreCase))
+            return ReceiptError("Only JPG, PNG or WebP images are allowed.");
+
+        // Random server-side name: the caller's file name is never used on disk.
+        var folder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads", "split-receipts", id.ToString());
+        Directory.CreateDirectory(folder);
+        var storedName = $"{Guid.NewGuid():N}{extension.ToLowerInvariant()}";
+        var fullPath = Path.Combine(folder, storedName);
+        await using (var stream = new FileStream(fullPath, FileMode.CreateNew))
+        {
+            await file.CopyToAsync(stream);
+        }
+
+        var relative = $"{ReceiptUrlPrefix}{id}/{storedName}";
+        var result = await _service.SetReceiptAsync(UserId, id, relative);
+        if (!result.IsSuccess)
+        {
+            System.IO.File.Delete(fullPath); // access refused — don't keep the upload
+            return HandleResult(result);
+        }
+
+        DeleteReceiptFile(result.Value.PreviousPath);
+        return HandleResult(result);
+    }
+
+    [HttpDelete("expenses/{id}/receipt")]
+    public async Task<IActionResult> RemoveReceipt(int id)
+    {
+        var result = await _service.SetReceiptAsync(UserId, id, null);
+        if (result.IsSuccess) DeleteReceiptFile(result.Value.PreviousPath);
+        return HandleResult(result);
+    }
+
+    private IActionResult ReceiptError(string message)
+        => HandleResult(Result.Failure<ReceiptChangeDto>(new Error("SplitReceipt.Invalid", message)));
+
+    private static void DeleteReceiptFile(string? relativePath)
+    {
+        // Only ever touch files we created ourselves, under the receipts folder.
+        if (string.IsNullOrEmpty(relativePath) || !relativePath.StartsWith(ReceiptUrlPrefix, StringComparison.Ordinal) ||
+            relativePath.Contains(".."))
+            return;
+
+        var root = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads", "split-receipts"));
+        var full = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", relativePath.TrimStart('/')));
+        if (full.StartsWith(root, StringComparison.Ordinal) && System.IO.File.Exists(full))
+            System.IO.File.Delete(full);
+    }
 }
