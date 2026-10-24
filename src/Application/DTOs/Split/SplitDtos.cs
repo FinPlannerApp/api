@@ -14,6 +14,9 @@ public class GroupDto
     public string Name { get; set; } = string.Empty;
     public string CreatedByUserId { get; set; } = string.Empty;
     public string Currency { get; set; } = "INR";
+    public bool SimplifyDebts { get; set; } = true;
+    public DateTime? StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
     public SplitGroupStatus Status { get; set; }
     public string ShareToken { get; set; } = string.Empty;
     public List<MemberDto> Members { get; set; } = new();
@@ -47,6 +50,17 @@ public class UpdateGroupDto
 {
     public int GroupId { get; set; }
     public required string Name { get; set; }
+}
+
+/// <summary>Group-wide settings (creator only). Every field is sent each time.</summary>
+public class UpdateGroupSettingsDto
+{
+    public int GroupId { get; set; }
+    /// <summary>ISO currency code, e.g. INR, USD, EUR. A display label — amounts are not converted.</summary>
+    public required string Currency { get; set; }
+    public bool SimplifyDebts { get; set; } = true;
+    public DateTime? StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
 }
 
 public class RenameMemberDto
@@ -294,4 +308,5 @@ public class GlobalExpenseHitDto
     public DateTime Date { get; set; }
     public string? Category { get; set; }
     public string PaidBy { get; set; } = string.Empty;
+    public string Currency { get; set; } = "INR";
 }

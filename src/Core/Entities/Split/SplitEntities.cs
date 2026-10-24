@@ -10,6 +10,17 @@ public class SplitGroup : BaseEntity
     public required string Name { get; set; }
     public required string CreatedByUserId { get; set; } // plain string, same convention as everywhere else
     public string Currency { get; set; } = "INR";
+
+    /// <summary>
+    /// true  = "simplify debts": the fewest possible payments settle the group.
+    /// false = each person pays back exactly the people they owe (pairwise).
+    /// </summary>
+    public bool SimplifyDebts { get; set; } = true;
+
+    /// <summary>Optional trip dates (shown in the header; informational).</summary>
+    public DateTime? StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
+
     public SplitGroupStatus Status { get; set; } = SplitGroupStatus.Active;
 
     /// <summary>

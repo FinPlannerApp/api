@@ -44,4 +44,7 @@ public interface ISplitService
     Task<Result<List<GlobalExpenseHitDto>>> SearchExpensesAcrossGroupsAsync(string userId, string query, int? limit);
     Task<Result<SettlementDto>> UpdateSettlementAsync(string userId, int settlementId, UpdateSettlementDto dto);
     Task<Result<bool>> DeleteSettlementAsync(string userId, int settlementId);
+    Task<Result<GroupDto>> UpdateGroupSettingsAsync(string userId, UpdateGroupSettingsDto dto);
+    Task<Result<bool>> MergeMembersAsync(string userId, int sourceMemberId, int targetMemberId);
 }
+

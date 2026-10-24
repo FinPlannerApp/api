@@ -518,6 +518,18 @@ public class SplitService : ISplitService
     /// </summary>
     private static Error? CheckSettlementLimits(SplitGroup group, SplitGroupMember fromMember, SplitGroupMember toMember, decimal amount)
     {
+        if (!group.SimplifyDebts)
+        {
+            // Pairwise groups: you can only pay back the person you actually owe.
+            var owedToThem = SplitBalanceCalculator.PairwiseDebts(group)
+                .Where(d => d.FromMemberId == fromMember.Id && d.ToMemberId == toMember.Id)
+                .Sum(d => d.Amount);
+            return amount > owedToThem + 0.01m
+                ? new Error("SplitSettlement.ExceedsDebt",
+                    $"{fromMember.Name} owes {toMember.Name} ₹{owedToThem:F2} — this payment (₹{amount:F2}) exceeds that.")
+                : null;
+        }
+
         var balances = SplitBalanceCalculator.CalculateNetBalances(group);
         var fromEntry = balances.First(b => b.MemberId == fromMember.Id);
         var toEntry = balances.First(b => b.MemberId == toMember.Id);
@@ -803,9 +815,14 @@ public class SplitService : ISplitService
         return Result.Success(new InvitePreviewDto
         {
             GroupName = invite.SplitGroup.Name,
-            MemberCount = invite.SplitGroup.Members.Count,
+            MemberCount = invite.SplitGroup.Members.Count(m => m.LeftAt == null),
             IsValid = isValid,
-            InvalidReason = reason
+            InvalidReason = reason,
+            UnclaimedMembers = isValid
+                ? invite.SplitGroup.Members
+                    .Where(m => m.LinkedUserId == null && m.LeftAt == null)
+                    .Select(m => new UnclaimedMemberDto { Id = m.Id, Name = m.Name }).ToList()
+                : new List<UnclaimedMemberDto>()
         });
     }
 
@@ -838,20 +855,35 @@ public class SplitService : ISplitService
             });
         }
 
-        var newMember = new SplitGroupMember
+        SplitGroupMember newMember;
+        if (dto.ClaimMemberId.HasValue)
         {
-            SplitGroupId = invite.SplitGroupId,
-            Name = dto.DisplayName,
-            LinkedUserId = userId
-        };
+            // Join as an existing name-only member: they keep every expense already logged for them.
+            var claimed = invite.SplitGroup.Members.FirstOrDefault(m => m.Id == dto.ClaimMemberId.Value);
+            if (claimed == null || claimed.LinkedUserId != null || claimed.LeftAt != null)
+                return Result.Failure<JoinGroupResultDto>(new Error(
+                    "SplitInvite.CannotClaim", "That member has already been claimed — pick someone else or join as new."));
+            claimed.LinkedUserId = userId;
+            newMember = claimed;
+        }
+        else
+        {
+            newMember = new SplitGroupMember
+            {
+                SplitGroupId = invite.SplitGroupId,
+                Name = dto.DisplayName,
+                LinkedUserId = userId
+            };
+            _context.SplitGroupMembers.Add(newMember);
+        }
 
-        _context.SplitGroupMembers.Add(newMember);
         invite.UsedCount++;
         _context.SplitGroupInvites.Update(invite);
         await _context.SaveChangesAsync();
 
-        await NotifyGroupUpdatedAsync(invite.SplitGroupId, $"🎉 {dto.DisplayName} joined the group!");
-        await RecordActivityAsync(invite.SplitGroupId, userId, "MemberJoined", "joined the group.");
+        await NotifyGroupUpdatedAsync(invite.SplitGroupId, $"🎉 {newMember.Name} joined the group!");
+        await RecordActivityAsync(invite.SplitGroupId, userId, dto.ClaimMemberId.HasValue ? "MemberClaimed" : "MemberJoined",
+            dto.ClaimMemberId.HasValue ? $"joined the group as {newMember.Name}." : "joined the group.", actorName: newMember.Name);
 
         return Result.Success(new JoinGroupResultDto
         {
@@ -1195,6 +1227,14 @@ public class SplitService : ISplitService
                 $"{member.Name} isn't settled up yet ({(owes < 0 ? "owes" : "is owed")} ₹{Math.Abs(owes):N2}). Settle up first, then they can leave."));
         }
 
+        if (!group.SimplifyDebts && SplitBalanceCalculator.PairwiseDebts(group)
+                .Any(d => d.FromMemberId == memberId || d.ToMemberId == memberId))
+        {
+            return Result.Failure<bool>(new Error(
+                "SplitMember.HasBalance",
+                $"{member.Name} still has unsettled payments with other members. Settle up first, then they can leave."));
+        }
+
         // Any payment requests that were never sent just get cancelled.
         foreach (var s in group.Settlements
                      .Where(s => s.Status == SettlementStatus.Pending &&
@@ -1405,6 +1445,7 @@ public class SplitService : ISplitService
                 e.Id,
                 e.SplitGroupId,
                 GroupName = e.SplitGroup.Name,
+                Currency = e.SplitGroup.Currency,
                 e.Description,
                 e.Amount,
                 e.Date,
@@ -1418,6 +1459,7 @@ public class SplitService : ISplitService
             ExpenseId = f.Id,
             GroupId = f.SplitGroupId,
             GroupName = f.GroupName,
+            Currency = f.Currency,
             Description = f.Description,
             Amount = f.Amount,
             Date = f.Date,
@@ -1458,6 +1500,11 @@ public class SplitService : ISplitService
                     .Select(m => m.Name)
                     .FirstOrDefaultAsync();
             }
+
+            var currency = await _context.SplitGroups
+                .Where(g => g.Id == groupId).Select(g => g.Currency).FirstOrDefaultAsync();
+            if (currency != null && currency != "INR")
+                message = message.Replace("₹", CurrencySymbol(currency));
 
             _context.SplitActivities.Add(new SplitActivity
             {
@@ -1523,6 +1570,139 @@ public class SplitService : ISplitService
         return $"edited '{dto.Description}'" + (changes.Count > 0 ? " — " + string.Join(", ", changes) : string.Empty);
     }
 
+    // ── Group settings, claiming and merging members ─────────────────────────
+
+    private static readonly Dictionary<string, string> CurrencySymbols = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["INR"] = "₹", ["USD"] = "$", ["EUR"] = "€", ["GBP"] = "£", ["JPY"] = "¥", ["AED"] = "AED ",
+        ["SGD"] = "S$", ["AUD"] = "A$", ["CAD"] = "C$", ["CHF"] = "CHF ", ["THB"] = "฿", ["MYR"] = "RM ",
+        ["IDR"] = "Rp ", ["LKR"] = "Rs ", ["NPR"] = "Rs ", ["BDT"] = "৳", ["NZD"] = "NZ$", ["ZAR"] = "R "
+    };
+
+    private static string CurrencySymbol(string code)
+        => CurrencySymbols.TryGetValue(code, out var symbol) ? symbol : code + " ";
+
+    public async Task<Result<GroupDto>> UpdateGroupSettingsAsync(string userId, UpdateGroupSettingsDto dto)
+    {
+        var group = await _context.SplitGroups
+            .Include(g => g.Members)
+            .Include(g => g.Expenses)
+            .FirstOrDefaultAsync(g => g.Id == dto.GroupId);
+        if (group == null)
+            return Result.Failure<GroupDto>(new Error("SplitGroup.NotFound", "Group not found."));
+        if (group.CreatedByUserId != userId)
+            return Result.Failure<GroupDto>(new Error("SplitGroup.Forbidden", "Only the group creator can change group settings."));
+        if (group.Status == SplitGroupStatus.Archived)
+            return Result.Failure<GroupDto>(new Error("SplitGroup.Closed", "This group is closed."));
+
+        var currency = dto.Currency?.Trim().ToUpperInvariant() ?? string.Empty;
+        if (!CurrencySymbols.ContainsKey(currency))
+            return Result.Failure<GroupDto>(new Error("SplitGroup.InvalidCurrency", "That currency isn't supported."));
+
+        if (dto.StartDate.HasValue && dto.EndDate.HasValue && dto.EndDate.Value.Date < dto.StartDate.Value.Date)
+            return Result.Failure<GroupDto>(new Error("SplitGroup.InvalidDates", "The end date can't be before the start date."));
+
+        var changes = new List<string>();
+        if (group.Currency != currency) changes.Add($"currency {group.Currency} → {currency}");
+        if (group.SimplifyDebts != dto.SimplifyDebts) changes.Add(dto.SimplifyDebts ? "simplify debts on" : "simplify debts off");
+        var start = dto.StartDate.HasValue ? EnsureUtc(dto.StartDate.Value.Date) : (DateTime?)null;
+        var end = dto.EndDate.HasValue ? EnsureUtc(dto.EndDate.Value.Date) : (DateTime?)null;
+        if (group.StartDate != start || group.EndDate != end) changes.Add("trip dates");
+
+        group.Currency = currency;
+        group.SimplifyDebts = dto.SimplifyDebts;
+        group.StartDate = start;
+        group.EndDate = end;
+        await _context.SaveChangesAsync();
+
+        await NotifyGroupUpdatedAsync(group.Id, "⚙️ Group settings were updated.");
+        if (changes.Count > 0)
+            await RecordActivityAsync(group.Id, userId, "SettingsChanged", "changed " + string.Join(", ", changes) + ".");
+
+        return Result.Success(MapToDto(group));
+    }
+
+    /// <summary>
+    /// Folds a name-only member into another: the source's payments, shares and
+    /// settlements all move to the target, then the source disappears. Use it when
+    /// the same person was added twice ("Rahul" and "Rahul K").
+    /// </summary>
+    public async Task<Result<bool>> MergeMembersAsync(string userId, int sourceMemberId, int targetMemberId)
+    {
+        if (sourceMemberId == targetMemberId)
+            return Result.Failure<bool>(new Error("SplitMember.SameMember", "Choose two different members."));
+
+        var source = await _context.SplitGroupMembers.FirstOrDefaultAsync(m => m.Id == sourceMemberId);
+        var target = await _context.SplitGroupMembers.FirstOrDefaultAsync(m => m.Id == targetMemberId);
+        if (source == null || target == null || source.SplitGroupId != target.SplitGroupId)
+            return Result.Failure<bool>(new Error("SplitMember.NotFound", "Both members must be in the same group."));
+
+        var group = await _context.SplitGroups.FirstAsync(g => g.Id == source.SplitGroupId);
+        if (group.CreatedByUserId != userId)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can merge members."));
+        if (group.Status == SplitGroupStatus.Archived)
+            return Result.Failure<bool>(new Error("SplitGroup.Closed", "This group is closed."));
+        if (source.LinkedUserId != null)
+            return Result.Failure<bool>(new Error("SplitMember.Linked", $"{source.Name} has a FinPlanner account linked and can't be merged away. Merge the name-only one into them instead."));
+        if (source.LeftAt != null || target.LeftAt != null)
+            return Result.Failure<bool>(new Error("SplitMember.Left", "Members who have left can't be merged."));
+
+        // Payers and participants: combine where both are on the same expense, move otherwise.
+        var payers = await _context.SplitExpensePayers
+            .Where(p => p.SplitGroupMemberId == source.Id || p.SplitGroupMemberId == target.Id).ToListAsync();
+        foreach (var byExpense in payers.GroupBy(p => p.SplitExpenseId))
+        {
+            var src = byExpense.FirstOrDefault(p => p.SplitGroupMemberId == source.Id);
+            if (src == null) continue;
+            var tgt = byExpense.FirstOrDefault(p => p.SplitGroupMemberId == target.Id);
+            if (tgt == null) { src.SplitGroupMemberId = target.Id; continue; }
+            tgt.AmountPaid += src.AmountPaid;
+            src.IsDeleted = true;
+            src.DeletedAt = DateTime.UtcNow;
+        }
+
+        var participants = await _context.SplitExpenseParticipants
+            .Where(p => p.SplitGroupMemberId == source.Id || p.SplitGroupMemberId == target.Id).ToListAsync();
+        foreach (var byExpense in participants.GroupBy(p => p.SplitExpenseId))
+        {
+            var src = byExpense.FirstOrDefault(p => p.SplitGroupMemberId == source.Id);
+            if (src == null) continue;
+            var tgt = byExpense.FirstOrDefault(p => p.SplitGroupMemberId == target.Id);
+            if (tgt == null) { src.SplitGroupMemberId = target.Id; continue; }
+            tgt.ShareAmount += src.ShareAmount;
+            if (src.SplitValue.HasValue) tgt.SplitValue = (tgt.SplitValue ?? 0) + src.SplitValue.Value;
+            src.IsDeleted = true;
+            src.DeletedAt = DateTime.UtcNow;
+        }
+
+        // Settlements: re-point; one between the two of them is now a payment to oneself — drop it.
+        var settlements = await _context.SplitSettlements
+            .Where(s => s.SplitGroupId == group.Id &&
+                        (s.FromMemberId == source.Id || s.ToMemberId == source.Id)).ToListAsync();
+        foreach (var settlement in settlements)
+        {
+            if (settlement.FromMemberId == source.Id) settlement.FromMemberId = target.Id;
+            if (settlement.ToMemberId == source.Id) settlement.ToMemberId = target.Id;
+            if (settlement.FromMemberId == settlement.ToMemberId)
+            {
+                settlement.IsDeleted = true;
+                settlement.DeletedAt = DateTime.UtcNow;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(target.UpiId) && !string.IsNullOrWhiteSpace(source.UpiId))
+            target.UpiId = source.UpiId;
+
+        source.IsDeleted = true;
+        source.DeletedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await NotifyGroupUpdatedAsync(group.Id, $"🔀 {source.Name} was merged into {target.Name}.");
+        await RecordActivityAsync(group.Id, userId, "MembersMerged", $"merged {source.Name} into {target.Name}.");
+
+        return Result.Success(true);
+    }
+
     private async Task CheckAndAutoSettleAsync(int groupId)
     {
         var group = await _context.SplitGroups
@@ -1535,7 +1715,7 @@ public class SplitService : ISplitService
         if (group == null || group.Status != SplitGroupStatus.Locked) return;
 
         var balances = SplitBalanceCalculator.CalculateNetBalances(group);
-        bool allSettled = balances.All(b => Math.Abs(b.NetBalance) < 0.01m);
+        bool allSettled = SplitBalanceCalculator.IsFullySettled(group, balances);
 
         if (allSettled)
         {
@@ -1678,7 +1858,7 @@ public class SplitService : ISplitService
     private static GroupBalancesDto ComputeBalancesDto(SplitGroup group)
     {
         var balances = SplitBalanceCalculator.CalculateNetBalances(group);
-        var simplified = SplitBalanceCalculator.SimplifyDebts(balances);
+        var simplified = SplitBalanceCalculator.BuildPlan(group, balances);
         var leftIds = group.Members.Where(m => m.LeftAt != null).Select(m => m.Id).ToHashSet();
 
         return new GroupBalancesDto
@@ -1906,6 +2086,9 @@ public class SplitService : ISplitService
         Name = g.Name,
         CreatedByUserId = g.CreatedByUserId,
         Currency = g.Currency,
+        SimplifyDebts = g.SimplifyDebts,
+        StartDate = g.StartDate,
+        EndDate = g.EndDate,
         Status = g.Status,
         ShareToken = g.ShareToken,
         Members = g.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, LinkedUserId = m.LinkedUserId, UpiId = m.UpiId, LeftAt = m.LeftAt }).ToList(),

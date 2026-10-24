@@ -386,4 +386,155 @@ public class SplitBalanceCalculatorTests
             Settlements = new List<SplitSettlement> { settlement }
         };
     }
+
+    // ── Pairwise ("simplify debts" off) ─────────────────────────────────────────
+
+    /// <summary>A paid 100 for B alone; B paid 100 for C alone. Net: A +100, B 0, C -100.</summary>
+    private static SplitGroup ChainGroup(bool simplify, params SplitSettlement[] settlements)
+    {
+        SplitExpense Single(int payer, int consumer) => new()
+        {
+            Description = "x",
+            Amount = 100,
+            SplitType = SplitType.Equal,
+            Payers = new List<SplitExpensePayer> { new() { SplitGroupMemberId = payer, AmountPaid = 100 } },
+            Participants = new List<SplitExpenseParticipant> { new() { SplitGroupMemberId = consumer, ShareAmount = 100 } }
+        };
+
+        return new SplitGroup
+        {
+            Name = "Chain",
+            CreatedByUserId = "user-1",
+            ShareToken = "token",
+            SimplifyDebts = simplify,
+            Members = new List<SplitGroupMember>
+            {
+                new() { Id = 1, Name = "A" }, new() { Id = 2, Name = "B" }, new() { Id = 3, Name = "C" }
+            },
+            Expenses = new List<SplitExpense> { Single(1, 2), Single(2, 3) },
+            Settlements = settlements.ToList()
+        };
+    }
+
+    [Fact]
+    public void PairwiseDebts_DoesNotRerouteThroughThirdParties()
+    {
+        var group = ChainGroup(simplify: false);
+
+        var plan = SplitBalanceCalculator.BuildPlan(group, SplitBalanceCalculator.CalculateNetBalances(group));
+
+        plan.Should().HaveCount(2);
+        plan.Should().ContainSingle(d => d.FromMemberId == 2 && d.ToMemberId == 1 && d.Amount == 100m);
+        plan.Should().ContainSingle(d => d.FromMemberId == 3 && d.ToMemberId == 2 && d.Amount == 100m);
+    }
+
+    [Fact]
+    public void SimplifiedPlan_CollapsesTheSameChainIntoOnePayment()
+    {
+        var group = ChainGroup(simplify: true);
+
+        var plan = SplitBalanceCalculator.BuildPlan(group, SplitBalanceCalculator.CalculateNetBalances(group));
+
+        plan.Should().ContainSingle();
+        plan[0].FromMemberId.Should().Be(3);
+        plan[0].ToMemberId.Should().Be(1);
+        plan[0].Amount.Should().Be(100m);
+    }
+
+    [Fact]
+    public void PairwiseDebts_CompletedPaymentReducesOnlyThatPair()
+    {
+        var group = ChainGroup(false, new SplitSettlement
+        {
+            FromMemberId = 2, ToMemberId = 1, Amount = 100, PaymentReference = "r", Status = SettlementStatus.Completed
+        });
+
+        var plan = SplitBalanceCalculator.PairwiseDebts(group);
+
+        plan.Should().ContainSingle();
+        plan[0].FromMemberId.Should().Be(3);
+        plan[0].ToMemberId.Should().Be(2);
+    }
+
+    [Fact]
+    public void PairwiseDebts_OppositeDebtsBetweenTwoPeopleAreNetted()
+    {
+        var group = ChainGroup(false);
+        // B also consumed 40 that A paid for -> B owes A 140; and A consumed 30 B paid for -> net B owes A 110.
+        group.Expenses.Add(new SplitExpense
+        {
+            Description = "y", Amount = 40, SplitType = SplitType.Equal,
+            Payers = new List<SplitExpensePayer> { new() { SplitGroupMemberId = 1, AmountPaid = 40 } },
+            Participants = new List<SplitExpenseParticipant> { new() { SplitGroupMemberId = 2, ShareAmount = 40 } }
+        });
+        group.Expenses.Add(new SplitExpense
+        {
+            Description = "z", Amount = 30, SplitType = SplitType.Equal,
+            Payers = new List<SplitExpensePayer> { new() { SplitGroupMemberId = 2, AmountPaid = 30 } },
+            Participants = new List<SplitExpenseParticipant> { new() { SplitGroupMemberId = 1, ShareAmount = 30 } }
+        });
+
+        var plan = SplitBalanceCalculator.PairwiseDebts(group);
+
+        plan.Should().ContainSingle(d => d.FromMemberId == 2 && d.ToMemberId == 1 && d.Amount == 110m);
+    }
+
+    [Fact]
+    public void IsFullySettled_PairwiseGroupNeedsEveryPairSquare_NotJustZeroNets()
+    {
+        // C pays A directly: every net balance is now zero, but B->A and C->B are still open pairwise.
+        var payment = new SplitSettlement
+        {
+            FromMemberId = 3, ToMemberId = 1, Amount = 100, PaymentReference = "r", Status = SettlementStatus.Completed
+        };
+
+        var pairwise = ChainGroup(false, payment);
+        var simplified = ChainGroup(true, payment);
+
+        SplitBalanceCalculator.IsFullySettled(simplified, SplitBalanceCalculator.CalculateNetBalances(simplified))
+            .Should().BeTrue();
+        SplitBalanceCalculator.IsFullySettled(pairwise, SplitBalanceCalculator.CalculateNetBalances(pairwise))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void PairwiseDebts_MultiplePayersShareTheCreditProportionally()
+    {
+        // 300 dinner; A paid 200, B paid 100; C's share is 100 -> C owes A 66.67 and B 33.33.
+        var group = new SplitGroup
+        {
+            Name = "g", CreatedByUserId = "u", ShareToken = "t", SimplifyDebts = false,
+            Members = new List<SplitGroupMember>
+            {
+                new() { Id = 1, Name = "A" }, new() { Id = 2, Name = "B" }, new() { Id = 3, Name = "C" }
+            },
+            Expenses = new List<SplitExpense>
+            {
+                new()
+                {
+                    Description = "Dinner", Amount = 300, SplitType = SplitType.Equal,
+                    Payers = new List<SplitExpensePayer>
+                    {
+                        new() { SplitGroupMemberId = 1, AmountPaid = 200 },
+                        new() { SplitGroupMemberId = 2, AmountPaid = 100 }
+                    },
+                    Participants = new List<SplitExpenseParticipant>
+                    {
+                        new() { SplitGroupMemberId = 1, ShareAmount = 100 },
+                        new() { SplitGroupMemberId = 2, ShareAmount = 100 },
+                        new() { SplitGroupMemberId = 3, ShareAmount = 100 }
+                    }
+                }
+            },
+            Settlements = new List<SplitSettlement>()
+        };
+
+        var plan = SplitBalanceCalculator.PairwiseDebts(group);
+
+        plan.Should().Contain(d => d.FromMemberId == 3 && d.ToMemberId == 1 && d.Amount == 66.67m);
+        plan.Should().Contain(d => d.FromMemberId == 3 && d.ToMemberId == 2 && d.Amount == 33.33m);
+        // B owes A: B's share of A's payment (200/300 * 100 = 66.67) minus A's share of B's payment (100/300 * 100 = 33.33).
+        plan.Should().Contain(d => d.FromMemberId == 2 && d.ToMemberId == 1 && d.Amount == 33.33m);
+    }
 }
+

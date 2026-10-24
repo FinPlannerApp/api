@@ -74,6 +74,70 @@ public static class SplitBalanceCalculator
         return balances.Values.OrderBy(b => b.MemberId).ToList();
     }
 
+    /// <summary>The payment plan to show: minimal ("simplify debts") or pairwise, per the group's setting.</summary>
+    public static List<SimplifiedDebt> BuildPlan(SplitGroup group, List<MemberBalance> balances)
+        => group.SimplifyDebts ? SimplifyDebts(balances) : PairwiseDebts(group);
+
+    /// <summary>
+    /// "Who owes whom" without re-routing money through third parties. Each
+    /// participant's share of an expense is owed to the payer(s) (split by how
+    /// much each paid); opposite debts between two people are netted; payments
+    /// already made (and, optionally, sent but unconfirmed) reduce what's left.
+    /// Anything under 2 paise is rounding dust and is dropped.
+    /// </summary>
+    public static List<SimplifiedDebt> PairwiseDebts(SplitGroup group, bool includeInTransit = true)
+    {
+        var owed = new Dictionary<(int From, int To), decimal>();
+        void Add(int from, int to, decimal amount)
+        {
+            if (from == to || amount == 0) return;
+            owed[(from, to)] = owed.GetValueOrDefault((from, to)) + amount;
+        }
+
+        foreach (var expense in group.Expenses)
+        {
+            var total = expense.Payers.Sum(p => p.AmountPaid);
+            if (total <= 0) continue;
+            foreach (var participant in expense.Participants)
+                foreach (var payer in expense.Payers)
+                    Add(participant.SplitGroupMemberId, payer.SplitGroupMemberId,
+                        participant.ShareAmount * payer.AmountPaid / total);
+        }
+
+        foreach (var settlement in group.Settlements)
+        {
+            if (settlement.Status == SettlementStatus.Completed ||
+                (includeInTransit && settlement.Status == SettlementStatus.AwaitingConfirmation))
+                Add(settlement.FromMemberId, settlement.ToMemberId, -settlement.Amount);
+        }
+
+        var names = group.Members.ToDictionary(m => m.Id, m => m.Name);
+        string NameOf(int id) => names.TryGetValue(id, out var n) ? n : "Member";
+
+        var result = new List<SimplifiedDebt>();
+        var pairs = owed.Keys.Select(k => (A: Math.Min(k.From, k.To), B: Math.Max(k.From, k.To))).Distinct();
+        foreach (var (a, b) in pairs)
+        {
+            var net = Math.Round(owed.GetValueOrDefault((a, b)) - owed.GetValueOrDefault((b, a)), 2);
+            if (Math.Abs(net) < 0.02m) continue;
+            var (from, to, amount) = net > 0 ? (a, b, net) : (b, a, -net);
+            result.Add(new SimplifiedDebt
+            {
+                FromMemberId = from, FromMemberName = NameOf(from),
+                ToMemberId = to, ToMemberName = NameOf(to),
+                Amount = amount
+            });
+        }
+
+        return result.OrderBy(d => d.FromMemberId).ThenBy(d => d.ToMemberId).ToList();
+    }
+
+    /// <summary>Is everything paid off? Pairwise groups also need every pair to be square.</summary>
+    public static bool IsFullySettled(SplitGroup group, List<MemberBalance> balances)
+        => balances.All(b => Math.Abs(b.NetBalance) < 0.01m)
+           && (group.SimplifyDebts || PairwiseDebts(group, includeInTransit: false).Count == 0);
+
+
     /// <summary>
     /// Smallest possible list of payments. Minimum = (people with a balance) - (max number of disjoint
     /// zero-sum sub-groups); found exactly by bitmask DP up to 18 people, greedy beyond that.

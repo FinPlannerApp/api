@@ -142,6 +142,20 @@ public class SplitController : BaseController
         return HandleResult(await _service.UpdateGroupAsync(UserId, dto));
     }
 
+    /// <summary>Currency label, simplify-debts toggle and trip dates (creator only).</summary>
+    [HttpPut("groups/{groupId}/settings")]
+    public async Task<IActionResult> UpdateGroupSettings(int groupId, [FromBody] UpdateGroupSettingsDto dto)
+    {
+        dto.GroupId = groupId;
+        return HandleResult(await _service.UpdateGroupSettingsAsync(UserId, dto));
+    }
+
+    /// <summary>Merge a name-only member into another one (creator only): all their expenses and payments move over.</summary>
+    [HttpPost("members/{sourceId}/merge-into/{targetId}")]
+    public async Task<IActionResult> MergeMembers(int sourceId, int targetId)
+        => HandleResult(await _service.MergeMembersAsync(UserId, sourceId, targetId));
+
+
     [HttpPost("members/rename")]
     public async Task<IActionResult> RenameMember([FromBody] RenameMemberDto dto)
         => HandleResult(await _service.RenameMemberAsync(UserId, dto));

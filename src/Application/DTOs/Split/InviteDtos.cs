@@ -29,11 +29,25 @@ public class InvitePreviewDto
     public int MemberCount { get; set; }
     public bool IsValid { get; set; }
     public string? InvalidReason { get; set; } // "expired", "revoked", "fully used", "not found"
+
+    /// <summary>
+    /// Members who are just a name so far — a joiner can claim one ("I'm Rahul")
+    /// instead of being added as a new person, keeping their past expenses.
+    /// </summary>
+    public List<UnclaimedMemberDto> UnclaimedMembers { get; set; } = new();
+}
+
+public class UnclaimedMemberDto
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
 }
 
 public class JoinGroupDto
 {
     public required string Token { get; set; }
+    /// <summary>Optional: join as this existing, not-yet-claimed member instead of a new one.</summary>
+    public int? ClaimMemberId { get; set; }
     public required string DisplayName { get; set; } // matches how CreateGroupDto.CreatorName already works — passed explicitly, not auto-derived from an unverified identity dependency
 }
 
