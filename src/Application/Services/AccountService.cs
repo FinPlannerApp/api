@@ -57,8 +57,11 @@ public class AccountService : IAccountService
             .Take(queryParams.PageSize)
             .ToListAsync();
 
+        var dtos = items.Select(a => MapToDto(a, null)).ToList();
+        await PopulateCreditCardBillingDetailsAsync(userId, dtos);
+
         var pagedDto = new PaginatedResult<AccountDto>(
-            items.Select(a => MapToDto(a, null)).ToList(),
+            dtos,
             totalRecords,
             queryParams.PageNumber,
             queryParams.PageSize
@@ -82,7 +85,9 @@ public class AccountService : IAccountService
             .OrderBy(a => a.Name)
             .ToListAsync();
 
-        return Result.Success(items.Select(a => MapToDto(a, null)).ToList());
+        var dtos = items.Select(a => MapToDto(a, null)).ToList();
+        await PopulateCreditCardBillingDetailsAsync(userId, dtos);
+        return Result.Success(dtos);
     }
 
     public async Task<Result<AccountDto>> UpsertAccountAsync(string userId, UpsertAccountDto dto)
@@ -180,6 +185,7 @@ public class AccountService : IAccountService
         await _context.SaveChangesAsync();
 
         var resultDto = MapToDto(account, category);
+        await PopulateCreditCardBillingDetailsAsync(userId, new List<AccountDto> { resultDto });
         await _cache.RemoveByPrefixAsync($"dash::{userId}:"); // Invalidate net worth
         return Result.Success(resultDto);
     }
@@ -672,8 +678,18 @@ public class AccountService : IAccountService
         if (account == null || account.UserId != userId)
             return Result.Failure<CreditCardBillResultDto>(new Error("Account.NotFound", "Account not found."));
 
-        if (account.AccountCategory?.AccountType != AccountType.CreditCard || account.CreditCardDetails == null)
+        var isCreditCard = account.AccountCategory?.AccountType == AccountType.CreditCard ||
+                           account.CreditCardDetails != null ||
+                           (account.AccountCategory?.Name != null && account.AccountCategory.Name.ToLower().Contains("credit"));
+
+        if (!isCreditCard)
             return Result.Failure<CreditCardBillResultDto>(new Error("CreditCard.NotACard", "This account isn't set up as a credit card."));
+
+        if (account.CreditCardDetails == null)
+        {
+            account.CreditCardDetails = new CreditCardDetails { AccountId = account.Id };
+            _context.CreditCardDetails.Add(account.CreditCardDetails);
+        }
 
         if (dto.BillAmount < 0)
             return Result.Failure<CreditCardBillResultDto>(new Error("CreditCardBill.InvalidAmount", "Bill amount can't be negative."));
@@ -1400,6 +1416,74 @@ public class AccountService : IAccountService
                 MinimumBalance = a.BankAccountDetails.MinimumBalance
             }
         };
+    }
+
+    private async Task PopulateCreditCardBillingDetailsAsync(string userId, List<AccountDto> accountDtos)
+    {
+        var ccDtos = accountDtos
+            .Where(a => a.AccountType == AccountType.CreditCard || a.CreditCardDetails != null || (a.AccountCategoryName != null && a.AccountCategoryName.ToLower().Contains("credit")))
+            .ToList();
+
+        if (ccDtos.Count == 0) return;
+
+        var ccAccountIds = ccDtos.Select(a => a.Id).ToList();
+
+        var bills = await _context.CreditCardBills
+            .Where(b => ccAccountIds.Contains(b.AccountId) && b.UserId == userId)
+            .OrderByDescending(b => b.StatementDate)
+            .ToListAsync();
+
+        var latestBillByAccount = bills
+            .GroupBy(b => b.AccountId)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var payments = await _context.CreditCardPayments
+            .Where(p => ccAccountIds.Contains(p.CreditCardAccountId) && !p.IsDeleted && p.UserId == userId)
+            .ToListAsync();
+
+        foreach (var acc in ccDtos)
+        {
+            acc.CreditCardDetails ??= new CreditCardDetailsDto();
+            var details = acc.CreditCardDetails;
+
+            latestBillByAccount.TryGetValue(acc.Id, out var latestBill);
+
+            decimal totalPaidForCycle = 0;
+            if (latestBill != null)
+            {
+                totalPaidForCycle = payments
+                    .Where(p => p.CreditCardAccountId == acc.Id &&
+                                (p.CreditCardBillId == latestBill.Id || (p.CreditCardBillId == null && p.Date >= latestBill.StatementDate)))
+                    .Sum(p => p.Amount);
+            }
+
+            var billAmount = latestBill?.BillAmount;
+            var remainingBillAmount = billAmount.HasValue
+                ? Math.Max(0, billAmount.Value - totalPaidForCycle)
+                : Math.Max(0, Math.Abs(acc.Balance) - totalPaidForCycle);
+
+            var isBillFullyPaid = latestBill != null
+                ? ((billAmount.HasValue && billAmount.Value > 0) ? (totalPaidForCycle >= billAmount.Value) : (latestBill.IsPaid && remainingBillAmount <= 0))
+                : (acc.Balance >= 0);
+
+            var isPaid = isBillFullyPaid || (acc.Balance >= 0 && (!billAmount.HasValue || remainingBillAmount <= 0));
+
+            details.LatestBillAmount = billAmount;
+            details.LatestBillIsPaid = isBillFullyPaid;
+            details.RemainingBillAmount = remainingBillAmount;
+            details.TotalPaidForCycle = totalPaidForCycle;
+            details.IsPaid = isPaid;
+            details.LastStatementDate = latestBill?.StatementDate;
+
+            if (latestBill?.MinimumDue.HasValue == true)
+            {
+                details.MinimumDueAmount = latestBill.MinimumDue;
+            }
+            if (latestBill?.DueDate.HasValue == true)
+            {
+                details.DueDate = latestBill.DueDate;
+            }
+        }
     }
 
     private string ToTitleCase(string input)

@@ -10,6 +10,14 @@ public class CreditCardDetailsDto
     public DateTime? StatementClosingDate { get; set; }
     public decimal? AnnualFee { get; set; }
     public decimal? InterestRate { get; set; }
+
+    // Bill Cycle & Settlement Status
+    public decimal? LatestBillAmount { get; set; }
+    public bool LatestBillIsPaid { get; set; }
+    public decimal? RemainingBillAmount { get; set; }
+    public decimal? TotalPaidForCycle { get; set; }
+    public bool IsPaid { get; set; }
+    public DateTime? LastStatementDate { get; set; }
 }
 
 public class LoanDetailsDto
