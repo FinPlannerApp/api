@@ -122,10 +122,27 @@ public class AuthService : IAuthService
     {
         var db = _redis.GetDatabase();
 
-        // Verify OTP
-        var storedOtp = await db.StringGetAsync($"reg-otp:{dto.Email}");
+        // Verify OTP — with the same 5-attempt cap the password-reset flow already has.
+        // Without it a 6-digit code could be brute-forced within its 10-minute lifetime.
+        var regOtpKey = $"reg-otp:{dto.Email}";
+        var regAttemptsKey = $"reg-otp-attempts:{dto.Email}";
+
+        var regAttempts = (int)(await db.StringGetAsync(regAttemptsKey));
+        if (regAttempts >= 5)
+        {
+            await db.KeyDeleteAsync(regOtpKey); // force a fresh code
+            return Result.Failure<string>(new Error("Auth.TooManyAttempts", "Too many incorrect attempts. Please register again to get a new code."));
+        }
+
+        var storedOtp = await db.StringGetAsync(regOtpKey);
         if (storedOtp.IsNullOrEmpty || storedOtp.ToString() != dto.Otp)
+        {
+            var regTtl = await db.KeyTimeToLiveAsync(regOtpKey);
+            await db.StringIncrementAsync(regAttemptsKey);
+            await db.KeyExpireAsync(regAttemptsKey, regTtl ?? TimeSpan.FromMinutes(10));
             return Result.Failure<string>(new Error("Auth.InvalidOtp", "Invalid or expired verification code."));
+        }
+        await db.KeyDeleteAsync(regAttemptsKey);
 
         // Retrieve cached registration data
         var registrationJson = await db.StringGetAsync($"reg:{dto.Email}");
@@ -181,11 +198,25 @@ public class AuthService : IAuthService
             .Include(u => u.RefreshTokens) // Important: Load existing tokens
             .FirstOrDefaultAsync(u => u.UserName == dto.UserName);
 
+        // Lockout was configured (5 attempts / 15 min) but never enforced, because plain
+        // CheckPasswordAsync does not count failures. Count them explicitly.
+        if (user != null && await _userManager.IsLockedOutAsync(user))
+        {
+            _logger.LogWarning("Login attempt on locked-out account {UserName} from IP {IpAddress}", dto.UserName, ipAddress);
+            return Result.Failure<LoginResponseDto>(new Error("Auth.LockedOut", "Too many failed attempts. Please try again in a few minutes."));
+        }
+
         if (user == null || !await _userManager.CheckPasswordAsync(user, dto.Password))
         {
+            if (user != null)
+                await _userManager.AccessFailedAsync(user);
+
             _logger.LogWarning("Failed login attempt for {UserName} from IP {IpAddress}", dto.UserName, ipAddress);
             return Result.Failure<LoginResponseDto>(new Error("Auth.InvalidCredentials", "Invalid username or password."));
         }
+
+        if (user.AccessFailedCount > 0)
+            await _userManager.ResetAccessFailedCountAsync(user);
 
         // Concurrent Login Check
         if (!string.IsNullOrEmpty(user.CurrentSessionId) && !dto.ForceLogin)

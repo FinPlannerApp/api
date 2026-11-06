@@ -132,31 +132,60 @@ using (var scope = app.Services.CreateScope())
             await roleManager.CreateAsync(new Microsoft.AspNetCore.Identity.IdentityRole("Admin"));
         }
 
-        // Seed Demo User & Full Realistic Demo Data
-        var userManager = services.GetRequiredService<Microsoft.AspNetCore.Identity.UserManager<Domain.Entities.ApplicationUser>>();
-        var demoUser = await userManager.FindByNameAsync("demouser");
-        if (demoUser == null)
+        // Seed Demo User & demo data — ONLY when explicitly enabled (on by default in
+        // Development, off everywhere else). The password comes from configuration and the
+        // demo user is a normal user: it is NOT given the Admin role.
+        var cfg = services.GetRequiredService<IConfiguration>();
+        var seedDemo = cfg.GetValue<bool?>("Seed:DemoUser:Enabled") ?? app.Environment.IsDevelopment();
+        var demoPassword = cfg["Seed:DemoUser:Password"];
+
+        if (seedDemo && string.IsNullOrWhiteSpace(demoPassword))
         {
-            demoUser = new Domain.Entities.ApplicationUser
+            if (app.Environment.IsDevelopment())
+                demoPassword = "Password123!@#"; // local dev convenience only
+            else
+                services.GetRequiredService<ILogger<Program>>()
+                    .LogWarning("Seed:DemoUser:Enabled is true but Seed:DemoUser:Password is not set. Skipping demo user.");
+        }
+
+        // A previously seeded demo account (public, known password) must never hold Admin in
+        // production. Strip the role if it is still there; recover real admin via /api/admin/bootstrap.
+        if (!app.Environment.IsDevelopment())
+        {
+            var um = services.GetRequiredService<Microsoft.AspNetCore.Identity.UserManager<Domain.Entities.ApplicationUser>>();
+            var existingDemo = await um.FindByNameAsync("demouser");
+            if (existingDemo != null && await um.IsInRoleAsync(existingDemo, "Admin"))
             {
-                Name = "Demo Planner User",
-                UserName = "demouser",
-                Email = "demo@planner.local",
-                EmailConfirmed = true,
-                DateOfBirth = DateTime.SpecifyKind(new DateTime(1992, 1, 1), DateTimeKind.Utc)
-            };
-            var createResult = await userManager.CreateAsync(demoUser, "Password123!@#");
-            if (createResult.Succeeded)
-            {
-                await userManager.AddToRoleAsync(demoUser, "Admin");
+                await um.RemoveFromRoleAsync(existingDemo, "Admin");
+                services.GetRequiredService<ILogger<Program>>()
+                    .LogWarning("Removed the Admin role from the legacy 'demouser' account.");
             }
         }
 
-        if (demoUser != null)
+        if (seedDemo && !string.IsNullOrWhiteSpace(demoPassword))
         {
-            var dbContext = services.GetRequiredService<Application.Contracts.IApplicationDbContext>();
-            var demoSeeder = new Application.Services.DemoDataSeederService(dbContext);
-            await demoSeeder.SeedDemoDataAsync(demoUser.Id);
+            var userManager = services.GetRequiredService<Microsoft.AspNetCore.Identity.UserManager<Domain.Entities.ApplicationUser>>();
+            var demoUser = await userManager.FindByNameAsync("demouser");
+            if (demoUser == null)
+            {
+                demoUser = new Domain.Entities.ApplicationUser
+                {
+                    Name = "Demo Planner User",
+                    UserName = "demouser",
+                    Email = "demo@planner.local",
+                    EmailConfirmed = true,
+                    DateOfBirth = DateTime.SpecifyKind(new DateTime(1992, 1, 1), DateTimeKind.Utc)
+                };
+                var createResult = await userManager.CreateAsync(demoUser, demoPassword);
+                if (!createResult.Succeeded) demoUser = null;
+            }
+
+            if (demoUser != null)
+            {
+                var dbContext = services.GetRequiredService<Application.Contracts.IApplicationDbContext>();
+                var demoSeeder = new Application.Services.DemoDataSeederService(dbContext);
+                await demoSeeder.SeedDemoDataAsync(demoUser.Id);
+            }
         }
     }
     catch (Exception ex)

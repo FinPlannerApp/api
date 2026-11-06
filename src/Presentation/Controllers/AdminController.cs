@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Presentation.Controllers;
 
@@ -21,6 +23,21 @@ public class AdminController : ControllerBase
         _userManager = userManager;
         _roleManager = roleManager;
     }
+
+    // ── Shared guards ────────────────────────────────────────────────────────
+    // Constant-time comparison so the secret can't be recovered through response timing.
+    private static bool SecretMatches(string? expected, string? provided)
+    {
+        if (string.IsNullOrWhiteSpace(expected) || provided is null) return false;
+        var a = SHA256.HashData(Encoding.UTF8.GetBytes(expected));
+        var b = SHA256.HashData(Encoding.UTF8.GetBytes(provided));
+        return CryptographicOperations.FixedTimeEquals(a, b);
+    }
+
+    // Maintenance endpoints (diagnose / repair / migrate) are OFF unless explicitly enabled
+    // in configuration for the duration of a deployment task.
+    private static bool MaintenanceEnabled(IConfiguration config)
+        => config.GetValue<bool>("Admin:EnableMaintenanceEndpoints");
 
     /// <summary>
     /// Promote a user to Admin role. Only existing admins can do this.
@@ -41,30 +58,33 @@ public class AdminController : ControllerBase
     }
 
     /// <summary>
-    /// Bootstrap the FIRST admin. Uses a secret key from appsettings.
-    /// Call this once to make yourself admin, then use /promote for others.
+    /// Bootstrap the FIRST admin. Sign in first, then call with your own email and the
+    /// AdminBootstrapKey from configuration. Works only while no admin exists.
     /// POST /api/admin/bootstrap { "email": "you@example.com", "secretKey": "your-secret" }
     /// </summary>
     [HttpPost("bootstrap")]
-    [AllowAnonymous]
     public async Task<ActionResult> BootstrapAdmin([FromBody] BootstrapAdminDto input, [FromServices] IConfiguration config)
     {
         var expectedKey = config["AdminBootstrapKey"];
         if (string.IsNullOrWhiteSpace(expectedKey))
-            return StatusCode(500, new { message = "AdminBootstrapKey is not configured on this server." });
-        
-        if (input.SecretKey != expectedKey)
+            return NotFound(); // feature not configured: behave as if it does not exist
+
+        if (!SecretMatches(expectedKey, input.SecretKey))
             return Unauthorized(new { message = "Invalid secret key." });
 
-        var user = await _userManager.FindByEmailAsync(input.Email);
-        if (user == null) return NotFound(new { message = "User not found. Register first." });
+        // Must be signed in, and can only elevate yourself — a leaked key alone can't
+        // promote an arbitrary account.
+        var user = await _userManager.GetUserAsync(User);
+        if (user == null) return Unauthorized();
+        if (!string.Equals(user.Email, input.Email, StringComparison.OrdinalIgnoreCase))
+            return Forbid();
 
-        // Ensure role exists
+        // One-time: once any admin exists, further admins go through /promote.
+        if ((await _userManager.GetUsersInRoleAsync("Admin")).Any())
+            return Conflict(new { message = "An admin already exists. Ask them to promote you." });
+
         if (!await _roleManager.RoleExistsAsync("Admin"))
             await _roleManager.CreateAsync(new IdentityRole("Admin"));
-
-        if (await _userManager.IsInRoleAsync(user, "Admin"))
-            return Ok(new { message = "User is already an Admin." });
 
         await _userManager.AddToRoleAsync(user, "Admin");
         return Ok(new { message = $"{user.Name} is now an Admin. Log out and log back in to activate." });
@@ -86,16 +106,15 @@ public class AdminController : ControllerBase
     /// POST /api/admin/diagnose { "secretKey": "your-secret" }
     /// </summary>
     [HttpPost("diagnose")]
-    [AllowAnonymous]
+    [Authorize(Roles = "Admin")]
     public async Task<ActionResult> DiagnoseDb(
         [FromBody] MigrateDto input,
         [FromServices] IConfiguration config,
-        [FromServices] ApplicationDbContext db)
+        [FromServices] ApplicationDbContext db,
+        [FromServices] ILogger<AdminController> logger)
     {
-        var expectedKey = config["AdminBootstrapKey"];
-        if (string.IsNullOrWhiteSpace(expectedKey))
-            return StatusCode(500, new { message = "AdminBootstrapKey is not configured on this server." });
-        if (input.SecretKey != expectedKey)
+        if (!MaintenanceEnabled(config)) return NotFound();
+        if (!SecretMatches(config["AdminBootstrapKey"], input.SecretKey))
             return Unauthorized(new { message = "Invalid secret key." });
 
         try
@@ -172,7 +191,8 @@ public class AdminController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = "Diagnostics failed.", error = ex.Message });
+            logger.LogError(ex, "Admin diagnostics failed.");
+            return StatusCode(500, new { message = "Diagnostics failed. See server logs." });
         }
     }
 
@@ -182,17 +202,16 @@ public class AdminController : ControllerBase
     /// POST /api/admin/repair-db { "secretKey": "your-secret" }
     /// </summary>
     [HttpPost("repair-db")]
-    [AllowAnonymous]
+    [Authorize(Roles = "Admin")]
     public async Task<ActionResult> RepairDb(
         [FromBody] MigrateDto input,
         [FromServices] IConfiguration config,
         [FromServices] ApplicationDbContext db,
-        [FromServices] TaxonomySeederService seeder)
+        [FromServices] TaxonomySeederService seeder,
+        [FromServices] ILogger<AdminController> logger)
     {
-        var expectedKey = config["AdminBootstrapKey"];
-        if (string.IsNullOrWhiteSpace(expectedKey))
-            return StatusCode(500, new { message = "AdminBootstrapKey is not configured on this server." });
-        if (input.SecretKey != expectedKey)
+        if (!MaintenanceEnabled(config)) return NotFound();
+        if (!SecretMatches(config["AdminBootstrapKey"], input.SecretKey))
             return Unauthorized(new { message = "Invalid secret key." });
 
         var results = new List<string>();
@@ -289,7 +308,8 @@ public class AdminController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = "Repair failed.", error = ex.Message, innerError = ex.InnerException?.Message, results });
+            logger.LogError(ex, "Admin repair-db failed.");
+            return StatusCode(500, new { message = "Repair failed. See server logs.", results });
         }
     }
 
@@ -299,17 +319,16 @@ public class AdminController : ControllerBase
     /// POST /api/admin/migrate-and-seed { "secretKey": "your-secret", "bypassMigration": true }
     /// </summary>
     [HttpPost("migrate-and-seed")]
-    [AllowAnonymous]
+    [Authorize(Roles = "Admin")]
     public async Task<ActionResult> MigrateAndSeed(
         [FromBody] MigrateDto input,
         [FromServices] IConfiguration config,
         [FromServices] ApplicationDbContext db,
-        [FromServices] TaxonomySeederService seeder)
+        [FromServices] TaxonomySeederService seeder,
+        [FromServices] ILogger<AdminController> logger)
     {
-        var expectedKey = config["AdminBootstrapKey"];
-        if (string.IsNullOrWhiteSpace(expectedKey))
-            return StatusCode(500, new { message = "AdminBootstrapKey is not configured on this server." });
-        if (input.SecretKey != expectedKey)
+        if (!MaintenanceEnabled(config)) return NotFound();
+        if (!SecretMatches(config["AdminBootstrapKey"], input.SecretKey))
             return Unauthorized(new { message = "Invalid secret key." });
 
         var results = new List<string>();
@@ -341,7 +360,8 @@ public class AdminController : ControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { message = "Migration/seed failed.", error = ex.Message, innerError = ex.InnerException?.Message });
+            logger.LogError(ex, "Admin migrate-and-seed failed.");
+            return StatusCode(500, new { message = "Migration/seed failed. See server logs." });
         }
 
         return Ok(new { success = true, results });

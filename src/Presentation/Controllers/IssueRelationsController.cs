@@ -1,7 +1,9 @@
+using Application.Contracts;
 using Application.Services;
 using Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
 namespace Presentation.Controllers;
@@ -18,10 +20,20 @@ public class CreateRelationDto
 public class IssueRelationsController : ControllerBase
 {
     private readonly IssueRelationService _relationService;
+    private readonly IApplicationDbContext _context;
 
-    public IssueRelationsController(IssueRelationService relationService)
+    public IssueRelationsController(IssueRelationService relationService, IApplicationDbContext context)
     {
         _relationService = relationService;
+        _context = context;
+    }
+
+    // Only the issue's creator or an admin may change its relations — previously any
+    // signed-in user could rewire any issue.
+    private async Task<bool> CanEditIssueAsync(int issueId, string userId)
+    {
+        if (User.IsInRole("Admin")) return true;
+        return await _context.Issues.AnyAsync(i => i.Id == issueId && i.CreatorUserId == userId);
     }
 
     [HttpGet("{id}/relations")]
@@ -53,6 +65,8 @@ public class IssueRelationsController : ControllerBase
             return BadRequest(new { message = "Invalid relation type." });
         }
 
+        if (!await CanEditIssueAsync(id, userId)) return Forbid();
+
         var (success, error) = await _relationService.AddRelationAsync(id, input.TargetIssueId, relType, userId);
 
         if (!success)
@@ -73,6 +87,8 @@ public class IssueRelationsController : ControllerBase
         {
             return BadRequest(new { message = "Invalid relation type." });
         }
+
+        if (!await CanEditIssueAsync(id, userId)) return Forbid();
 
         var (success, error) = await _relationService.RemoveRelationAsync(id, targetIssueId, relType, userId);
 

@@ -24,7 +24,7 @@ public static class ApiLayerServiceExtensions
                 partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                 factory: _ => new FixedWindowRateLimiterOptions
                 {
-                    PermitLimit = 1000,
+                    PermitLimit = 30, // auth endpoints: per-IP brute-force brake (was 1000/min, i.e. none)
                     Window = TimeSpan.FromMinutes(1),
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     QueueLimit = 0

@@ -2,6 +2,7 @@ using Application.Contracts;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
+using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Text.Json;
 
@@ -53,13 +54,110 @@ public sealed class RedisCacheService : ICacheService
         }
     }
 
+    // ── Versioned namespaces ───────────────────────────────────────────────
+    // Keys shaped "dash::{userId}:rest" are stored as "dash::{userId}:v{N}:rest".
+    // Invalidating a user = bumping N (ONE Redis command, no SCAN, no per-key DEL).
+    // Old entries become unreachable immediately and simply expire by TTL.
+    // N lives in process memory (free) and in Redis ("ver::<scope>") so it survives
+    // restarts; the in-memory copy is re-read from Redis every VersionRecheck so a
+    // second instance would pick up the other's invalidations.
+    private readonly ConcurrentDictionary<string, (long Ver, DateTime CheckedAt)> _versions = new();
+    private static readonly TimeSpan VersionRecheck = TimeSpan.FromSeconds(30);
+    private const string VersionedRoot = "dash::";
+
+    private static bool TryGetScope(string key, out string scope)
+    {
+        scope = string.Empty;
+        if (!key.StartsWith(VersionedRoot, StringComparison.Ordinal)) return false;
+        var idx = key.IndexOf(':', VersionedRoot.Length);
+        if (idx < 0) return false;
+        scope = key[..(idx + 1)]; // "dash::{userId}:"
+        return true;
+    }
+
+    // Version each read started under, keyed by the caller's original key. A value computed
+    // after a cache miss is written back under THAT version, so if an invalidation lands while
+    // it was being computed, the (possibly stale) result goes to the old, unreachable version
+    // instead of poisoning the new one.
+    private readonly ConcurrentDictionary<string, long> _readVersions = new();
+
+    private async Task<string> ResolveKeyAsync(string key, bool forRead)
+    {
+        if (!TryGetScope(key, out var scope)) return key;
+
+        long ver;
+        if (forRead)
+        {
+            ver = await GetVersionAsync(scope);
+            if (_readVersions.Count > 10_000) _readVersions.Clear();
+            _readVersions[key] = ver;
+        }
+        else
+        {
+            ver = _readVersions.TryRemove(key, out var seen) ? seen : await GetVersionAsync(scope);
+        }
+        return $"{scope}v{ver}:{key[scope.Length..]}";
+    }
+
+    private async Task<long> GetVersionAsync(string scope)
+    {
+        var now = DateTime.UtcNow;
+        _versions.TryGetValue(scope, out var entry); // default = (0, MinValue) when absent
+        if (entry.CheckedAt != default && now - entry.CheckedAt < VersionRecheck)
+            return entry.Ver;
+
+        var ver = entry.Ver;
+        try
+        {
+            if (_db.Multiplexer.IsConnected)
+            {
+                var stored = await _db.StringGetAsync($"ver::{scope}");
+                if (stored.HasValue && long.TryParse((string?)stored, out var parsed))
+                    ver = Math.Max(ver, parsed);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Cache] Version read failed for {Scope}. Using local version.", scope);
+        }
+
+        _versions.AddOrUpdate(scope, (ver, now), (_, old) => (Math.Max(old.Ver, ver), now));
+        return ver;
+    }
+
+    private async Task BumpVersionAsync(string scope)
+    {
+        var now = DateTime.UtcNow;
+        var next = _versions.TryGetValue(scope, out var e) ? e.Ver + 1 : 1;
+        try
+        {
+            if (_db.Multiplexer.IsConnected)
+            {
+                var fromRedis = await _db.StringIncrementAsync($"ver::{scope}");
+                next = Math.Max(next, fromRedis);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Cache] Version bump failed in Redis for {Scope}. Local only.", scope);
+        }
+
+        // Local copy updates immediately, so this instance never serves old data.
+        _versions.AddOrUpdate(scope, (next, now), (_, old) => (Math.Max(old.Ver, next), now));
+        _logger.LogDebug("[Cache BUMP] {Scope} -> v{Ver}", scope, next);
+    }
+
     /// <inheritdoc />
     public async Task<T?> GetAsync<T>(string key)
     {
+        var originalKey = key;
+        key = await ResolveKeyAsync(key, forRead: true);
+
         // ── L1 check (zero Upstash commands) ──────────────────────────────
         if (_l1.TryGetValue(key, out T? l1Value))
         {
             _logger.LogDebug("[Cache L1-HIT] {Key}", key);
+            _readVersions.TryRemove(originalKey, out _);
             return l1Value;
         }
 
@@ -85,6 +183,7 @@ public sealed class RedisCacheService : ICacheService
             _l1.Set(key, value, L1OverheadFactor);
 
             _logger.LogDebug("[Cache L2-HIT] {Key}", key);
+            _readVersions.TryRemove(originalKey, out _);
             return value;
         }
         catch (Exception ex)
@@ -98,6 +197,8 @@ public sealed class RedisCacheService : ICacheService
     /// <inheritdoc />
     public async Task SetAsync<T>(string key, T value, TimeSpan expiry)
     {
+        key = await ResolveKeyAsync(key, forRead: false);
+
         // ── L1 write (free, short-lived) ──────────────────────────────────
         var l1Ttl = expiry > L1OverheadFactor ? expiry - L1OverheadFactor : expiry;
         _l1.Set(key, value, l1Ttl);
@@ -124,6 +225,7 @@ public sealed class RedisCacheService : ICacheService
     /// <inheritdoc />
     public async Task RemoveAsync(string key)
     {
+        key = await ResolveKeyAsync(key, forRead: false);
         _l1.Remove(key);
         try
         {
@@ -138,27 +240,30 @@ public sealed class RedisCacheService : ICacheService
 
     /// <inheritdoc />
     /// <remarks>
-    /// Uses SCAN (cursor-based) instead of KEYS to avoid blocking Redis on large keyspaces.
-    /// L1 entries with matching keys expire naturally within L1OverheadFactor seconds.
+    /// For versioned namespaces ("dash::{userId}:") this is a single version bump — no SCAN,
+    /// no DEL, immediate for readers. Any other prefix falls back to SCAN, deleting the matches
+    /// with ONE batched DEL instead of one command per key.
     /// </remarks>
     public async Task RemoveByPrefixAsync(string prefix)
     {
+        if (TryGetScope(prefix, out var scope) && scope == prefix)
+        {
+            await BumpVersionAsync(scope);
+            return;
+        }
+
         try
         {
             if (_server == null) return;
-            var pattern = $"{prefix}*";
             var keys = new List<RedisKey>();
-            await foreach (var key in _server.KeysAsync(pattern: pattern))
+            await foreach (var key in _server.KeysAsync(pattern: $"{prefix}*"))
             {
                 _l1.Remove((string)key!);
                 keys.Add(key);
             }
-
             if (keys.Count > 0)
-            {
                 await _db.KeyDeleteAsync(keys.ToArray());
-                _logger.LogDebug("[Cache DEL-PREFIX] {Count} keys for {Prefix}*", keys.Count, prefix);
-            }
+            _logger.LogDebug("[Cache DEL-PREFIX] {Prefix}* ({Count} keys)", prefix, keys.Count);
         }
         catch (Exception ex)
         {

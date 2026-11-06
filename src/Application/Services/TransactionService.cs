@@ -441,6 +441,19 @@ public class TransactionService : ITransactionService
         if (sourceAccountId == dto.DestinationAccountId)
             return Result.Failure<bool>(new Error("Transfer.SameAccount", "Cannot transfer to the same account."));
 
+        // The controller's [Range] attribute does not run for the bulk-import path, so enforce
+        // it here too: a zero/negative transfer would otherwise move money the wrong way.
+        if (dto.Amount <= 0)
+            return Result.Failure<bool>(new Error("Transfer.InvalidAmount", "Transfer amount must be greater than zero."));
+
+        if (dto.TransactionCategoryId.HasValue)
+        {
+            var categoryOwned = await _context.TransactionCategories
+                .AnyAsync(c => c.Id == dto.TransactionCategoryId.Value && c.UserId == userId);
+            if (!categoryOwned)
+                return Result.Failure<bool>(new Error("Category.NotFound", "Category not found."));
+        }
+
         // ── Balance check (skip for liability accounts — Credit Card, Loan, etc.) ──
         // Was string-matching on category.Name before; now uses the same
         // IsLiability flag SwitchAccountAsync already correctly uses —
