@@ -1,5 +1,7 @@
 using Application;
 using Application.Common.Models;
+using FluentValidation;
+using Microsoft.EntityFrameworkCore;
 using System.Net;
 using System.Text.Json;
 
@@ -35,14 +37,33 @@ public class ExceptionHandlingMiddleware
         // User Request: Return 200 OK even for unhandled exceptions to mask 500 errors.
         context.Response.StatusCode = (int)HttpStatusCode.OK;
 
-        // The full exception (including the inner exception — the actual
-        // SQL error, in a DbUpdateException's case) is already logged
-        // above in InvokeAsync via _logger.LogError. What goes back to
-        // the client is deliberately generic instead — the raw message
-        // can expose internal details (table/column names, connection
-        // fragments) and is rarely something a user could act on anyway.
-        // The real diagnostic value lives in your logs, not the response.
-        var error = new Error("Server.Exception", "Something went wrong on our end. Please try again.");
+        Error error;
+        if (exception is ValidationException valEx)
+        {
+            var firstError = valEx.Errors.FirstOrDefault()?.ErrorMessage ?? "Validation failed.";
+            error = new Error("Validation.Error", firstError);
+        }
+        else if (exception is DbUpdateException dbEx)
+        {
+            var msg = dbEx.InnerException?.Message ?? dbEx.Message;
+            if (msg.Contains("23505") || msg.Contains("duplicate key", StringComparison.OrdinalIgnoreCase))
+            {
+                error = new Error("Database.Duplicate", "A record with this information already exists.");
+            }
+            else if (msg.Contains("23503") || msg.Contains("foreign key", StringComparison.OrdinalIgnoreCase))
+            {
+                error = new Error("Database.ForeignKey", "Referenced record was not found or is invalid.");
+            }
+            else
+            {
+                error = new Error("Database.Error", "A database error occurred while saving changes.");
+            }
+        }
+        else
+        {
+            error = new Error("Server.Exception", "Something went wrong on our end. Please try again.");
+        }
+
         var response = ApiResult<object>.Failure(error);
 
         var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };

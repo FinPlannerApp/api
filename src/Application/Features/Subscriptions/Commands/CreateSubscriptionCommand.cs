@@ -5,6 +5,7 @@ using Domain.Entities;
 using Domain.Enums;
 using FluentValidation;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 
 namespace Application.Features.Subscriptions.Commands;
 
@@ -44,34 +45,115 @@ public class CreateSubscriptionCommandHandler : IRequestHandler<CreateSubscripti
     public async Task<Result<int>> Handle(CreateSubscriptionCommand request, CancellationToken cancellationToken)
     {
         var dto = request.Dto;
+        var trimmedName = dto.Name?.Trim() ?? string.Empty;
+
+        // 1. Verify target account exists and belongs to user
+        var account = await _context.Accounts
+            .FirstOrDefaultAsync(a => a.Id == dto.AccountId && a.UserId == request.UserId && !a.IsDeleted, cancellationToken);
+        if (account == null)
+        {
+            return Result.Failure<int>(new Error("Account.NotFound", "The selected account was not found or is unavailable."));
+        }
+
+        // 2. Validate category if provided
+        if (dto.CategoryId.HasValue)
+        {
+            var categoryExists = await _context.TransactionCategories
+                .AnyAsync(c => c.Id == dto.CategoryId.Value && (c.UserId == request.UserId || c.UserId == null) && !c.IsDeleted, cancellationToken);
+            if (!categoryExists)
+            {
+                dto.CategoryId = null;
+            }
+        }
 
         var nextProcessDate = CalculateFirstOccurrenceOnOrAfterToday(dto.StartDate, dto.Frequency);
 
+        // 3. Check for existing subscription by name (including soft-deleted or paused) to avoid duplicate key errors
+        var existing = await _context.Subscriptions
+            .IgnoreQueryFilters()
+            .Include(s => s.RecurringTransaction)
+            .FirstOrDefaultAsync(s => s.UserId == request.UserId && s.Name.ToLower() == trimmedName.ToLower(), cancellationToken);
+
+        if (existing != null)
+        {
+            // If already active in subscriptions list:
+            if (!existing.IsDeleted && existing.RecurringTransaction != null && existing.RecurringTransaction.IsActive && !existing.RecurringTransaction.IsDeleted)
+            {
+                return Result.Failure<int>(new Error("Subscription.Duplicate", $"A subscription named '{trimmedName}' already exists."));
+            }
+
+            // Revive / reactivate existing subscription and its recurring transaction
+            existing.IsDeleted = false;
+            existing.DeletedAt = null;
+            existing.Name = trimmedName;
+            existing.Tag = dto.Tag?.Trim();
+            existing.CancellationUrl = dto.CancellationUrl?.Trim();
+
+            if (existing.RecurringTransaction != null)
+            {
+                existing.RecurringTransaction.IsDeleted = false;
+                existing.RecurringTransaction.DeletedAt = null;
+                existing.RecurringTransaction.AccountId = dto.AccountId;
+                existing.RecurringTransaction.TransactionCategoryId = dto.CategoryId;
+                existing.RecurringTransaction.Description = $"Subscription: {trimmedName}";
+                existing.RecurringTransaction.Amount = dto.Amount;
+                existing.RecurringTransaction.Frequency = dto.Frequency;
+                existing.RecurringTransaction.StartDate = dto.StartDate.EnsureUtc();
+                existing.RecurringTransaction.NextProcessDate = nextProcessDate.EnsureUtc();
+                existing.RecurringTransaction.IsActive = true;
+                existing.RecurringTransaction.IsObligation = true;
+            }
+            else
+            {
+                var newRt = new RecurringTransaction
+                {
+                    UserId = request.UserId,
+                    AccountId = dto.AccountId,
+                    TransactionCategoryId = dto.CategoryId,
+                    Description = $"Subscription: {trimmedName}",
+                    Amount = dto.Amount,
+                    Type = TransactionType.Expense,
+                    Frequency = dto.Frequency,
+                    StartDate = dto.StartDate.EnsureUtc(),
+                    NextProcessDate = nextProcessDate.EnsureUtc(),
+                    IsActive = true,
+                    IsObligation = true
+                };
+                _context.RecurringTransactions.Add(newRt);
+                await _context.SaveChangesAsync(cancellationToken);
+                existing.RecurringTransactionId = newRt.Id;
+            }
+
+            await _context.SaveChangesAsync(cancellationToken);
+            return Result.Success(existing.Id);
+        }
+
+        // 4. Create new recurring transaction first to guarantee foreign key integrity
         var recurringTransaction = new RecurringTransaction
         {
             UserId = request.UserId,
             AccountId = dto.AccountId,
             TransactionCategoryId = dto.CategoryId,
-            Description = $"Subscription: {dto.Name}",
+            Description = $"Subscription: {trimmedName}",
             Amount = dto.Amount,
-            Type = TransactionType.Expense, // subscriptions are expenses
+            Type = TransactionType.Expense,
             Frequency = dto.Frequency,
-            StartDate = dto.StartDate.EnsureUtc(), // the REAL historical start — unchanged, this is what fixes the display/age-calculation issue
-            NextProcessDate = nextProcessDate.EnsureUtc(), // the actual next occurrence, never a past date
+            StartDate = dto.StartDate.EnsureUtc(),
+            NextProcessDate = nextProcessDate.EnsureUtc(),
             IsActive = true,
-            // A subscription is, by definition, a real financial
-            // commitment — it should always surface in the obligation
-            // system without requiring a separate manual toggle.
             IsObligation = true
         };
+
+        _context.RecurringTransactions.Add(recurringTransaction);
+        await _context.SaveChangesAsync(cancellationToken);
 
         var subscription = new Subscription
         {
             UserId = request.UserId,
-            Name = dto.Name,
-            Tag = dto.Tag,
-            CancellationUrl = dto.CancellationUrl,
-            RecurringTransaction = recurringTransaction // EF will wire up the FK
+            Name = trimmedName,
+            Tag = dto.Tag?.Trim(),
+            CancellationUrl = dto.CancellationUrl?.Trim(),
+            RecurringTransactionId = recurringTransaction.Id
         };
 
         _context.Subscriptions.Add(subscription);
