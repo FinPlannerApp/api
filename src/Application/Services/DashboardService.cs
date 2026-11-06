@@ -119,9 +119,16 @@ public class DashboardService : IDashboardService
             }
         }
 
-        var broughtForward = await _context.Transactions
-            .Where(t => t.Account.UserId == userId && t.Date < startFilter)
+        // Cash (bank + cash accounts) at the start of the selected month: today's liquid
+        // balance minus every movement on those accounts since the 1st. Unlike the old
+        // "sum of everything before this month across all accounts", this is a real balance
+        // you can check against your statements.
+        var liquidMovementSinceStart = await _context.Transactions
+            .Where(t => t.Account.UserId == userId && t.Date >= startFilter &&
+                (t.Account.AccountCategory.AccountType == AccountType.Bank ||
+                 t.Account.AccountCategory.AccountType == AccountType.Cash))
             .SumAsync(t => t.Type == TransactionType.Income ? t.Amount : -t.Amount);
+        var broughtForward = liquidAssets - liquidMovementSinceStart;
 
         var monthlyTransactions = _context.Transactions
             .Where(t => t.Account.UserId == userId && t.Date >= startFilter && t.Date <= endFilter);

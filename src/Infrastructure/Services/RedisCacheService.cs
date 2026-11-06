@@ -147,12 +147,18 @@ public sealed class RedisCacheService : ICacheService
         {
             if (_server == null) return;
             var pattern = $"{prefix}*";
+            var keys = new List<RedisKey>();
             await foreach (var key in _server.KeysAsync(pattern: pattern))
             {
                 _l1.Remove((string)key!);
-                await _db.KeyDeleteAsync(key);
+                keys.Add(key);
             }
-            _logger.LogDebug("[Cache DEL-PREFIX] {Prefix}*", prefix);
+
+            if (keys.Count > 0)
+            {
+                await _db.KeyDeleteAsync(keys.ToArray());
+                _logger.LogDebug("[Cache DEL-PREFIX] {Count} keys for {Prefix}*", keys.Count, prefix);
+            }
         }
         catch (Exception ex)
         {

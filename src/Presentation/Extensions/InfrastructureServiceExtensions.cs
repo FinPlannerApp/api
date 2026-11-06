@@ -23,9 +23,13 @@ public static class InfrastructureServiceExtensions
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
 
         // 2. Register the DbContext
-        services.AddDbContext<ApplicationDbContext>(options =>
+        services.AddSingleton<Infrastructure.Persistence.DashboardCacheInvalidationInterceptor>();
+        services.AddDbContext<ApplicationDbContext>((sp, options) =>
+        {
             options.UseNpgsql(configuration.GetConnectionString("DefaultConnection"),
-            o => o.MigrationsHistoryTable("__EFMigrationsHistory")));
+                o => o.MigrationsHistoryTable("__EFMigrationsHistory"));
+            options.AddInterceptors(sp.GetRequiredService<Infrastructure.Persistence.DashboardCacheInvalidationInterceptor>());
+        });
 
         // 2.1 Register Redis connection
         // 2.1 Register Redis connection with AbortOnConnectFail=false for local dev resilience
