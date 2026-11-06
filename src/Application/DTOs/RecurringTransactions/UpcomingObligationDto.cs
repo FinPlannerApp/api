@@ -28,4 +28,15 @@ public class UpcomingObligationDto
     /// cash-flow forecast.
     /// </summary>
     public bool IsShortfallRisk { get; set; }
+
+    /// <summary>True when the due date has already passed and it is still unpaid.</summary>
+    public bool IsOverdue { get; set; }
+
+    /// <summary>
+    /// True when paying this will take money out of liquid cash (or add to card
+    /// debt) that Real Available Cash does not already account for. Credit card
+    /// statement bills are false here: the card's debt is already subtracted in
+    /// Real Available Cash, so counting the bill again would double-count it.
+    /// </summary>
+    public bool ReducesAvailableCash { get; set; }
 }

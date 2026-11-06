@@ -38,11 +38,19 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                 Amount = rt.Amount,
                 MinimumDueAmount = null,
                 DueDate = rt.NextProcessDate,
-                Source = "Recurring"
+                Source = "Recurring",
+                // Paid from a bank/cash account or put on a card; an item on some other
+                // account type (e.g. a closed-loop wallet) does not touch liquid cash.
+                ReducesAvailableCash =
+                    rt.Account.AccountCategory.AccountType == AccountType.Bank ||
+                    rt.Account.AccountCategory.AccountType == AccountType.Cash ||
+                    rt.Account.AccountCategory.AccountType == AccountType.CreditCard
             })
             .ToListAsync(cancellationToken);
 
         results.AddRange(recurringObligations);
+        var todayForFlags = AppTimeZone.TodayLocal();
+        foreach (var r in recurringObligations) r.IsOverdue = r.DueDate.Date < todayForFlags.Date;
 
         // ── Source 2: credit card bills — prefers a RECORDED bill (the
         // real amount, includes interest/fees) over the static
@@ -63,20 +71,28 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                 .OrderByDescending(b => b.StatementDate)
                 .FirstOrDefaultAsync(cancellationToken);
 
-            if (recentBill != null && recentBill.DueDate.HasValue &&
-                recentBill.DueDate.Value >= today && recentBill.DueDate.Value <= cutoff)
+            // A bill that is already paid, or fully covered by payments, is not an obligation.
+            var remaining = recentBill == null ? 0m : await CreditCardBillMath.RemainingAsync(_context, recentBill, cancellationToken);
+
+            if (recentBill != null && remaining > 0 && recentBill.DueDate.HasValue &&
+                recentBill.DueDate.Value <= cutoff)
             {
+                // Overdue (due date already past) stays in the list on purpose — it is the
+                // most urgent item, so it must not silently disappear.
                 results.Add(new UpcomingObligationDto
                 {
                     Description = $"{account.Name} bill due",
                     AccountName = account.Name,
-                    Amount = recentBill.BillAmount, // the real recorded amount, not an estimate
+                    Amount = remaining, // what is still unpaid, not the original statement amount
                     MinimumDueAmount = recentBill.MinimumDue,
                     DueDate = recentBill.DueDate.Value,
-                    Source = "CreditCard"
+                    Source = "CreditCard",
+                    IsOverdue = recentBill.DueDate.Value.Date < today.Date,
+                    ReducesAvailableCash = false // already inside Real Available Cash via the card's balance
                 });
             }
-            else if (account.CreditCardDetails?.DueDate is { } staticDueDate &&
+            else if ((recentBill == null || recentBill.DueDate == null) &&
+                     account.CreditCardDetails?.DueDate is { } staticDueDate &&
                      staticDueDate >= today && staticDueDate <= cutoff)
             {
                 // Fallback — no bill recorded for this cycle yet, use
@@ -89,7 +105,8 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                     Amount = null,
                     MinimumDueAmount = account.CreditCardDetails.MinimumDueAmount,
                     DueDate = staticDueDate,
-                    Source = "CreditCard"
+                    Source = "CreditCard",
+                    ReducesAvailableCash = false
                 });
             }
         }
@@ -106,8 +123,8 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                 continue;
 
             var dueDate = loan.LoanDetails.NextEmiDueDate.Value;
-            if (dueDate < today || dueDate > cutoff)
-                continue;
+            if (dueDate > cutoff)
+                continue; // overdue EMIs (dueDate < today) are kept and flagged below
 
             bool isShortfallRisk = false;
             if (loan.LoanDetails.DesignatedPayingAccountId.HasValue)
@@ -129,7 +146,9 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                 MinimumDueAmount = null,
                 DueDate = dueDate,
                 Source = "Loan",
-                IsShortfallRisk = isShortfallRisk
+                IsShortfallRisk = isShortfallRisk,
+                IsOverdue = dueDate.Date < today.Date,
+                ReducesAvailableCash = true
             });
         }
 
@@ -155,7 +174,8 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                 Amount = account.CreditCardDetails.AnnualFee,
                 MinimumDueAmount = null,
                 DueDate = dueDate,
-                Source = "AccountCharge"
+                Source = "AccountCharge",
+                ReducesAvailableCash = true
             });
         }
 
@@ -180,7 +200,8 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                 Amount = account.BankAccountDetails.PeriodicChargeAmount,
                 MinimumDueAmount = null,
                 DueDate = dueDate,
-                Source = "AccountCharge"
+                Source = "AccountCharge",
+                ReducesAvailableCash = true
             });
         }
 

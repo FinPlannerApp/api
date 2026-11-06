@@ -7,6 +7,8 @@ using Microsoft.AspNetCore.Identity;
 using Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Application.Features.Insights;
+using Application.Features.RecurringTransactions.Queries;
+using MediatR;
 
 namespace Application.Services;
 
@@ -16,17 +18,21 @@ public class DashboardService : IDashboardService
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly ICacheService _cache;
     private readonly IFinancialInsightsEngine _insightsEngine;
+    private readonly IMediator _mediator;
+
+    private const int ObligationWindowDays = 30;
 
     private static string SummaryKey(string userId, DateTime start, DateTime end)
-        => $"dash:sum:{userId}:{start:yyyyMMdd}:{end:yyyyMMdd}";
+        => $"dash::{userId}:sum:{start:yyyyMMdd}:{end:yyyyMMdd}";
     private static string CategoryKey(string userId, DateTime start, DateTime end)
-        => $"dash:cat:{userId}:{start:yyyyMMdd}:{end:yyyyMMdd}";
+        => $"dash::{userId}:cat:{start:yyyyMMdd}:{end:yyyyMMdd}";
     private static string InsightsKey(string userId, DateTime start, DateTime end)
-        => $"dash:ins:{userId}:{start:yyyyMMdd}:{end:yyyyMMdd}";
+        => $"dash::{userId}:ins:{start:yyyyMMdd}:{end:yyyyMMdd}";
     private static string UserPrefix(string userId) => $"dash::{userId}:";
 
-    public DashboardService(IApplicationDbContext context, UserManager<ApplicationUser> userManager, ICacheService cache, IFinancialInsightsEngine insightsEngine)
+    public DashboardService(IApplicationDbContext context, UserManager<ApplicationUser> userManager, ICacheService cache, IFinancialInsightsEngine insightsEngine, IMediator mediator)
     {
+        _mediator = mediator;
         _context = context;
         _userManager = userManager;
         _cache = cache;
@@ -102,7 +108,9 @@ public class DashboardService : IDashboardService
 
             if (recentBill != null)
             {
-                reservedForPayment += recentBill.BillAmount;
+                // Only what is STILL unpaid on the latest statement — a settled or
+                // part-paid bill must stop counting as "reserved".
+                reservedForPayment += await CreditCardBillMath.RemainingAsync(_context, recentBill);
             }
             else
             {
@@ -126,8 +134,25 @@ public class DashboardService : IDashboardService
             .Where(t => t.Type == TransactionType.Expense && t.TransferGroupId == null)
             .SumAsync(t => t.Amount);
 
+        // Safe-to-Spend: what's left after commitments that Real Available Cash does not
+        // yet reflect. Card statement bills are excluded (ReducesAvailableCash == false)
+        // because the card's debt is already subtracted above.
+        decimal upcomingObligations = 0;
+        var obligationsResult = await _mediator.Send(new GetUpcomingObligationsQuery(userId, ObligationWindowDays));
+        if (obligationsResult.IsSuccess && obligationsResult.Value != null)
+        {
+            upcomingObligations = obligationsResult.Value
+                .Where(o => o.ReducesAvailableCash && o.Amount.HasValue)
+                .Sum(o => o.Amount!.Value);
+        }
+
         var summary = new DashboardSummaryDto
         {
+            LiquidCash = liquidAssets,
+            CreditCardDebt = -creditCardDebt,
+            UpcomingObligationsTotal = upcomingObligations,
+            SafeToSpend = realAvailableCash - upcomingObligations,
+            ObligationWindowDays = ObligationWindowDays,
             NetWorth = netWorth,
             MonthlyIncome = monthlyIncome,
             MonthlyExpenses = monthlyExpenses,
