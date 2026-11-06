@@ -758,6 +758,21 @@ public class AccountService : IAccountService
             return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
                 "CreditCardPayment.NoPayments", "At least one payment is required."));
 
+        // Everything below (validation reads AND writes) runs in ONE database
+        // transaction, serialised per user with a Postgres advisory lock.
+        // Without this, two parallel requests could both spend the same wallet
+        // balance or the same bank balance, and a failure between the two
+        // SaveChanges calls would leave balances moved but wallet entries /
+        // link ids missing. Early `return`s roll the transaction back.
+        var db = (DbContext)_context;
+        var isPostgres = db.Database.ProviderName?.Contains("Npgsql") == true;
+        await using var dbTx = isPostgres ? await db.Database.BeginTransactionAsync() : null;
+        if (isPostgres)
+        {
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT pg_advisory_xact_lock(hashtext({"cc-payment:" + userId}))");
+        }
+
         var ccAccount = await _context.Accounts
             .Include(a => a.AccountCategory)
             .Include(a => a.CreditCardDetails)
@@ -849,11 +864,32 @@ public class AccountService : IAccountService
         // validating against what's actually left after the others.
         var walletUsageThisBatch = new Dictionary<string, decimal>();
 
+        // Cumulative cash drawn from each paying account across the batch, so
+        // two rows from the same account can't both pass a per-row check.
+        var cashUsageThisBatch = new Dictionary<int, decimal>();
+
         foreach (var payment in dto.Payments)
         {
             if (payment.Amount <= 0)
                 return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
                     "CreditCardPayment.InvalidAmount", "Every payment amount must be greater than zero."));
+
+            if (payment.AppliedWalletAmount < 0)
+                return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                    "CreditCardPayment.InvalidWalletAmount", "The applied wallet amount can't be negative."));
+
+            if (payment.CashbackAmount.HasValue && payment.CashbackAmount.Value < 0)
+                return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                    "CreditCardPayment.InvalidCashbackAmount", "Cashback can't be negative."));
+
+            if (payment.CashbackAccountId.HasValue)
+            {
+                var cashbackOwned = await _context.Accounts
+                    .AnyAsync(a => a.Id == payment.CashbackAccountId.Value && a.UserId == userId);
+                if (!cashbackOwned)
+                    return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                        "Account.NotFound", "Cashback account not found."));
+            }
 
             if (payment.PayingAccountId == dto.CreditCardAccountId)
                 return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
@@ -881,11 +917,20 @@ public class AccountService : IAccountService
                 payingAccounts[payment.PayingAccountId] = payingAccount;
             }
 
+            // The wallet may cover at most the payment itself; whatever it
+            // doesn't cover is drawn from the paying account.
+            if (payment.AppliedWalletAmount > payment.Amount)
+                return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
+                    "CreditCardPayment.WalletDiscountExceedsPayment",
+                    "The applied wallet amount can't be more than the payment itself."));
+
             var actualCashNeeded = payment.Amount - payment.AppliedWalletAmount;
-            if (payingAccount.Balance < actualCashNeeded)
+            cashUsageThisBatch.TryGetValue(payment.PayingAccountId, out var cashAlreadyUsed);
+            if (payingAccount.Balance < cashAlreadyUsed + actualCashNeeded)
                 return Result.Failure<CreditCardPaymentBatchResultDto>(new Error(
                     "CreditCardPayment.InsufficientFunds",
-                    $"{payingAccount.Name} has insufficient balance for a ₹{actualCashNeeded:F2} payment. Available: ₹{payingAccount.Balance:F2}"));
+                    $"{payingAccount.Name} has insufficient balance for ₹{(cashAlreadyUsed + actualCashNeeded):F2} of payments. Available: ₹{payingAccount.Balance:F2}"));
+            cashUsageThisBatch[payment.PayingAccountId] = cashAlreadyUsed + actualCashNeeded;
 
             if (payment.CashbackAmount.HasValue && payment.CashbackAmount.Value > 0)
             {
@@ -994,7 +1039,7 @@ public class AccountService : IAccountService
                     AccountId = dto.CreditCardAccountId,
                     UserId = userId,
                     Kind = TransactionKind.Normal,
-                    TransactionCategoryId = payment.InterestCategoryId ?? defaultInterestCat?.Id
+                    TransactionCategoryId = defaultInterestCat?.Id
                 };
                 _context.Transactions.Add(interestTx);
                 ccAccount.Balance -= interestPortion;
@@ -1006,6 +1051,8 @@ public class AccountService : IAccountService
                 var transferGroupId = Guid.NewGuid();
                 var actualCashFromPayingAccount = payment.Amount - payment.AppliedWalletAmount;
 
+                if (actualCashFromPayingAccount > 0)
+                {
                 expenseLeg = new Transaction
                 {
                     Description = $"Credit card payment — {ccAccount.Name}" +
@@ -1021,6 +1068,8 @@ public class AccountService : IAccountService
                     TransactionCategoryId = defaultTransferCat?.Id
                 };
                 payingAccount.Balance -= actualCashFromPayingAccount;
+                _context.Transactions.Add(expenseLeg);
+                }
 
                 incomeLeg = new Transaction
                 {
@@ -1036,7 +1085,6 @@ public class AccountService : IAccountService
                 };
                 ccAccount.Balance += payment.Amount;
 
-                _context.Transactions.Add(expenseLeg);
                 _context.Transactions.Add(incomeLeg);
             }
 
@@ -1186,6 +1234,7 @@ public class AccountService : IAccountService
             _context.CreditCardPayments.Update(linkedPayment);
         }
         await _context.SaveChangesAsync();
+        if (dbTx != null) await dbTx.CommitAsync();
 
         await _cache.RemoveByPrefixAsync($"dash::{userId}:");
 
