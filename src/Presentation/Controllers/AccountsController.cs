@@ -74,6 +74,14 @@ public class AccountsController : BaseController
         return HandleResult(result);
     }
 
+    /// <summary>Marks missed EMIs as already paid elsewhere: moves the due date only, no money moves.</summary>
+    [HttpPost("{loanAccountId}/advance-due-date")]
+    public async Task<IActionResult> AdvanceLoanDueDate(int loanAccountId, [FromBody] AdvanceLoanDueDateDto dto)
+    {
+        var result = await _accountService.AdvanceLoanDueDateAsync(UserId, loanAccountId, dto.Months);
+        return HandleResult(result);
+    }
+
     [HttpGet("{loanAccountId}/amortization-schedule")]
     public async Task<IActionResult> GetAmortizationSchedule(int loanAccountId)
     {

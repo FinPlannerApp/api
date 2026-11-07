@@ -50,6 +50,13 @@ public class RecurringTransactionJob
 
         foreach (var rt in dueTransactions)
         {
+          // Catch up every missed occurrence in one run (cap 12). Before, a bill that was
+          // 4 months behind took 4 daily runs to clear — and stayed "overdue" meanwhile.
+          for (var occurrence = 0; occurrence < 12; occurrence++)
+          {
+            if (!rt.IsActive || rt.NextProcessDate > now) break;
+            var committed = false;
+
             await using var dbTransaction = await ((DbContext)_context).Database.BeginTransactionAsync();
 
             try
@@ -135,6 +142,7 @@ public class RecurringTransactionJob
                     _context.RecurringTransactions.Update(rt);
                     await _context.SaveChangesAsync(default);
                     await dbTransaction.CommitAsync();
+                    committed = true;
                 }
                 else
                 {
@@ -147,6 +155,10 @@ public class RecurringTransactionJob
                 failures.Add((rt.Id, rt.Description ?? "", ex));
                 _logger.LogError(ex, "Exception processing recurring transaction {Id}", rt.Id);
             }
+
+            // Stop on the first failure so one broken item doesn't retry 12 times in a row.
+            if (!committed) break;
+          }
         }
 
         if (failures.Any())

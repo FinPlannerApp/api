@@ -39,4 +39,16 @@ public class UpcomingObligationDto
     /// Real Available Cash, so counting the bill again would double-count it.
     /// </summary>
     public bool ReducesAvailableCash { get; set; }
+
+    /// <summary>Loan obligations only: the loan account's id (used by "Already paid").</summary>
+    public int? LoanAccountId { get; set; }
+
+    /// <summary>Loan obligations only: how many EMIs have fallen due and are still unrecorded.</summary>
+    public int OverdueInstallments { get; set; }
+
+    /// <summary>
+    /// True when an active recurring item is linked to this loan, so the EMI is posted
+    /// automatically on its due date. If it is still overdue, the auto-debit has failed.
+    /// </summary>
+    public bool IsAutoPay { get; set; }
 }

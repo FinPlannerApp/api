@@ -30,6 +30,9 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
             .Where(rt => rt.UserId == request.UserId &&
                          rt.IsActive &&
                          rt.IsObligation &&
+                         // A recurring item linked to a loan is that loan's auto-debit; the loan's
+                         // own EMI row below represents it. Listing both would count the EMI twice.
+                         rt.LinkedLoanAccountId == null &&
                          rt.NextProcessDate <= cutoff)
             .Select(rt => new UpcomingObligationDto
             {
@@ -117,6 +120,11 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
             .Where(a => a.UserId == request.UserId && a.AccountCategory.AccountType == AccountType.Loan)
             .ToListAsync(cancellationToken);
 
+        var autoPayLoanIds = (await _context.RecurringTransactions
+            .Where(rt => rt.UserId == request.UserId && rt.IsActive && !rt.IsDeleted && rt.LinkedLoanAccountId != null)
+            .Select(rt => rt.LinkedLoanAccountId!.Value)
+            .ToListAsync(cancellationToken)).ToHashSet();
+
         foreach (var loan in loanAccounts)
         {
             if (loan.LoanDetails?.NextEmiDueDate == null || loan.LoanDetails.EmiAmount == null)
@@ -148,7 +156,10 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                 Source = "Loan",
                 IsShortfallRisk = isShortfallRisk,
                 IsOverdue = dueDate.Date < today.Date,
-                ReducesAvailableCash = true
+                ReducesAvailableCash = true,
+                LoanAccountId = loan.Id,
+                OverdueInstallments = CountDueInstallments(dueDate, today),
+                IsAutoPay = autoPayLoanIds.Contains(loan.Id)
             });
         }
 
@@ -206,5 +217,13 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
         }
 
         return Result.Success(results.OrderBy(r => r.DueDate).ToList());
+    }
+
+    /// <summary>How many monthly EMIs have fallen due on or before today (0 when the first is still ahead).</summary>
+    private static int CountDueInstallments(DateTime firstDue, DateTime today)
+    {
+        var n = 0;
+        while (n < 36 && firstDue.AddMonths(n).Date <= today.Date) n++;
+        return n;
     }
 }

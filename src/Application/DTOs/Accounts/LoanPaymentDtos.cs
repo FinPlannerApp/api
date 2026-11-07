@@ -22,3 +22,13 @@ public class AmortizationScheduleDto
     public int EstimatedMonthsRemaining { get; set; }
     public decimal TotalInterestRemaining { get; set; }
 }
+
+/// <summary>
+/// Moves a loan's next EMI due date forward WITHOUT creating any transaction or touching any
+/// balance. For EMIs the bank already auto-debited (and the balance already reflects), so
+/// recording a payment would take the money out twice.
+/// </summary>
+public class AdvanceLoanDueDateDto
+{
+    public int Months { get; set; } = 1;
+}

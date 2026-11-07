@@ -477,6 +477,30 @@ public class AccountService : IAccountService
         });
     }
 
+    public async Task<Result<DateTime>> AdvanceLoanDueDateAsync(string userId, int loanAccountId, int months)
+    {
+        if (months < 1 || months > 24)
+            return Result.Failure<DateTime>(new Error("Loan.InvalidMonths", "Choose between 1 and 24 months."));
+
+        var loanAccount = await _context.Accounts
+            .Include(a => a.AccountCategory)
+            .Include(a => a.LoanDetails)
+            .FirstOrDefaultAsync(a => a.Id == loanAccountId);
+
+        if (loanAccount == null || loanAccount.UserId != userId)
+            return Result.Failure<DateTime>(new Error("Account.NotFound", "Loan account not found."));
+
+        if (loanAccount.AccountCategory?.AccountType != AccountType.Loan || loanAccount.LoanDetails?.NextEmiDueDate == null)
+            return Result.Failure<DateTime>(new Error("Loan.NoDueDate", "This loan has no next EMI due date to move."));
+
+        var next = loanAccount.LoanDetails.NextEmiDueDate.Value.AddMonths(months);
+        loanAccount.LoanDetails.NextEmiDueDate = next;
+
+        await _context.SaveChangesAsync(default);
+
+        return Result.Success(next);
+    }
+
     public async Task<Result<AmortizationScheduleDto>> GetAmortizationScheduleAsync(string userId, int loanAccountId)
     {
         var loanAccount = await _context.Accounts
