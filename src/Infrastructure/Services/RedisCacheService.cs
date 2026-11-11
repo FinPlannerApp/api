@@ -1,5 +1,7 @@
 using Application.Contracts;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 using System.Collections.Concurrent;
@@ -19,15 +21,40 @@ namespace Infrastructure.Services;
 ///   SET  → 1 SET command (L2) + 0 (L1 is free)
 ///   DEL  → 1 DEL command
 ///
+/// The cache is memory-only by default (Cache:UseRedis = false): Redis is reserved for OTP /
+/// verification codes, so caching costs ZERO Redis commands — reads, writes and invalidation all
+/// happen in process (the Redis connection is not even opened for it). Set Cache:UseRedis=true
+/// only if you run several app instances that must share cached data.
+///
+/// Optional L2 reads/writes are skipped while <see cref="RedisQuotaGuard"/> says today's
+/// command budget is used up.
+///
 /// Values are gzip-compressed before writing to Redis to stay within
 /// Upstash storage limits and reduce bandwidth.
 /// </summary>
 public sealed class RedisCacheService : ICacheService
 {
     private readonly IMemoryCache _l1;
-    private readonly IDatabase _db;
-    private readonly IServer? _server;
+    private readonly Lazy<IConnectionMultiplexer> _muxer;
     private readonly ILogger<RedisCacheService> _logger;
+    private readonly RedisQuotaGuard _guard;
+    private readonly bool _useRedis;
+
+    // Resolved only when Redis is actually used — with Cache:UseRedis=false (default) the
+    // connection is never opened by the cache.
+    private IDatabase _db => _muxer.Value.GetDatabase();
+    private IServer? _server
+    {
+        get
+        {
+            var m = _muxer.Value;
+            var endpoints = m.GetEndPoints();
+            return endpoints.Any() ? m.GetServer(endpoints.First()) : null;
+        }
+    }
+
+    // After an L2 hit, keep the value in memory this long so repeated reads don't each cost a GET.
+    private static readonly TimeSpan L2BackfillTtl = TimeSpan.FromMinutes(5);
 
     // L1 TTL is intentionally shorter than L2 so stale reads are rare
     private static readonly TimeSpan L1OverheadFactor = TimeSpan.FromSeconds(30);
@@ -35,23 +62,18 @@ public sealed class RedisCacheService : ICacheService
 
     public RedisCacheService(
         IMemoryCache l1,
-        IConnectionMultiplexer muxer,
-        ILogger<RedisCacheService> logger)
+        IServiceProvider services,
+        ILogger<RedisCacheService> logger,
+        IConfiguration configuration,
+        RedisQuotaGuard guard)
     {
+        _guard = guard;
+        _useRedis = configuration.GetValue<bool>("Cache:UseRedis");
         _l1 = l1;
-        _db = muxer.GetDatabase();
         _logger = logger;
+        _muxer = new Lazy<IConnectionMultiplexer>(() => services.GetRequiredService<IConnectionMultiplexer>());
 
-        // GetServer is needed for pattern-delete (SCAN). Handle offline scenario.
-        var endpoints = muxer.GetEndPoints();
-        if (endpoints.Any())
-        {
-            _server = muxer.GetServer(endpoints.First());
-        }
-        else
-        {
-            _logger.LogWarning("[Cache] No Redis endpoints available. L2 features will be disabled.");
-        }
+        _logger.LogInformation("[Cache] Mode: {Mode}", _useRedis ? "memory + Redis (L2)" : "memory only — Redis not used by the cache");
     }
 
     // ── Versioned namespaces ───────────────────────────────────────────────
@@ -64,6 +86,9 @@ public sealed class RedisCacheService : ICacheService
     private readonly ConcurrentDictionary<string, (long Ver, DateTime CheckedAt)> _versions = new();
     private static readonly TimeSpan VersionRecheck = TimeSpan.FromSeconds(30);
     private const string VersionedRoot = "dash::";
+
+    /// <summary>True when the cache must not touch Redis at all (the default).</summary>
+    private bool IsMemoryOnly(string originalKey) => !_useRedis;
 
     private static bool TryGetScope(string key, out string scope)
     {
@@ -101,6 +126,11 @@ public sealed class RedisCacheService : ICacheService
 
     private async Task<long> GetVersionAsync(string scope)
     {
+        // Memory-only mode: the version lives purely in this process (a restart also empties
+        // the memory cache, so nothing can go stale). Zero Redis commands.
+        if (!_useRedis)
+            return _versions.TryGetValue(scope, out var local) ? local.Ver : 0;
+
         var now = DateTime.UtcNow;
         _versions.TryGetValue(scope, out var entry); // default = (0, MinValue) when absent
         if (entry.CheckedAt != default && now - entry.CheckedAt < VersionRecheck)
@@ -111,6 +141,7 @@ public sealed class RedisCacheService : ICacheService
         {
             if (_db.Multiplexer.IsConnected)
             {
+                _guard.Record("cache-version-get");
                 var stored = await _db.StringGetAsync($"ver::{scope}");
                 if (stored.HasValue && long.TryParse((string?)stored, out var parsed))
                     ver = Math.Max(ver, parsed);
@@ -129,10 +160,19 @@ public sealed class RedisCacheService : ICacheService
     {
         var now = DateTime.UtcNow;
         var next = _versions.TryGetValue(scope, out var e) ? e.Ver + 1 : 1;
+
+        // Memory-only mode: just bump the local number. Free, instant, no Redis involved.
+        if (!_useRedis)
+        {
+            _versions.AddOrUpdate(scope, (next, now), (_, old) => (Math.Max(old.Ver, next), now));
+            return;
+        }
+
         try
         {
             if (_db.Multiplexer.IsConnected)
             {
+                _guard.Record("cache-version-bump");
                 var fromRedis = await _db.StringIncrementAsync($"ver::{scope}");
                 next = Math.Max(next, fromRedis);
             }
@@ -161,14 +201,16 @@ public sealed class RedisCacheService : ICacheService
             return l1Value;
         }
 
-        // ── L2 check (1 Upstash command) ──────────────────────────────────
-        if (_db.Multiplexer.IsConnected == false)
+        // ── L2 check (1 Upstash command) — skipped for memory-only keys and while the
+        //    daily command budget is exhausted.
+        if (IsMemoryOnly(originalKey) || !_guard.OptionalAllowed || _db.Multiplexer.IsConnected == false)
         {
             return default;
         }
 
         try
         {
+            _guard.Record("cache-get");
             var compressed = await _db.StringGetAsync(key);
             if (compressed.IsNullOrEmpty)
             {
@@ -179,8 +221,8 @@ public sealed class RedisCacheService : ICacheService
             var json = Decompress((byte[])compressed!);
             var value = JsonSerializer.Deserialize<T>(json, _json);
 
-            // Backfill L1 so the next call doesn't hit Redis
-            _l1.Set(key, value, L1OverheadFactor);
+            // Backfill L1 so the next calls don't hit Redis
+            _l1.Set(key, value, L2BackfillTtl);
 
             _logger.LogDebug("[Cache L2-HIT] {Key}", key);
             _readVersions.TryRemove(originalKey, out _);
@@ -197,6 +239,7 @@ public sealed class RedisCacheService : ICacheService
     /// <inheritdoc />
     public async Task SetAsync<T>(string key, T value, TimeSpan expiry)
     {
+        var originalKey = key;
         key = await ResolveKeyAsync(key, forRead: false);
 
         // ── L1 write (free, short-lived) ──────────────────────────────────
@@ -204,13 +247,14 @@ public sealed class RedisCacheService : ICacheService
         _l1.Set(key, value, l1Ttl);
 
         // ── L2 write — gzip compress to save Upstash storage (1 command) ──
-        if (_db.Multiplexer.IsConnected == false)
+        if (IsMemoryOnly(originalKey) || !_guard.OptionalAllowed || _db.Multiplexer.IsConnected == false)
         {
             return;
         }
 
         try
         {
+            _guard.Record("cache-set");
             var json = JsonSerializer.Serialize(value, _json);
             var compressed = Compress(json);
             await _db.StringSetAsync(key, compressed, expiry);
@@ -225,10 +269,17 @@ public sealed class RedisCacheService : ICacheService
     /// <inheritdoc />
     public async Task RemoveAsync(string key)
     {
+        var originalKey = key;
         key = await ResolveKeyAsync(key, forRead: false);
         _l1.Remove(key);
+
+        // Deletes stay on even when the daily budget is used up: skipping one would let a
+        // stale value survive in Redis.
+        if (IsMemoryOnly(originalKey)) return;
+
         try
         {
+            _guard.Record("cache-del");
             await _db.KeyDeleteAsync(key);
             _logger.LogDebug("[Cache DEL] {Key}", key);
         }
@@ -261,8 +312,12 @@ public sealed class RedisCacheService : ICacheService
                 _l1.Remove((string)key!);
                 keys.Add(key);
             }
+            _guard.Record("cache-scan");
             if (keys.Count > 0)
+            {
+                _guard.Record("cache-del");
                 await _db.KeyDeleteAsync(keys.ToArray());
+            }
             _logger.LogDebug("[Cache DEL-PREFIX] {Prefix}* ({Count} keys)", prefix, keys.Count);
         }
         catch (Exception ex)

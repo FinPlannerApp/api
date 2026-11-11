@@ -22,13 +22,10 @@ public class DashboardService : IDashboardService
 
     private const int ObligationWindowDays = 30;
 
-    private static string SummaryKey(string userId, DateTime start, DateTime end)
-        => $"dash::{userId}:sum:{start:yyyyMMdd}:{end:yyyyMMdd}";
-    private static string CategoryKey(string userId, DateTime start, DateTime end)
-        => $"dash::{userId}:cat:{start:yyyyMMdd}:{end:yyyyMMdd}";
-    private static string InsightsKey(string userId, DateTime start, DateTime end)
-        => $"dash::{userId}:ins:{start:yyyyMMdd}:{end:yyyyMMdd}";
-    private static string UserPrefix(string userId) => $"dash::{userId}:";
+    private static string SummaryKey(string userId, DateTime start, DateTime end) => DashboardCacheKeys.Summary(userId, start, end);
+    private static string CategoryKey(string userId, DateTime start, DateTime end) => DashboardCacheKeys.Categories(userId, start, end);
+    private static string InsightsKey(string userId, DateTime start, DateTime end) => DashboardCacheKeys.Insights(userId, start, end);
+    private static string UserPrefix(string userId) => DashboardCacheKeys.UserPrefix(userId);
 
     public DashboardService(IApplicationDbContext context, UserManager<ApplicationUser> userManager, ICacheService cache, IFinancialInsightsEngine insightsEngine, IMediator mediator)
     {

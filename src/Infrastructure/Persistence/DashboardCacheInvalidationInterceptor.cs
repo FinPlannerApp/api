@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Application.Contracts;
 using Microsoft.EntityFrameworkCore;
@@ -11,7 +10,8 @@ namespace Infrastructure.Persistence;
 /// data. Previously each service method had to remember to invalidate the cache, and
 /// several paths (jobs, merges, loan/card flows) did not — so the dashboard kept showing
 /// old numbers for up to the cache TTL. Doing it at SaveChanges makes it impossible to forget.
-/// Includes anti-burst throttling to prevent redundant Redis sweeps on rapid consecutive saves.
+/// Invalidation is a plain in-memory version bump (no Redis command by default), so bursts of
+/// saves cost nothing and there is deliberately NO throttle: skipping a bump could show old numbers.
 /// </summary>
 public sealed class DashboardCacheInvalidationInterceptor : SaveChangesInterceptor
 {
@@ -24,9 +24,6 @@ public sealed class DashboardCacheInvalidationInterceptor : SaveChangesIntercept
 
     // One pending set per DbContext instance; the interceptor itself is a singleton.
     private readonly ConditionalWeakTable<DbContext, HashSet<string>> _pending = new();
-    private readonly ConcurrentDictionary<string, DateTime> _lastSweepTime = new(StringComparer.Ordinal);
-    private static readonly TimeSpan ThrottleWindow = TimeSpan.FromMilliseconds(1500);
-
     private readonly ICacheService _cache;
 
     public DashboardCacheInvalidationInterceptor(ICacheService cache) => _cache = cache;
@@ -60,18 +57,8 @@ public sealed class DashboardCacheInvalidationInterceptor : SaveChangesIntercept
             return;
 
         _pending.Remove(context);
-        var now = DateTime.UtcNow;
-
         foreach (var userId in users)
-        {
-            if (_lastSweepTime.TryGetValue(userId, out var last) && (now - last) < ThrottleWindow)
-            {
-                // Throttled: Recent sweep already invalidated Redis for this user in this burst.
-                continue;
-            }
-            _lastSweepTime[userId] = now;
-            await _cache.RemoveByPrefixAsync($"dash::{userId}:");
-        }
+            await _cache.InvalidateDashboardAsync(userId);
     }
 
     public override ValueTask<InterceptionResult<int>> SavingChangesAsync(

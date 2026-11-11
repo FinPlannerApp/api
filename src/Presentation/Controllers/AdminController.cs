@@ -40,6 +40,15 @@ public class AdminController : ControllerBase
         => config.GetValue<bool>("Admin:EnableMaintenanceEndpoints");
 
     /// <summary>
+    /// How many Redis (Upstash) commands this app has issued today, by category, with a monthly
+    /// projection and whether optional Redis use has been paused to protect the quota.
+    /// </summary>
+    [HttpGet("redis-usage")]
+    [Authorize(Roles = "Admin")]
+    public IActionResult RedisUsage([FromServices] Infrastructure.Services.RedisQuotaGuard guard)
+        => Ok(guard.Snapshot());
+
+    /// <summary>
     /// Promote a user to Admin role. Only existing admins can do this.
     /// For the FIRST admin, use: POST /api/admin/bootstrap with the secret key.
     /// </summary>

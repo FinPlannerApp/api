@@ -181,7 +181,7 @@ public class TransactionService : ITransactionService
             if (response.FailedCount == 0)
             {
                 await dbTransaction.CommitAsync();
-                await _cache.RemoveByPrefixAsync($"dash::{userId}:");
+                await _cache.InvalidateDashboardAsync(userId);
             }
             else
             {
@@ -328,7 +328,7 @@ public class TransactionService : ITransactionService
             .FirstAsync(t => t.Id == transaction.Id);
 
         var resultDto = MapToDto(resultTransactionWithCategory);
-        await _cache.RemoveByPrefixAsync($"dash::{userId}:"); // invalidates summary, category, insights
+        await _cache.InvalidateDashboardAsync(userId); // invalidates summary, category, insights
 
         return Result.Success(resultDto);
     }
@@ -419,7 +419,7 @@ public class TransactionService : ITransactionService
         if (saveResult.IsFailure)
             return Result.Failure<bool>(saveResult.Error);
 
-        await _cache.RemoveByPrefixAsync($"dash::{userId}:");
+        await _cache.InvalidateDashboardAsync(userId);
 
         return Result.Success(true);
     }
@@ -509,7 +509,7 @@ public class TransactionService : ITransactionService
         if (saveResult.IsFailure)
             return Result.Failure<bool>(saveResult.Error);
 
-        await _cache.RemoveByPrefixAsync($"dash::{userId}:");
+        await _cache.InvalidateDashboardAsync(userId);
 
         return Result.Success(true);
     }
@@ -577,7 +577,7 @@ public class TransactionService : ITransactionService
         if (saveResult.IsFailure)
             return Result.Failure<bool>(saveResult.Error);
 
-        await _cache.RemoveByPrefixAsync($"dash::{userId}:");
+        await _cache.InvalidateDashboardAsync(userId);
 
         return Result.Success(true);
     }
@@ -842,4 +842,4 @@ public class TransactionService : ITransactionService
                 userId, budget.TransactionCategoryId, budget.Amount, spentAfter);
         }
     }
-}
+}

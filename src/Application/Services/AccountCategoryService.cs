@@ -157,7 +157,7 @@ public class AccountCategoryService : ICategoryService<AccountCategoryDto, Upser
 
         await _context.SaveChangesAsync();
         await _cache.RemoveAsync(AllKey(userId)); // invalidate the cached category list
-        await _cache.RemoveByPrefixAsync($"dash::{userId}:"); // net worth/summary may reference category-derived data
+        await _cache.InvalidateDashboardAsync(userId); // net worth/summary may reference category-derived data
 
         return Result.Success(true);
     }
@@ -178,4 +178,4 @@ public class AccountCategoryService : ICategoryService<AccountCategoryDto, Upser
         if (string.IsNullOrWhiteSpace(input)) return input;
         return System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(input.ToLower());
     }
-}
+}

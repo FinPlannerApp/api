@@ -65,6 +65,12 @@ public static class InfrastructureServiceExtensions
                 }
             }
 
+            // The library pings an open connection every 60s so a silently dropped socket is noticed
+            // quickly. Upstash does not bill PING, so the default is kept; raise it only if you want
+            // fewer log/network round trips.
+            options.KeepAlive = configuration.GetValue<int?>("Redis:KeepAliveSeconds") ?? 60;
+            // Skip the CLIENT SETINFO handshake commands sent on every (re)connect.
+            options.SetClientLibrary = false;
             options.ConnectRetry = 5;
             options.ConnectTimeout = 30000;
             options.SyncTimeout = 30000;
@@ -76,11 +82,18 @@ public static class InfrastructureServiceExtensions
         // 2.2 Register two-tier cache service (IMemoryCache L1 + Redis L2)
         // L1 serves most reads with zero Upstash commands; Redis only hit on L1 miss.
         services.AddMemoryCache();
+        // Consumers that only need Redis occasionally (OTP codes) take Lazy<IConnectionMultiplexer>,
+        // so the connection is opened on the first OTP request instead of at startup.
+        services.AddSingleton<Lazy<IConnectionMultiplexer>>(sp =>
+            new Lazy<IConnectionMultiplexer>(() => sp.GetRequiredService<IConnectionMultiplexer>()));
+        services.AddSingleton<RedisQuotaGuard>();
+        services.AddHostedService<RedisActivityKeeperWorker>();
         services.AddSingleton<ICacheService, RedisCacheService>();
 
         // 2.3 Register Email Services & Workers
         services.AddSingleton<IDirectEmailSender, DirectEmailSender>();
-        services.AddScoped<IEmailService, RedisEmailService>();
+        services.AddSingleton<InMemoryEmailQueue>();
+        services.AddScoped<IEmailService, QueuedEmailService>();
         services.AddHostedService<EmailQueueWorker>();
         services.AddHostedService<InfrastructureMonitorWorker>();
 

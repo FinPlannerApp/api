@@ -1,72 +1,68 @@
-using Application.DTOs.Auth;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using StackExchange.Redis;
-using System.Text.Json;
-using Microsoft.Extensions.Configuration;
-using System.Net.Http.Headers;
-using System.Text;
-using Microsoft.Extensions.Logging;
 using Infrastructure.Services;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Infrastructure.BackgroundJobs;
 
+/// <summary>
+/// Sends queued mail. Waits on the in-process queue (no polling, no Redis) and retries a failed
+/// send up to 3 times before giving up on that message.
+/// </summary>
 public class EmailQueueWorker : BackgroundService
 {
-    private readonly IConnectionMultiplexer _redis;
-    private readonly ILogger<EmailQueueWorker> _logger;
+    private static readonly TimeSpan[] RetryDelays =
+        { TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30) };
+
+    private readonly InMemoryEmailQueue _queue;
     private readonly IDirectEmailSender _directEmailSender;
-    private const string QueueName = "MailQueue";
+    private readonly ILogger<EmailQueueWorker> _logger;
 
     public EmailQueueWorker(
-        IConnectionMultiplexer redis, 
-        ILogger<EmailQueueWorker> logger, 
-        IDirectEmailSender directEmailSender)
+        InMemoryEmailQueue queue,
+        IDirectEmailSender directEmailSender,
+        ILogger<EmailQueueWorker> logger)
     {
-        _redis = redis;
-        _logger = logger;
+        _queue = queue;
         _directEmailSender = directEmailSender;
+        _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("EmailQueueWorker started.");
+        _logger.LogInformation("EmailQueueWorker started (in-memory queue).");
 
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            await foreach (var mail in _queue.Reader.ReadAllAsync(stoppingToken))
             {
-                var db = _redis.GetDatabase();
-                var message = await db.ListLeftPopAsync(QueueName);
-
-                if (message.HasValue)
+                for (var attempt = 0; attempt <= RetryDelays.Length; attempt++)
                 {
-                    var mailRequest = JsonSerializer.Deserialize<MailRequest>(message.ToString());
-                    if (mailRequest != null)
+                    try
                     {
-                        await _directEmailSender.SendEmailAsync(mailRequest);
+                        await _directEmailSender.SendEmailAsync(mail);
+                        break;
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        if (attempt == RetryDelays.Length)
+                        {
+                            _logger.LogError(ex, "Giving up sending email to {To} after {Attempts} attempts.", mail.To, attempt + 1);
+                            break;
+                        }
+
+                        _logger.LogWarning(ex, "Sending email to {To} failed (attempt {Attempt}). Retrying.", mail.To, attempt + 1);
+                        await Task.Delay(RetryDelays[attempt], stoppingToken);
                     }
                 }
-                else
-                {
-                    // Check for new emails every 1 minute to save Redis quota
-                    await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
-                }
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (Exception ex) when (ex is RedisConnectionException or RedisTimeoutException)
-            {
-                _logger.LogWarning("Redis is unavailable. EmailQueueWorker waiting 30s...");
-                try { await Task.Delay(30000, stoppingToken); } catch { break; }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in EmailQueueWorker.");
-                try { await Task.Delay(5000, stoppingToken); } catch { break; }
-            }
+        }
+        catch (OperationCanceledException)
+        {
+            // shutting down
         }
     }
 }

@@ -20,10 +20,11 @@ public class AuthService : IAuthService
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly JwtSettings _jwtSettings;
     private readonly ILogger<AuthService> _logger;
-    private readonly IConnectionMultiplexer _redis;
+    // Lazy: the Redis connection is opened on the first OTP request, not for every login.
+    private readonly Lazy<IConnectionMultiplexer> _redis;
     private readonly IEmailService _emailService;
 
-    public AuthService(UserManager<ApplicationUser> userManager, IOptions<JwtSettings> jwtOptions, ILogger<AuthService> logger, IConnectionMultiplexer redis, IEmailService emailService)
+    public AuthService(UserManager<ApplicationUser> userManager, IOptions<JwtSettings> jwtOptions, ILogger<AuthService> logger, Lazy<IConnectionMultiplexer> redis, IEmailService emailService)
     {
         _userManager = userManager;
         _jwtSettings = jwtOptions.Value;
@@ -31,6 +32,20 @@ public class AuthService : IAuthService
         _redis = redis;
         _emailService = emailService;
     }
+
+    // ── OTP storage: only a keyed hash of each code is ever kept in Redis ─────────────
+    // A Redis dump, log or support screenshot can no longer reveal a live code. The hash is an
+    // HMAC (server secret + purpose + email + code), so it can't be precomputed or reused across
+    // purposes. Comparison is constant-time.
+    private string HashOtp(string purpose, string email, string otp)
+    {
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(_jwtSettings.Key));
+        var payload = $"{purpose}|{email.Trim().ToLowerInvariant()}|{otp}";
+        return Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload)));
+    }
+
+    private static bool HashesEqual(string a, string b)
+        => CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b));
 
     public async Task<Result<string>> InitiateRegistrationAsync(RegisterUserDto dto)
     {
@@ -48,10 +63,10 @@ public class AuthService : IAuthService
         var otp = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
 
         // Store pending registration data + OTP in Redis (10 min TTL)
-        var db = _redis.GetDatabase();
+        var db = _redis.Value.GetDatabase();
         var registrationData = System.Text.Json.JsonSerializer.Serialize(dto);
         await db.StringSetAsync($"reg:{dto.Email}", registrationData, TimeSpan.FromMinutes(10));
-        await db.StringSetAsync($"reg-otp:{dto.Email}", otp, TimeSpan.FromMinutes(10));
+        await db.StringSetAsync($"reg-otp:{dto.Email}", HashOtp("reg", dto.Email, otp), TimeSpan.FromMinutes(10));
 
         // Send OTP email
         var htmlBody = $@"
@@ -120,7 +135,7 @@ public class AuthService : IAuthService
 
     public async Task<Result<string>> CompleteRegistrationAsync(VerifyRegistrationDto dto)
     {
-        var db = _redis.GetDatabase();
+        var db = _redis.Value.GetDatabase();
 
         // Verify OTP — with the same 5-attempt cap the password-reset flow already has.
         // Without it a 6-digit code could be brute-forced within its 10-minute lifetime.
@@ -135,7 +150,7 @@ public class AuthService : IAuthService
         }
 
         var storedOtp = await db.StringGetAsync(regOtpKey);
-        if (storedOtp.IsNullOrEmpty || storedOtp.ToString() != dto.Otp)
+        if (storedOtp.IsNullOrEmpty || !HashesEqual(storedOtp.ToString(), HashOtp("reg", dto.Email, dto.Otp ?? string.Empty)))
         {
             var regTtl = await db.KeyTimeToLiveAsync(regOtpKey);
             await db.StringIncrementAsync(regAttemptsKey);
@@ -219,7 +234,17 @@ public class AuthService : IAuthService
             await _userManager.ResetAccessFailedCountAsync(user);
 
         // Concurrent Login Check
-        if (!string.IsNullOrEmpty(user.CurrentSessionId) && !dto.ForceLogin)
+        // The old session only counts as "another device" if it is genuinely live: seen in the
+        // last 15 minutes AND from a different browser/IP. A session left behind by a closed tab,
+        // an expired token or a same-device re-login is stale and is simply replaced — before,
+        // CurrentSessionId survived until an explicit logout, so almost every login prompted.
+        var existingSessionIsLive =
+            !string.IsNullOrEmpty(user.CurrentSessionId) &&
+            user.LastSeenUtc > DateTime.UtcNow.AddMinutes(-15) &&
+            !(string.Equals(user.LastKnownUserAgent, userAgent, StringComparison.Ordinal) &&
+              string.Equals(user.LastKnownIp, ipAddress, StringComparison.Ordinal));
+
+        if (existingSessionIsLive && !dto.ForceLogin)
         {
             _logger.LogWarning("Concurrent login attempt for {UserName} from IP {IpAddress}. Existing session active.", dto.UserName, ipAddress);
             return Result.Failure<LoginResponseDto>(new Error("Auth.ConcurrentLogin", "User is already logged in on another device. Do you want to continue here?"));
@@ -237,6 +262,7 @@ public class AuthService : IAuthService
 
         user.CurrentSessionId = sessionId;
         user.LastLoginTime = DateTime.UtcNow;
+        user.LastSeenUtc = DateTime.UtcNow;
         user.LastKnownIp = ipAddress;
         user.LastKnownUserAgent = userAgent;
 
@@ -351,31 +377,19 @@ public class AuthService : IAuthService
             return Result.Success("If an account exists, a password reset email has been sent.");
         }
 
-        var db = _redis.GetDatabase();
-        var redisKey = $"otp:{user.Email}";
+        var db = _redis.Value.GetDatabase();
+        var redisKey = $"otp-set:{user.Email!.ToLowerInvariant()}";
 
-        // If a still-valid OTP already exists (user requesting a resend,
-        // most commonly because the first email is slow to arrive), reuse
-        // it rather than silently invalidating it with a new one. This is
-        // the fix — every email the user has for this reset attempt, old
-        // or new, will contain a code that actually still works.
-        var existingOtp = await db.StringGetAsync(redisKey);
-        string otp;
-
-        if (!existingOtp.IsNullOrEmpty)
-        {
-            otp = existingOtp.ToString();
-            // Refresh the TTL back to the full window so a resend also
-            // buys the user more time, rather than counting down against
-            // however much was left on the original.
-            await db.KeyExpireAsync(redisKey, TimeSpan.FromMinutes(10));
-            _logger.LogInformation("Reusing existing pending OTP for {Email} (resend requested).", user.Email);
-        }
-        else
-        {
-            otp = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
-            await db.StringSetAsync(redisKey, otp, TimeSpan.FromMinutes(10));
-        }
+        // Every resend creates a NEW code and the earlier ones stay valid until the window ends
+        // (a slow first email must still work). Only hashes are stored, so a code can't be
+        // "reused" any more — each email simply carries its own working code. Capped at 5 live
+        // codes so repeated resends can't widen the guessing surface.
+        var otp = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
+        var otpHash = HashOtp("reset", user.Email!, otp);
+        if (await db.SetLengthAsync(redisKey) >= 5)
+            await db.KeyDeleteAsync(redisKey);
+        await db.SetAddAsync(redisKey, otpHash);
+        await db.KeyExpireAsync(redisKey, TimeSpan.FromMinutes(10));
 
         // Generate a beautiful HTML email template
         var htmlBody = $@"
@@ -451,8 +465,9 @@ public class AuthService : IAuthService
         StackExchange.Redis.IDatabase db, string email, string providedOtp)
     {
         const int maxAttempts = 5;
-        var attemptsKey = $"otp-attempts:{email}";
-        var otpKey = $"otp:{email}";
+        var emailKey = email.Trim().ToLowerInvariant();
+        var attemptsKey = $"otp-attempts:{emailKey}";
+        var otpKey = $"otp-set:{emailKey}";
 
         var attempts = (int)(await db.StringGetAsync(attemptsKey));
 
@@ -462,9 +477,9 @@ public class AuthService : IAuthService
                 "Auth.TooManyAttempts", "Too many incorrect attempts. Request a new code."));
         }
 
-        var storedOtp = await db.StringGetAsync(otpKey);
+        var providedHash = HashOtp("reset", email, providedOtp ?? string.Empty);
 
-        if (storedOtp.IsNullOrEmpty || storedOtp != providedOtp)
+        if (!await db.SetContainsAsync(otpKey, providedHash))
         {
             var otpTtl = await db.KeyTimeToLiveAsync(otpKey);
             await db.StringIncrementAsync(attemptsKey);
@@ -483,13 +498,13 @@ public class AuthService : IAuthService
 
     public async Task<Result<bool>> VerifyOtpAsync(VerifyOtpDto dto)
     {
-        var db = _redis.GetDatabase();
+        var db = _redis.Value.GetDatabase();
         return await ValidateOtpWithAttemptLimitAsync(db, dto.Email, dto.Otp);
     }
 
     public async Task<Result<bool>> ResetPasswordAsync(ResetPasswordDto dto)
     {
-        var db = _redis.GetDatabase();
+        var db = _redis.Value.GetDatabase();
         var otpCheck = await ValidateOtpWithAttemptLimitAsync(db, dto.Email, dto.Otp);
         if (otpCheck.IsFailure)
             return otpCheck;
@@ -523,7 +538,7 @@ public class AuthService : IAuthService
         await UpdateUserWithConcurrencyRetryAsync(user);
 
         // Invalidate OTP
-        await db.KeyDeleteAsync($"otp:{dto.Email}");
+        await db.KeyDeleteAsync($"otp-set:{dto.Email.Trim().ToLowerInvariant()}");
 
         return Result.Success(true);
     }
@@ -641,4 +656,4 @@ public class AuthService : IAuthService
         }
         return updateResult;
     }
-}
+}

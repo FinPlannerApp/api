@@ -17,6 +17,7 @@ public class InfrastructureMonitorWorker : BackgroundService
     private readonly IConfiguration _configuration;
     private bool _redisLastState = true;
     private bool _dbLastState = true;
+    private DateTime _lastRedisCheckUtc = DateTime.MinValue;
 
     public InfrastructureMonitorWorker(
         IServiceProvider serviceProvider, 
@@ -65,41 +66,49 @@ public class InfrastructureMonitorWorker : BackgroundService
     private async Task CheckHealthAsync()
     {
         using var scope = _serviceProvider.CreateScope();
-        var redis = scope.ServiceProvider.GetService<IConnectionMultiplexer>();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var emailSender = scope.ServiceProvider.GetRequiredService<IDirectEmailSender>();
 
-        // 1. Check Redis
-        bool redisCurrentState = false;
-        if (redis != null)
+        // 1. Check Redis (OTP codes depend on it). A genuine round trip - write a key, read it back -
+        // not IsConnected, which can be true on a dead or unauthorised connection. Runs at most once
+        // per Infrastructure:RedisCheckIntervalHours (default 24), so it costs ~60 commands a month.
+        // Set Infrastructure:CheckRedis=false to turn it off.
+        var checkRedis = _configuration.GetValue<bool?>("Infrastructure:CheckRedis") ?? true;
+        var redisEvery = TimeSpan.FromHours(_configuration.GetValue<int?>("Infrastructure:RedisCheckIntervalHours") ?? 24);
+        var redisDue = checkRedis && DateTime.UtcNow - _lastRedisCheckUtc >= redisEvery;
+
+        if (redisDue)
         {
+            _lastRedisCheckUtc = DateTime.UtcNow;
+            bool redisCurrentState;
             try
             {
-                redisCurrentState = redis.IsConnected;
+                var redis = scope.ServiceProvider.GetRequiredService<IConnectionMultiplexer>();
+                var db = redis.GetDatabase();
+                var probe = Guid.NewGuid().ToString("N");
+                await db.StringSetAsync("health:probe", probe, TimeSpan.FromHours(48));
+                redisCurrentState = (await db.StringGetAsync("health:probe")).ToString() == probe;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Redis health probe failed.");
+                redisCurrentState = false;
+            }
+
+            if (redisCurrentState != _redisLastState)
+            {
                 if (!redisCurrentState)
                 {
-                    // Try a ping to be sure
-                    var db = redis.GetDatabase();
-                    await db.PingAsync();
-                    redisCurrentState = true;
+                    _logger.LogCritical("CRITICAL: Redis is not working (OTP codes will fail)!");
+                    await SendAlertAsync(emailSender, "CRITICAL: Redis Down", "A Redis write/read test failed. Registration and password-reset OTP codes will not work until Redis is back (check the Upstash database - it may be archived or over quota).");
                 }
+                else
+                {
+                    _logger.LogInformation("RECOVERY: Redis is working again.");
+                    await SendAlertAsync(emailSender, "RECOVERY: Redis Restored", "The Redis write/read test passed again. OTP codes work.");
+                }
+                _redisLastState = redisCurrentState;
             }
-            catch { redisCurrentState = false; }
-        }
-
-        if (redisCurrentState != _redisLastState)
-        {
-            if (!redisCurrentState)
-            {
-                _logger.LogCritical("CRITICAL: Redis server is DOWN!");
-                await SendAlertAsync(emailSender, "CRITICAL: Redis Infrastructure Down", "The Redis server is unreachable. Fallback mechanisms are active.");
-            }
-            else
-            {
-                _logger.LogInformation("RECOVERY: Redis server is back online.");
-                await SendAlertAsync(emailSender, "RECOVERY: Redis Infrastructure Restored", "The Redis server is back online.");
-            }
-            _redisLastState = redisCurrentState;
         }
 
         // 2. Check Database
