@@ -234,15 +234,15 @@ public class AuthService : IAuthService
             await _userManager.ResetAccessFailedCountAsync(user);
 
         // Concurrent Login Check
-        // The old session only counts as "another device" if it is genuinely live: seen in the
-        // last 15 minutes AND from a different browser/IP. A session left behind by a closed tab,
-        // an expired token or a same-device re-login is stale and is simply replaced — before,
-        // CurrentSessionId survived until an explicit logout, so almost every login prompted.
+        // The old session only counts as "another device" if it is genuinely live (activity in the
+        // last 30 minutes: LastSeenUtc is refreshed at login and on every token refresh, and access
+        // tokens last 15 minutes) AND it came from a different browser. The IP is deliberately NOT
+        // compared: a phone switching Wi-Fi <-> 4G, or a proxy hop changing, must not look like a
+        // second device. A stale session (closed tab, expired token) is simply replaced.
         var existingSessionIsLive =
             !string.IsNullOrEmpty(user.CurrentSessionId) &&
-            user.LastSeenUtc > DateTime.UtcNow.AddMinutes(-15) &&
-            !(string.Equals(user.LastKnownUserAgent, userAgent, StringComparison.Ordinal) &&
-              string.Equals(user.LastKnownIp, ipAddress, StringComparison.Ordinal));
+            user.LastSeenUtc > DateTime.UtcNow.AddMinutes(-30) &&
+            !string.Equals(user.LastKnownUserAgent, userAgent, StringComparison.Ordinal);
 
         if (existingSessionIsLive && !dto.ForceLogin)
         {
@@ -313,6 +313,9 @@ public class AuthService : IAuthService
             return Result.Failure<LoginResponseDto>(new Error("Auth.InvalidToken", "Invalid token."));
         }
 
+        // Proof the session is still in use: keeps the concurrent-login check accurate.
+        user.LastSeenUtc = DateTime.UtcNow;
+
         // Revoke the old token (Rotation)
         refreshToken.RevokedUtc = DateTime.UtcNow;
         refreshToken.RevokedByIp = ipAddress;
@@ -328,7 +331,14 @@ public class AuthService : IAuthService
         user.RefreshTokens.RemoveAll(rt => !rt.IsActive || rt.ExpiresUtc <= DateTime.UtcNow);
 
         user.RefreshTokens.Add(newRefreshToken);
-        await UpdateUserWithConcurrencyRetryAsync(user);
+        var persistResult = await UpdateUserWithConcurrencyRetryAsync(user);
+        if (!persistResult.Succeeded)
+        {
+            // Never hand out a refresh token that was not stored: it could not be used (or rotated) later.
+            _logger.LogError("Refresh failed for {UserName}: could not persist the rotated token. Errors: {Errors}",
+                user.UserName, string.Join(", ", persistResult.Errors.Select(e => e.Description)));
+            return Result.Failure<LoginResponseDto>(new Error("Auth.RefreshFailed", "Could not refresh your session. Please sign in again."));
+        }
 
         _logger.LogInformation("Token refreshed successfully for user {UserName} from IP {IpAddress}", user.UserName, ipAddress);
 

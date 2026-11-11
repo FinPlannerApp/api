@@ -17,10 +17,33 @@ using StackExchange.Redis;
 
 public static class InfrastructureServiceExtensions
 {
+    /// <summary>
+    /// Refuse to start outside Development if the JWT signing key is missing, short or one of the
+    /// placeholder values committed to the repo -- anyone who can read the repo could forge tokens.
+    /// Set it with the environment variable Jwt__Key (32+ random characters).
+    /// </summary>
+    private static void EnsureJwtKeyIsSafe(IConfiguration configuration)
+    {
+        var env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
+        if (string.Equals(env, "Development", StringComparison.OrdinalIgnoreCase)) return;
+
+        var key = configuration[$"{JwtSettings.SectionName}:Key"];
+        var placeholders = new[] { "YOUR_SUPER_SECRET_KEY", "SOME_SUPER_SECRET_KEY", "CHANGE_ME", "CHANGEME" };
+        var bad = string.IsNullOrWhiteSpace(key)
+                  || key.Length < 32
+                  || placeholders.Any(p => key.Contains(p, StringComparison.OrdinalIgnoreCase));
+        if (bad)
+            throw new InvalidOperationException(
+                "Jwt:Key is missing, shorter than 32 characters, or still a placeholder. " +
+                "Set a strong random value via the Jwt__Key environment variable before starting in " + env + ". " +
+                "(If a placeholder was ever used in production, rotate it: all existing tokens become invalid.)");
+    }
+
     public static IServiceCollection AddInfrastructureServices(this IServiceCollection services, IConfiguration configuration)
     {
         // 1. Configure strongly typed settings objects
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
+        EnsureJwtKeyIsSafe(configuration);
 
         // 2. Register the DbContext
         services.AddSingleton<Infrastructure.Persistence.DashboardCacheInvalidationInterceptor>();

@@ -147,11 +147,13 @@ public class RecurringTransactionJob
                 else
                 {
                     await dbTransaction.RollbackAsync();
+                    await DiscardUnsavedChangesAsync(rt);
                 }
             }
             catch (Exception ex)
             {
                 await dbTransaction.RollbackAsync();
+                await DiscardUnsavedChangesAsync(rt);
                 failures.Add((rt.Id, rt.Description ?? "", ex));
                 _logger.LogError(ex, "Exception processing recurring transaction {Id}", rt.Id);
             }
@@ -174,6 +176,26 @@ public class RecurringTransactionJob
         }
 
         _logger.LogInformation("All recurring transactions processed successfully.");
+    }
+
+    /// <summary>
+    /// After a rolled-back attempt the DbContext still tracks whatever that attempt touched: a new
+    /// Transaction that was added before a funds check failed, an Account whose balance was changed in
+    /// memory. The NEXT item's SaveChanges would silently persist those leftovers. Drop them, and
+    /// reload the failed recurring item itself from the database.
+    /// </summary>
+    private async Task DiscardUnsavedChangesAsync(RecurringTransaction failed)
+    {
+        var ctx = (DbContext)_context;
+        foreach (var entry in ctx.ChangeTracker.Entries().ToList())
+        {
+            if (entry.Entity is RecurringTransaction r)
+            {
+                if (ReferenceEquals(r, failed)) await entry.ReloadAsync();
+                continue; // the other due items stay tracked, untouched
+            }
+            entry.State = EntityState.Detached;
+        }
     }
 
     private static DateTime CalculateNextDate(DateTime current, RecurrenceFrequency frequency, RecurrenceDayOfWeek? customDays)

@@ -58,9 +58,7 @@ public class SessionValidationMiddleware
                     // ── Audit-only: log IP change (no block) ──────────────────────────
                     // Blocking on IP change breaks mobile users (WiFi ↔ 4G switching).
                     // We log it for security audit trail instead.
-                    var currentIp = context.Request.Headers.TryGetValue("X-Forwarded-For", out var fwd)
-                        ? fwd.ToString().Split(',')[0].Trim()
-                        : context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+                    var currentIp = API.Extensions.HttpContextExtensions.GetClientIp(context);
 
                     if (!string.IsNullOrEmpty(user.LastKnownIp) && user.LastKnownIp != currentIp)
                     {

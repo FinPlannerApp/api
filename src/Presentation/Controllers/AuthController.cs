@@ -11,10 +11,13 @@ namespace API.Controllers;
 public class AuthController : BaseController
 {
     private readonly IAuthService _authService;
+    private readonly int _refreshTokenDays;
 
-    public AuthController(IAuthService authService)
+    public AuthController(IAuthService authService, Microsoft.Extensions.Options.IOptions<Application.JwtSettings> jwt)
     {
         _authService = authService;
+        // One lifetime for both the token (server) and the cookie (browser), so they can never disagree.
+        _refreshTokenDays = jwt.Value.RefreshTokenTTL > 0 ? jwt.Value.RefreshTokenTTL : 7;
     }
 
     private void SetRefreshTokenCookie(string token)
@@ -27,7 +30,7 @@ public class AuthController : BaseController
             HttpOnly = true,
             Secure = !isLocalHttp,
             SameSite = isLocalHttp ? SameSiteMode.Lax : SameSiteMode.None,
-            Expires = DateTimeOffset.UtcNow.AddDays(30),
+            Expires = DateTimeOffset.UtcNow.AddDays(_refreshTokenDays),
             Path = "/"
         });
     }
@@ -39,10 +42,7 @@ public class AuthController : BaseController
 
     private string GetIpAddress()
     {
-        if (Request.Headers.ContainsKey("X-Forwarded-For"))
-            return Request.Headers["X-Forwarded-For"].ToString();
-
-        return HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return API.Extensions.HttpContextExtensions.GetClientIp(HttpContext);
     }
 
     [HttpPost("register")]
@@ -175,4 +175,4 @@ public class AuthController : BaseController
         var result = await _authService.UpdateProfileAsync(UserId!, dto);
         return HandleResult(result);
     }
-}
+}

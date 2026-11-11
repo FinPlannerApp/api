@@ -44,10 +44,27 @@ builder.Services.AddResponseCaching();
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
-    // Trust all proxies - required for cloud platforms like Render.com
-    options.KnownIPNetworks.Clear();
-    options.KnownProxies.Clear();
-    options.ForwardLimit = 2; // Limit to 2 proxy hops (Cloudflare + Render)
+
+    // Preferred: list the proxies/networks you actually sit behind (e.g. your VPS reverse proxy):
+    //   "ForwardedHeaders": { "KnownProxies": ["10.0.0.5"], "KnownNetworks": ["10.0.0.0/8"], "ForwardLimit": 1 }
+    // Only those hosts may set X-Forwarded-*; anyone else's headers are ignored (no IP spoofing).
+    var fwdSection = builder.Configuration.GetSection("ForwardedHeaders");
+    var knownProxies = fwdSection.GetSection("KnownProxies").Get<string[]>() ?? Array.Empty<string>();
+    var knownNetworks = fwdSection.GetSection("KnownNetworks").Get<string[]>() ?? Array.Empty<string>();
+    options.ForwardLimit = fwdSection.GetValue<int?>("ForwardLimit") ?? 2;
+
+    if (knownProxies.Length > 0 || knownNetworks.Length > 0)
+    {
+        foreach (var p in knownProxies) options.KnownProxies.Add(System.Net.IPAddress.Parse(p));
+        foreach (var n in knownNetworks) options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse(n));
+    }
+    else
+    {
+        // Legacy fallback for PaaS hosts (Render + Cloudflare) whose proxy IPs change: trust any hop.
+        // Less safe -- configure ForwardedHeaders:KnownProxies/KnownNetworks as soon as the proxy addresses are known.
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+    }
 });
 
 var app = builder.Build();
@@ -235,4 +252,4 @@ app.UseMiddleware<UpdateLastSeenMiddleware>();
 app.MapControllers();
 app.MapHub<API.Hubs.SplitHub>("/hubs/split");
 
-app.Run();
+app.Run();
