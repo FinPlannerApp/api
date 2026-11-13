@@ -44,7 +44,7 @@ jobs:
         run: dotnet test FinancialPlanner.sln -c Release --no-build
 
       - name: Check the release scripts
-        run: node --test .github/scripts
+        run: node --test .github/scripts/release-api.test.mjs
 
       # Backend version number (its own, separate from the UI's). Before migrations and deploy, so
       # the image Render builds carries it. See .github/scripts/release-api.mjs. What users read is
