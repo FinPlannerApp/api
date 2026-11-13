@@ -83,6 +83,15 @@ app.UseResponseCompression();
 
 // 3. Health Checks (Liveness/Readiness)
 app.MapGet("/healthz", () => Results.Ok("ok"));
+// The version this deployment is running (set automatically from <VersionPrefix> by the release step).
+app.MapGet("/api/version", () =>
+{
+    var info = typeof(Program).Assembly
+        .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+        .FirstOrDefault()?.InformationalVersion ?? "unknown";
+    return Results.Ok(new { version = info.Split('+')[0] });
+});
 app.MapGet("/health/db", async (ApplicationDbContext db) =>
 {
     return await db.Database.CanConnectAsync()

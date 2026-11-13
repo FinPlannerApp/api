@@ -58,6 +58,7 @@ public static class ApplicationServiceExtensions
         services.AddScoped<R2BlogImageStorage>();
         services.AddScoped<BlogImageMigrationService>();
         services.AddScoped<BlogService>();
+        services.AddScoped<ReleaseNotesService>();
 
         return services;
     }

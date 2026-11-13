@@ -13,11 +13,13 @@ public class BlogController : BaseController
 {
     private readonly BlogService _blogService;
     private readonly BlogImageMigrationService _migrationService;
+    private readonly ReleaseNotesService _releaseNotes;
 
-    public BlogController(BlogService blogService, BlogImageMigrationService migrationService)
+    public BlogController(BlogService blogService, BlogImageMigrationService migrationService, ReleaseNotesService releaseNotes)
     {
         _blogService = blogService;
         _migrationService = migrationService;
+        _releaseNotes = releaseNotes;
     }
 
     [HttpGet("published")]
@@ -45,7 +47,15 @@ public class BlogController : BaseController
     [AllowAnonymous]
     [ResponseCache(Duration = 300, Location = ResponseCacheLocation.Any)]
     public async Task<IActionResult> GetBySlug(string slug)
-        => HandleResult(await _blogService.GetBySlugAsync(slug));
+    {
+        var result = await _blogService.GetBySlugAsync(slug);
+        if (result.IsSuccess)
+        {
+            // A minor/major release article also lists the patch releases shipped since the last one.
+            result.Value.ContentMarkdown += await _releaseNotes.BuildAccumulatedPatchesMarkdownAsync(slug);
+        }
+        return HandleResult(result);
+    }
 
     [HttpPost("comments")]
     [Authorize]

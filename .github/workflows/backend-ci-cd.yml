@@ -20,12 +20,14 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # the release step commits the version bump and moves a tag
       packages: write
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Code (full history, for the release step)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -40,6 +42,16 @@ jobs:
 
       - name: Run Backend Unit & Integration Tests
         run: dotnet test FinancialPlanner.sln -c Release --no-build
+
+      - name: Check the release scripts
+        run: node --test .github/scripts
+
+      # Backend version number (its own, separate from the UI's). Before migrations and deploy, so
+      # the image Render builds carries it. See .github/scripts/release-api.mjs. What users read is
+      # written as a Flyway migration (db/migrations/V*__release_notes_*.sql), applied by the next step.
+      - name: Backend version (prepare)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: node .github/scripts/release-api.mjs prepare
 
       # Run migrations on production database when pushing to main
       - name: Run Flyway Migrations (Production)

@@ -62,6 +62,8 @@ public interface IApplicationDbContext
     DbSet<BlogPost> BlogPosts { get; }
     DbSet<BlogImage> BlogImages { get; }
     DbSet<BlogPostComment> BlogPostComments { get; }
+    DbSet<ReleaseNote> ReleaseNotes { get; }
+    DbSet<ReleaseNoteItem> ReleaseNoteItems { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

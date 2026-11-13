@@ -104,6 +104,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<BlogPost> BlogPosts => Set<BlogPost>();
     public DbSet<BlogImage> BlogImages => Set<BlogImage>();
     public DbSet<BlogPostComment> BlogPostComments => Set<BlogPostComment>();
+    public DbSet<ReleaseNote> ReleaseNotes => Set<ReleaseNote>();
+    public DbSet<ReleaseNoteItem> ReleaseNoteItems => Set<ReleaseNoteItem>();
 
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options, IHttpContextAccessor httpContextAccessor) : base(options)
     {
@@ -838,6 +840,18 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<BlogImage>(e =>
         {
             e.ToTable("BlogImages", "accounts");
+        });
+
+        // Release notes are written by Flyway migrations; the app only reads them.
+        builder.Entity<ReleaseNote>(e =>
+        {
+            e.ToTable("ReleaseNotes", "accounts");
+            e.HasIndex(r => new { r.Stream, r.Version }).IsUnique();
+            e.HasMany(r => r.Items).WithOne().HasForeignKey(i => i.ReleaseNoteId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<ReleaseNoteItem>(e =>
+        {
+            e.ToTable("ReleaseNoteItems", "accounts");
         });
     }
 }

@@ -56,3 +56,14 @@ API will be available at `http://localhost:5000`.
 | `GET /api/accounts/{id}/transactions` | Transactions for a specific account |
 | `POST /api/transactions/bulk` | Batch transaction create |
 | `GET /health` | Health check endpoint |
+
+## Versions and release notes
+
+**Version.** The backend has its own version number (`<VersionPrefix>` in `src/Presentation/API.csproj`), separate from the UI's, bumped automatically on every push to `main` by `.github/scripts/release-api.mjs` (after the tests, before the migrations and deploy). `feat` bumps the minor version, anything else the patch, `!` or `BREAKING CHANGE:` the major, so use Conventional Commits. `.github/release.json` records the last release; preview the next with `node .github/scripts/release-api.mjs dry`. `GET /api/version` shows what is deployed.
+
+**Release notes.** What users read (the "What's new" window and the blog) lives in the database, in `accounts."ReleaseNotes"` and `accounts."ReleaseNoteItems"`, and is written as a Flyway migration: `db/migrations/V<n>__release_notes_<app|server>_<x_y_z>.sql` (copy `V44__release_notes_app_6_1_0.sql`). The same migration also covers UI ("app") releases, since this repo owns the database. `GET /api/Releases/recent` serves them.
+
+- Every release gets short notes (`new` / `improved` / `fixed`), in plain language from the user's point of view.
+- **Minor and major** releases also get a blog article (a `BlogPosts` row whose slug contains "release", linked by `BlogSlug`). **Patch** releases have notes only; they are appended automatically to the next minor/major article under "Also fixed and improved since ...".
+- The version in the migration must match the one the pipeline assigns (see the `dry` commands above, and `npm run release:dry` in the UI repo).
+- A commit that only adds a release-notes migration does not trigger a new backend release.
