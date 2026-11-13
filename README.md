@@ -59,6 +59,8 @@ API will be available at `http://localhost:5000`.
 
 ## Versions and release notes
 
+> Step-by-step guide with templates for developers and AI agents: **[docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md)**.
+
 **Version.** The backend has its own version number (`<VersionPrefix>` in `src/Presentation/API.csproj`), separate from the UI's, bumped automatically on every push to `main` by `.github/scripts/release-api.mjs` (after the tests, before the migrations and deploy). `feat` bumps the minor version, anything else the patch, `!` or `BREAKING CHANGE:` the major, so use Conventional Commits. `.github/release.json` records the last release; preview the next with `node .github/scripts/release-api.mjs dry`. `GET /api/version` shows what is deployed.
 
 **Release notes.** What users read (the "What's new" window and the blog) lives in the database, in `accounts."ReleaseNotes"` and `accounts."ReleaseNoteItems"`, and is written as a Flyway migration: `db/migrations/V<n>__release_notes_<app|server>_<x_y_z>.sql` (copy `V44__release_notes_app_6_1_0.sql`). The same migration also covers UI ("app") releases, since this repo owns the database. `GET /api/Releases/recent` serves them.
