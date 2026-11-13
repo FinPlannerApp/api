@@ -45,9 +45,11 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                 // Paid from a bank/cash account or put on a card; an item on some other
                 // account type (e.g. a closed-loop wallet) does not touch liquid cash.
                 ReducesAvailableCash =
-                    rt.Account.AccountCategory.AccountType == AccountType.Bank ||
-                    rt.Account.AccountCategory.AccountType == AccountType.Cash ||
-                    rt.Account.AccountCategory.AccountType == AccountType.CreditCard
+                    rt.Account.AccountCategory.AccountType == AccountType.CreditCard ||
+                    rt.Account.CashRole == CashRole.Spendable ||
+                    (rt.Account.CashRole == CashRole.Auto &&
+                     (rt.Account.AccountCategory.AccountType == AccountType.Bank ||
+                      rt.Account.AccountCategory.AccountType == AccountType.Cash))
             })
             .ToListAsync(cancellationToken);
 

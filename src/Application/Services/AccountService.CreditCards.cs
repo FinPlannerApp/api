@@ -107,6 +107,74 @@ public partial class AccountService
         return Result.Success(result);
     }
 
+    public async Task<Result<CardHistoryDto>> GetCreditCardHistoryAsync(string userId, int accountId)
+    {
+        var account = await _context.Accounts.AsNoTracking().FirstOrDefaultAsync(a => a.Id == accountId);
+        if (account == null || account.UserId != userId)
+            return Result.Failure<CardHistoryDto>(new Error("Account.NotFound", "Account not found."));
+
+        var bills = await _context.CreditCardBills.AsNoTracking()
+            .Where(b => b.AccountId == accountId)
+            .OrderByDescending(b => b.StatementDate)
+            .ToListAsync();
+        var payments = await _context.CreditCardPayments.AsNoTracking()
+            .Where(p => p.CreditCardAccountId == accountId)
+            .OrderByDescending(p => p.Date)
+            .ToListAsync();
+
+        var paymentIds = payments.Select(p => p.Id).ToList();
+        var accountIds = payments.Select(p => p.PayingAccountId)
+            .Concat(payments.Where(p => p.CashbackAccountId.HasValue).Select(p => p.CashbackAccountId!.Value))
+            .Distinct().ToList();
+        var names = await _context.Accounts.AsNoTracking()
+            .Where(a => accountIds.Contains(a.Id))
+            .ToDictionaryAsync(a => a.Id, a => a.Name);
+        var ledger = await _context.PaymentAppWalletLedgerEntries.AsNoTracking()
+            .Where(e => paymentIds.Contains(e.CreditCardPaymentId))
+            .ToListAsync();
+
+        CardPaymentHistoryDto Map(CreditCardPayment p) => new()
+        {
+            Id = p.Id,
+            Date = p.Date,
+            Amount = p.Amount,
+            PayingAccountId = p.PayingAccountId,
+            PayingAccountName = names.GetValueOrDefault(p.PayingAccountId, "Unknown account"),
+            PaymentAppName = p.PaymentAppName,
+            PrincipalPortion = p.PrincipalPortion,
+            InterestPortion = p.InterestPortion,
+            CashbackAmount = p.CashbackAmount,
+            CashbackType = p.CashbackType?.ToString(),
+            CashbackAccountName = p.CashbackAccountId.HasValue ? names.GetValueOrDefault(p.CashbackAccountId.Value) : null,
+            WalletApplied = ledger.Where(e => e.CreditCardPaymentId == p.Id && e.Type == PaymentAppWalletEntryType.Applied).Sum(e => e.Amount),
+            WalletEarned = ledger.Where(e => e.CreditCardPaymentId == p.Id && e.Type == PaymentAppWalletEntryType.Earned).Sum(e => e.Amount)
+        };
+
+        var dto = new CardHistoryDto();
+        foreach (var b in bills)
+        {
+            var linked = payments.Where(p => p.CreditCardBillId == b.Id).Select(Map).ToList();
+            var paid = linked.Sum(p => p.Amount);
+            dto.Statements.Add(new CardStatementHistoryDto
+            {
+                BillId = b.Id,
+                StatementDate = b.StatementDate,
+                DueDate = b.DueDate,
+                BillAmount = b.BillAmount,
+                MinimumDue = b.MinimumDue,
+                InterestAndFees = b.InterestAndFees,
+                OtherCharges = b.OtherCharges,
+                Paid = paid,
+                Remaining = Math.Max(0, b.BillAmount - paid),
+                CashbackTotal = linked.Sum(p => p.CashbackAmount ?? 0),
+                Status = paid >= b.BillAmount ? "Paid" : paid > 0 ? "Partly paid" : "Unpaid",
+                Payments = linked
+            });
+        }
+        dto.UnlinkedPayments = payments.Where(p => p.CreditCardBillId == null).Select(Map).ToList();
+        return Result.Success(dto);
+    }
+
     public async Task<Result<CreditCardBillResultDto>> RecordCreditCardBillAsync(string userId, RecordCreditCardBillDto dto)
     {
         var account = await _context.Accounts
@@ -134,7 +202,9 @@ public partial class AccountService
             return Result.Failure<CreditCardBillResultDto>(new Error("CreditCardBill.InvalidAmount", "Bill amount can't be negative."));
 
         var computedBreakdown = await CreditCardStatementCalculator.CalculateAsync(_context, account);
-        var statementDate = computedBreakdown.MostRecentStatementDate ?? DateTime.UtcNow;
+        var statementDate = dto.StatementDate.HasValue
+            ? DateTime.SpecifyKind(dto.StatementDate.Value.Date, DateTimeKind.Utc)
+            : computedBreakdown.MostRecentStatementDate ?? DateTime.UtcNow;
 
         // Upsert against (AccountId, StatementDate) — recording a bill
         // for a cycle that already has one updates it rather than
@@ -147,6 +217,8 @@ public partial class AccountService
         {
             existingBill.BillAmount = dto.BillAmount;
             existingBill.MinimumDue = dto.MinimumDue;
+            existingBill.InterestAndFees = Math.Max(0, dto.InterestAndFees ?? 0);
+            existingBill.OtherCharges = Math.Max(0, dto.OtherCharges ?? 0);
             existingBill.DueDate = dto.DueDate ?? account.CreditCardDetails.DueDate;
             _context.CreditCardBills.Update(existingBill);
         }
@@ -159,6 +231,8 @@ public partial class AccountService
                 StatementDate = statementDate,
                 BillAmount = dto.BillAmount,
                 MinimumDue = dto.MinimumDue,
+                InterestAndFees = Math.Max(0, dto.InterestAndFees ?? 0),
+                OtherCharges = Math.Max(0, dto.OtherCharges ?? 0),
                 DueDate = dto.DueDate ?? account.CreditCardDetails.DueDate
             });
         }
@@ -418,6 +492,9 @@ public partial class AccountService
         }
 
         decimal remainingInterestToAllocate = 0;
+        // The gap between a recorded bill and tracked purchases is only "interest/fees" when the
+        // user said so; otherwise it is card spend that was never entered.
+        var gapIsDeclaredInterest = false;
         if (targetBill != null)
         {
             var interestAlreadyPaid = await _context.CreditCardPayments
@@ -426,6 +503,8 @@ public partial class AccountService
                 .SumAsync(p => (decimal?)p.InterestPortion) ?? 0;
 
             var totalBillInterest = Math.Max(0, targetBill.BillAmount - computedBreakdown.StatementOutstanding);
+            gapIsDeclaredInterest = (targetBill.InterestAndFees + targetBill.OtherCharges) > 0 &&
+                                    (targetBill.InterestAndFees + targetBill.OtherCharges) >= totalBillInterest;
             remainingInterestToAllocate = Math.Max(0, totalBillInterest - interestAlreadyPaid);
         }
 
@@ -471,14 +550,14 @@ public partial class AccountService
             {
                 interestTx = new Transaction
                 {
-                    Description = $"Interest/fees — {ccAccount.Name}",
+                    Description = gapIsDeclaredInterest ? $"Interest/fees — {ccAccount.Name}" : $"Card spend not itemised (from statement) — {ccAccount.Name}",
                     Amount = interestPortion,
                     Date = payment.Date,
                     Type = TransactionType.Expense,
                     AccountId = dto.CreditCardAccountId,
                     UserId = userId,
                     Kind = TransactionKind.Normal,
-                    TransactionCategoryId = defaultInterestCat?.Id
+                    TransactionCategoryId = gapIsDeclaredInterest ? defaultInterestCat?.Id : null
                 };
                 _context.Transactions.Add(interestTx);
                 ccAccount.Balance -= interestPortion;

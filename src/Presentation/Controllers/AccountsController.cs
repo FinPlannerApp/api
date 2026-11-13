@@ -2,6 +2,8 @@ using Application;
 using Application.Contracts;
 using Application.DTOs;
 using Application.DTOs.Accounts;
+using Application.Features.Integrity.Queries;
+using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,11 +14,18 @@ namespace API.Controllers;
 public class AccountsController : BaseController
 {
     private readonly IAccountService _accountService;
+    private readonly IMediator _mediator;
 
-    public AccountsController(IAccountService accountService)
+    public AccountsController(IAccountService accountService, IMediator mediator)
     {
         _accountService = accountService;
+        _mediator = mediator;
     }
+
+    /// <summary>Read-only data-health report: balance drift, broken transfers, duplicates, card-bill problems.</summary>
+    [HttpGet("integrity")]
+    public async Task<IActionResult> GetIntegrity()
+        => HandleResult(await _mediator.Send(new GetLedgerIntegrityQuery(UserId)));
 
     [HttpGet]
     public async Task<IActionResult> GetAll()
@@ -95,6 +104,11 @@ public class AccountsController : BaseController
         var result = await _accountService.GetCreditCardBreakdownAsync(UserId, accountId);
         return HandleResult(result);
     }
+
+    /// <summary>Every statement (paid or not) with its payments, payment apps, cashback and wallet use.</summary>
+    [HttpGet("{accountId}/credit-card-history")]
+    public async Task<IActionResult> GetCreditCardHistory(int accountId)
+        => HandleResult(await _accountService.GetCreditCardHistoryAsync(UserId, accountId));
 
     [HttpGet("{accountId}/outstanding-bills")]
     public async Task<IActionResult> GetOutstandingBills(int accountId)

@@ -131,11 +131,32 @@ public class TransactionService : ITransactionService
     {
         var response = new BulkInsertResponseDto();
 
+        if (payload.Transactions.Count == 0)
+            return Result.Failure<BulkInsertResponseDto>(new Error("Bulk.Empty", "Nothing to save."));
+        if (payload.Transactions.Count > 500)
+            return Result.Failure<BulkInsertResponseDto>(new Error("Bulk.TooMany", "At most 500 rows can be saved at once."));
+
+        // Double-click / retry guard: the same client batch id is only ever applied once.
+        var batchKey = string.IsNullOrWhiteSpace(payload.BatchId) ? null : $"bulk::{userId}::{payload.BatchId}";
+        if (batchKey != null && await _cache.GetAsync<string>(batchKey) != null)
+            return Result.Failure<BulkInsertResponseDto>(new Error("Bulk.AlreadyProcessed",
+                "This batch was already saved. Refresh the transaction list to check before adding it again."));
+
         using var dbTransaction = await ((DbContext)_context).Database.BeginTransactionAsync();
 
         try
         {
-            for (int i = 0; i < payload.Transactions.Count; i++)
+            // Apply in date order (credits before debits on the same day) so the running-balance
+            // check follows the timeline instead of the order the rows happen to be typed in.
+            // Failure indexes still refer to the original row positions.
+            var order = Enumerable.Range(0, payload.Transactions.Count)
+                .OrderBy(k => payload.Transactions[k].Transaction.Date.Date)
+                .ThenBy(k => (payload.Transactions[k].DestinationAccountId.HasValue ||
+                              payload.Transactions[k].Transaction.Type == TransactionType.Expense) ? 1 : 0)
+                .ThenBy(k => k)
+                .ToList();
+
+            foreach (var i in order)
             {
                 var entry      = payload.Transactions[i];
                 bool rowOk     = false;
@@ -182,12 +203,14 @@ public class TransactionService : ITransactionService
             {
                 await dbTransaction.CommitAsync();
                 await _cache.InvalidateDashboardAsync(userId);
+                if (batchKey != null) await _cache.SetAsync(batchKey, "done", TimeSpan.FromMinutes(30));
             }
             else
             {
                 // Roll back everything — no partial financial state
                 await dbTransaction.RollbackAsync();
                 response.SuccessfulCount = 0; // none were actually committed
+                response.RolledBack = true;
                 _logger.LogWarning(
                     "BulkUpsert rolled back for user {UserId}. {Failed}/{Total} rows failed.",
                     userId, response.FailedCount, payload.Transactions.Count);
@@ -632,16 +655,25 @@ public class TransactionService : ITransactionService
         
         availableCategories = availableCategories.OrderBy(name => name).ToList();
 
-        // --- Balance Brought Forward: net of all transactions BEFORE the selected month ---
-        var bfIncome = await _context.Transactions
-            .Where(t => userAccountIds.Contains(t.AccountId) && t.Date < startOfMonth && t.Type == TransactionType.Income)
-            .SumAsync(t => t.Amount);
-
-        var bfExpenses = await _context.Transactions
-            .Where(t => userAccountIds.Contains(t.AccountId) && t.Date < startOfMonth && t.Type == TransactionType.Expense)
-            .SumAsync(t => t.Amount);
-
-        var balanceBF = bfIncome - bfExpenses;
+        // --- Balance Brought Forward / Closing: REAL spendable cash (bank, cash and accounts marked
+        // spendable) at the start / end of the month. Current balance minus the movements after that
+        // point, so it matches statements. Card and loan movements are not cash and are excluded.
+        var spendableAccountIds = await _context.Accounts
+            .Where(a => a.UserId == userId)
+            .Where(CashRules.IsSpendable)
+            .Select(a => a.Id)
+            .ToListAsync();
+        var spendableNow = await _context.Accounts
+            .Where(a => spendableAccountIds.Contains(a.Id))
+            .SumAsync(a => a.Balance);
+        var movementSinceStart = await _context.Transactions
+            .Where(t => spendableAccountIds.Contains(t.AccountId) && t.Date >= startOfMonth)
+            .SumAsync(t => t.Type == TransactionType.Income ? t.Amount : -t.Amount);
+        var movementAfterEnd = await _context.Transactions
+            .Where(t => spendableAccountIds.Contains(t.AccountId) && t.Date > endOfMonth)
+            .SumAsync(t => t.Type == TransactionType.Income ? t.Amount : -t.Amount);
+        var balanceBF = spendableNow - movementSinceStart;
+        var closingBalance = spendableNow - movementAfterEnd;
 
         // --- Monthly totals (respects category filter for consistency with table) ---
         var monthlyQuery = allTransactions
@@ -692,6 +724,7 @@ public class TransactionService : ITransactionService
         {
             Transactions = new PaginatedResult<TransactionDto>(dtos, totalRecords, queryParams.PageNumber, queryParams.PageSize),
             BalanceBroughtForward = balanceBF,
+            ClosingBalance = closingBalance,
             TotalIncome = totalIncome,
             TotalExpenses = totalExpenses,
             TotalSavings = totalIncome - totalExpenses,
@@ -842,4 +875,4 @@ public class TransactionService : ITransactionService
                 userId, budget.TransactionCategoryId, budget.Amount, spentAfter);
         }
     }
-}
+}

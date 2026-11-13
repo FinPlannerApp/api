@@ -23,11 +23,13 @@ public class AuthService : IAuthService
     // Lazy: the Redis connection is opened on the first OTP request, not for every login.
     private readonly Lazy<IConnectionMultiplexer> _redis;
     private readonly IEmailService _emailService;
+    private readonly SessionSecuritySettings _sessionSettings;
 
-    public AuthService(UserManager<ApplicationUser> userManager, IOptions<JwtSettings> jwtOptions, ILogger<AuthService> logger, Lazy<IConnectionMultiplexer> redis, IEmailService emailService)
+    public AuthService(UserManager<ApplicationUser> userManager, IOptions<JwtSettings> jwtOptions, ILogger<AuthService> logger, Lazy<IConnectionMultiplexer> redis, IEmailService emailService, IOptions<SessionSecuritySettings> sessionOptions)
     {
         _userManager = userManager;
         _jwtSettings = jwtOptions.Value;
+        _sessionSettings = sessionOptions.Value;
         _logger = logger;
         _redis = redis;
         _emailService = emailService;
@@ -207,10 +209,41 @@ public class AuthService : IAuthService
         return Result.Success(user == null); // true if available (null user), false if taken
     }
 
-    public async Task<Result<LoginResponseDto>> LoginAsync(LoginUserDto dto, string ipAddress, string userAgent)
+    // ── Sessions & devices ───────────────────────────────────────────────────────────
+    // A session = one sign-in on one device. All refresh tokens rotated from the same login share a
+    // SessionId (also the "SessionId" claim in the access token). Several sessions can be live at
+    // once; the user sees them in Settings and can sign any of them out.
+    //
+    // Revoked tokens are kept for a day so that a token replayed after it was rotated is recognised
+    // as possible theft (and its whole session is signed out), instead of just looking unknown.
+    private static readonly TimeSpan RevokedTokenRetention = TimeSpan.FromDays(1);
+    private const int MaxDevicesPerUser = 20;
+    private const int MaxUserAgentLength = 512;
+
+    private static string? Truncate(string? value, int max)
+        => value is { Length: > 0 } && value.Length > max ? value[..max] : value;
+
+    private static void PruneTokens(ApplicationUser user)
+        => user.RefreshTokens.RemoveAll(rt =>
+            rt.ExpiresUtc <= DateTime.UtcNow ||
+            (rt.RevokedUtc != null && rt.RevokedUtc < DateTime.UtcNow - RevokedTokenRetention));
+
+    private static void RevokeSessionTokens(ApplicationUser user, string sessionId, string ipAddress)
+    {
+        foreach (var t in user.RefreshTokens.Where(t => t.SessionId == sessionId && t.RevokedUtc == null))
+        {
+            t.RevokedUtc = DateTime.UtcNow;
+            t.RevokedByIp = ipAddress;
+        }
+        if (user.CurrentSessionId == sessionId)
+            user.CurrentSessionId = null;
+    }
+
+    public async Task<Result<LoginResponseDto>> LoginAsync(LoginUserDto dto, string ipAddress, string userAgent, string deviceId)
     {
         var user = await _userManager.Users
             .Include(u => u.RefreshTokens) // Important: Load existing tokens
+            .Include(u => u.Devices)
             .FirstOrDefaultAsync(u => u.UserName == dto.UserName);
 
         // Lockout was configured (5 attempts / 15 min) but never enforced, because plain
@@ -233,58 +266,91 @@ public class AuthService : IAuthService
         if (user.AccessFailedCount > 0)
             await _userManager.ResetAccessFailedCountAsync(user);
 
-        // Concurrent Login Check
-        // The old session only counts as "another device" if it is genuinely live (activity in the
-        // last 30 minutes: LastSeenUtc is refreshed at login and on every token refresh, and access
-        // tokens last 15 minutes) AND it came from a different browser. The IP is deliberately NOT
-        // compared: a phone switching Wi-Fi <-> 4G, or a proxy hop changing, must not look like a
-        // second device. A stale session (closed tab, expired token) is simply replaced.
-        var existingSessionIsLive =
-            !string.IsNullOrEmpty(user.CurrentSessionId) &&
-            user.LastSeenUtc > DateTime.UtcNow.AddMinutes(-30) &&
-            !string.Equals(user.LastKnownUserAgent, userAgent, StringComparison.Ordinal);
+        // A user's very first device is the baseline, not "new". After that, a device id we have not
+        // seen for this user is a new device.
+        var isNewDevice = user.Devices.Count > 0 && user.Devices.All(d => d.DeviceId != deviceId);
 
-        if (existingSessionIsLive && !dto.ForceLogin)
+        if (isNewDevice && _sessionSettings.RequireCodeOnNewDevice)
         {
-            _logger.LogWarning("Concurrent login attempt for {UserName} from IP {IpAddress}. Existing session active.", dto.UserName, ipAddress);
-            return Result.Failure<LoginResponseDto>(new Error("Auth.ConcurrentLogin", "User is already logged in on another device. Do you want to continue here?"));
+            var verification = await VerifyNewDeviceCodeAsync(user, deviceId, dto.DeviceVerificationCode, userAgent, ipAddress);
+            if (verification.IsFailure)
+                return Result.Failure<LoginResponseDto>(verification.Error);
         }
 
-        // Start New Session
+        var now = DateTime.UtcNow;
         var sessionId = Guid.NewGuid().ToString();
 
-        // Concurrent Login Cleanup: If forcing login, remove the token from the previous session (LastKnownIp)
-        if (dto.ForceLogin && !string.IsNullOrEmpty(user.LastKnownIp))
-        {
-             _logger.LogInformation("Forcing login for {UserName}. Revoking tokens from previous IP {LastKnownIp}", dto.UserName, user.LastKnownIp);
-             user.RefreshTokens.RemoveAll(rt => rt.CreatedByIp == user.LastKnownIp);
-        }
+        // Signing in again on the same device replaces that device's old session, so the device
+        // list does not fill up with duplicates.
+        var sameDeviceSessions = user.RefreshTokens
+            .Where(t => t.IsActive && t.DeviceId == deviceId && t.SessionId != null)
+            .Select(t => t.SessionId!)
+            .Distinct()
+            .ToList();
+        foreach (var oldSession in sameDeviceSessions)
+            RevokeSessionTokens(user, oldSession, ipAddress);
 
+        PruneTokens(user);
+
+        // Cap the number of live sessions: sign out the least recently active ones.
+        var maxSessions = Math.Max(1, _sessionSettings.MaxSessionsPerUser);
+        var liveSessions = user.RefreshTokens
+            .Where(t => t.IsActive && t.SessionId != null)
+            .GroupBy(t => t.SessionId!)
+            .Select(g => new { Id = g.Key, LastActive = g.Max(t => t.CreatedUtc) })
+            .OrderBy(s => s.LastActive)
+            .ToList();
+        for (var i = 0; i < liveSessions.Count - (maxSessions - 1); i++)
+            RevokeSessionTokens(user, liveSessions[i].Id, ipAddress);
+
+        // Remember this device.
+        var cappedUserAgent = Truncate(userAgent, MaxUserAgentLength);
+        var device = user.Devices.FirstOrDefault(d => d.DeviceId == deviceId);
+        if (device == null)
+        {
+            user.Devices.Add(new UserDevice
+            {
+                DeviceId = deviceId,
+                FirstSeenUtc = now,
+                LastSeenUtc = now,
+                LastIp = ipAddress,
+                UserAgent = cappedUserAgent
+            });
+        }
+        else
+        {
+            device.LastSeenUtc = now;
+            device.LastIp = ipAddress;
+            device.UserAgent = cappedUserAgent;
+        }
+        while (user.Devices.Count > MaxDevicesPerUser)
+            user.Devices.Remove(user.Devices.OrderBy(d => d.LastSeenUtc).First());
+
+        // Latest-login audit fields (kept for the admin views; not used to decide anything now).
         user.CurrentSessionId = sessionId;
-        user.LastLoginTime = DateTime.UtcNow;
-        user.LastSeenUtc = DateTime.UtcNow;
+        user.LastLoginTime = now;
+        user.LastSeenUtc = now;
         user.LastKnownIp = ipAddress;
-        user.LastKnownUserAgent = userAgent;
+        user.LastKnownUserAgent = cappedUserAgent;
 
         var accessToken = await GenerateJwtToken(user, sessionId);
-        var refreshToken = GenerateRefreshToken(ipAddress);
-
-        // Enforce One Token Per IP: Remove any existing active tokens for this IP
-        user.RefreshTokens.RemoveAll(rt => rt.CreatedByIp == ipAddress);
-
-        // Aggressive Cleanup: Remove ALL tokens that are expired OR revoked
-        user.RefreshTokens.RemoveAll(rt => !rt.IsActive || rt.ExpiresUtc <= DateTime.UtcNow);
-
+        var refreshToken = GenerateRefreshToken(ipAddress, sessionId, now, deviceId, cappedUserAgent);
         user.RefreshTokens.Add(refreshToken);
+
         var updateResult = await UpdateUserWithConcurrencyRetryAsync(user);
-        
+
         if (!updateResult.Succeeded)
         {
             _logger.LogError("Login failed for {UserName} during DB update. Errors: {Errors}", dto.UserName, string.Join(", ", updateResult.Errors.Select(e => e.Description)));
             return Result.Failure<LoginResponseDto>(new Error("Auth.UpdateFailed", $"Login failed: {string.Join(", ", updateResult.Errors.Select(e => e.Description))}"));
         }
 
-        _logger.LogInformation("User {UserName} logged in successfully from IP {IpAddress}", dto.UserName, ipAddress);
+        // Tell the user about a new device. When a code was required the code email already did.
+        if (isNewDevice && _sessionSettings.NotifyOnNewDevice && !_sessionSettings.RequireCodeOnNewDevice)
+            await SendNewDeviceEmailAsync(user, userAgent, ipAddress, now);
+
+        _logger.LogInformation("User {UserName} logged in from IP {IpAddress} (session {SessionId}, new device: {IsNewDevice})",
+            dto.UserName, ipAddress, sessionId, isNewDevice);
         return Result.Success(new LoginResponseDto
         {
             AccessToken = accessToken,
@@ -293,7 +359,7 @@ public class AuthService : IAuthService
         });
     }
 
-    public async Task<Result<LoginResponseDto>> RefreshTokenAsync(string token, string ipAddress)
+    public async Task<Result<LoginResponseDto>> RefreshTokenAsync(string token, string ipAddress, string deviceId)
     {
         var user = await _userManager.Users
             .Include(u => u.RefreshTokens)
@@ -307,28 +373,58 @@ public class AuthService : IAuthService
 
         var refreshToken = user.RefreshTokens.Single(x => x.Token == token);
 
-        if (!refreshToken.IsActive)
+        if (refreshToken.RevokedUtc != null)
         {
-            _logger.LogWarning("Refresh token attempt failed. Token is inactive/revoked. User: {UserName}, IP: {IpAddress}", user.UserName, ipAddress);
+            // A revoked token came back. Within a few seconds that is two tabs racing to refresh;
+            // later than that it is a replay (for example a stolen cookie), so sign the whole
+            // session out: whoever holds the newer token loses it too.
+            var graceSeconds = Math.Max(0, _sessionSettings.RefreshReuseGraceSeconds);
+            if (DateTime.UtcNow - refreshToken.RevokedUtc.Value > TimeSpan.FromSeconds(graceSeconds)
+                && refreshToken.SessionId != null)
+            {
+                _logger.LogWarning("Refresh token reuse detected for {UserName} (session {SessionId}) from IP {IpAddress}. Signing the session out.",
+                    user.UserName, refreshToken.SessionId, ipAddress);
+                RevokeSessionTokens(user, refreshToken.SessionId, ipAddress);
+                await UpdateUserWithConcurrencyRetryAsync(user);
+            }
+            else
+            {
+                _logger.LogWarning("Refresh token attempt failed. Token is revoked. User: {UserName}, IP: {IpAddress}", user.UserName, ipAddress);
+            }
             return Result.Failure<LoginResponseDto>(new Error("Auth.InvalidToken", "Invalid token."));
         }
 
-        // Proof the session is still in use: keeps the concurrent-login check accurate.
-        user.LastSeenUtc = DateTime.UtcNow;
+        if (refreshToken.IsExpired)
+        {
+            _logger.LogWarning("Refresh token attempt failed. Token expired. User: {UserName}, IP: {IpAddress}", user.UserName, ipAddress);
+            return Result.Failure<LoginResponseDto>(new Error("Auth.InvalidToken", "Invalid token."));
+        }
+
+        // The token only works together with the device cookie it was issued for. Tokens issued
+        // before this feature have no device yet and are bound on first use.
+        if (!string.IsNullOrEmpty(refreshToken.DeviceId) &&
+            !string.Equals(refreshToken.DeviceId, deviceId, StringComparison.Ordinal))
+        {
+            _logger.LogWarning("Refresh token for {UserName} presented without its device cookie from IP {IpAddress}. Rejected.", user.UserName, ipAddress);
+            return Result.Failure<LoginResponseDto>(new Error("Auth.InvalidToken", "Invalid token."));
+        }
+
+        var now = DateTime.UtcNow;
+        var sessionId = refreshToken.SessionId ?? user.CurrentSessionId ?? Guid.NewGuid().ToString();
+
+        // Proof the session is still in use.
+        user.LastSeenUtc = now;
 
         // Revoke the old token (Rotation)
-        refreshToken.RevokedUtc = DateTime.UtcNow;
+        refreshToken.RevokedUtc = now;
         refreshToken.RevokedByIp = ipAddress;
 
-        // Generate new tokens
-        var newAccessToken = await GenerateJwtToken(user, user.CurrentSessionId ?? "");
-        var newRefreshToken = GenerateRefreshToken(ipAddress);
+        // Generate new tokens, in the same session on the same device
+        var newAccessToken = await GenerateJwtToken(user, sessionId);
+        var newRefreshToken = GenerateRefreshToken(ipAddress, sessionId,
+            refreshToken.SessionStartedUtc ?? refreshToken.CreatedUtc, deviceId, refreshToken.UserAgent);
 
-        // Enforce One Token Per IP (for the new token)
-        user.RefreshTokens.RemoveAll(rt => rt.CreatedByIp == ipAddress);
-
-        // Aggressive Cleanup
-        user.RefreshTokens.RemoveAll(rt => !rt.IsActive || rt.ExpiresUtc <= DateTime.UtcNow);
+        PruneTokens(user);
 
         user.RefreshTokens.Add(newRefreshToken);
         var persistResult = await UpdateUserWithConcurrencyRetryAsync(user);
@@ -362,19 +458,211 @@ public class AuthService : IAuthService
         var refreshToken = user.RefreshTokens.SingleOrDefault(x => x.Token == token);
         if (refreshToken != null && refreshToken.IsActive)
         {
-            refreshToken.RevokedUtc = DateTime.UtcNow;
-            refreshToken.RevokedByIp = ipAddress;
-            
-            // ⭐ CRITICAL: Clear session state to fully terminate unattended sessions
-            user.CurrentSessionId = null;
-            user.LastKnownIp = null;
-            user.LastKnownUserAgent = null;
-            
+            // Sign out this device only (every token of its session); other devices stay signed in.
+            if (refreshToken.SessionId != null)
+            {
+                RevokeSessionTokens(user, refreshToken.SessionId, ipAddress);
+            }
+            else
+            {
+                refreshToken.RevokedUtc = DateTime.UtcNow;
+                refreshToken.RevokedByIp = ipAddress;
+            }
+
             await UpdateUserWithConcurrencyRetryAsync(user);
             _logger.LogInformation("Session terminated for {UserName} from IP {IpAddress}", user.UserName, ipAddress);
         }
 
         return Result.Success(true);
+    }
+
+    // ── Session list (Settings > Devices) ────────────────────────────────────────────
+
+    public async Task<Result<List<SessionDto>>> GetSessionsAsync(string userId, string? currentSessionId)
+    {
+        var now = DateTime.UtcNow;
+        var tokens = await _userManager.Users
+            .Where(u => u.Id == userId)
+            .SelectMany(u => u.RefreshTokens)
+            .Where(t => t.RevokedUtc == null && t.ExpiresUtc > now && t.SessionId != null)
+            .Select(t => new { t.SessionId, t.SessionStartedUtc, t.CreatedUtc, t.CreatedByIp, t.UserAgent })
+            .ToListAsync();
+
+        var sessions = tokens
+            .GroupBy(t => t.SessionId!)
+            .Select(g =>
+            {
+                var latest = g.OrderByDescending(t => t.CreatedUtc).First();
+                return new SessionDto
+                {
+                    SessionId = g.Key,
+                    Device = Application.Common.Helpers.DeviceInfo.Describe(latest.UserAgent),
+                    IpAddress = latest.CreatedByIp,
+                    SignedInUtc = g.Min(t => t.SessionStartedUtc ?? t.CreatedUtc),
+                    LastActiveUtc = latest.CreatedUtc,
+                    IsCurrent = g.Key == currentSessionId
+                };
+            })
+            .OrderByDescending(s => s.IsCurrent)
+            .ThenByDescending(s => s.LastActiveUtc)
+            .ToList();
+
+        return Result.Success(sessions);
+    }
+
+    public async Task<Result<bool>> RevokeSessionAsync(string userId, string sessionId, string ipAddress)
+    {
+        var user = await _userManager.Users
+            .Include(u => u.RefreshTokens)
+            .FirstOrDefaultAsync(u => u.Id == userId);
+        if (user == null)
+            return Result.Failure<bool>(new Error("User.NotFound", "User not found."));
+
+        if (!user.RefreshTokens.Any(t => t.SessionId == sessionId && t.IsActive))
+            return Result.Failure<bool>(new Error("Session.NotFound", "That device is no longer signed in."));
+
+        RevokeSessionTokens(user, sessionId, ipAddress);
+        await UpdateUserWithConcurrencyRetryAsync(user);
+        _logger.LogInformation("Session {SessionId} signed out by user {UserId}", sessionId, userId);
+        return Result.Success(true);
+    }
+
+    public async Task<Result<bool>> RevokeOtherSessionsAsync(string userId, string? currentSessionId, string ipAddress)
+    {
+        var user = await _userManager.Users
+            .Include(u => u.RefreshTokens)
+            .FirstOrDefaultAsync(u => u.Id == userId);
+        if (user == null)
+            return Result.Failure<bool>(new Error("User.NotFound", "User not found."));
+
+        var others = user.RefreshTokens
+            .Where(t => t.IsActive && t.SessionId != null && t.SessionId != currentSessionId)
+            .Select(t => t.SessionId!)
+            .Distinct()
+            .ToList();
+        foreach (var sid in others)
+            RevokeSessionTokens(user, sid, ipAddress);
+
+        if (others.Count > 0)
+            await UpdateUserWithConcurrencyRetryAsync(user);
+        _logger.LogInformation("User {UserId} signed out {Count} other session(s)", userId, others.Count);
+        return Result.Success(true);
+    }
+
+    // ── New-device verification code (only when Security:Sessions:RequireCodeOnNewDevice is on) ──
+
+    private async Task<Result<bool>> VerifyNewDeviceCodeAsync(
+        ApplicationUser user, string deviceId, string? code, string userAgent, string ipAddress)
+    {
+        var db = _redis.Value.GetDatabase();
+        var key = $"dev-otp:{user.Id}:{deviceId}";
+        var attemptsKey = $"dev-otp-attempts:{user.Id}:{deviceId}";
+        var cooldownKey = $"dev-otp-cool:{user.Id}:{deviceId}";
+        var purpose = $"device:{deviceId}";
+
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            // First step: email a code (at most one a minute), then ask the client to collect it.
+            if (!await db.KeyExistsAsync(cooldownKey))
+            {
+                var otp = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
+                await db.StringSetAsync(key, HashOtp(purpose, user.Email!, otp), TimeSpan.FromMinutes(10));
+                await db.KeyDeleteAsync(attemptsKey);
+                await db.StringSetAsync(cooldownKey, "1", TimeSpan.FromSeconds(60));
+                await SendNewDeviceCodeEmailAsync(user, otp, userAgent, ipAddress);
+            }
+            return Result.Failure<bool>(new Error("Auth.DeviceVerificationRequired",
+                "We emailed a verification code to confirm this new device. Enter it to continue."));
+        }
+
+        var attempts = (int)(await db.StringGetAsync(attemptsKey));
+        if (attempts >= 5)
+        {
+            await db.KeyDeleteAsync(key); // force a fresh code
+            return Result.Failure<bool>(new Error("Auth.TooManyAttempts", "Too many incorrect attempts. Sign in again to get a new code."));
+        }
+
+        var stored = await db.StringGetAsync(key);
+        if (stored.IsNullOrEmpty || !HashesEqual(stored.ToString(), HashOtp(purpose, user.Email!, code.Trim())))
+        {
+            var ttl = await db.KeyTimeToLiveAsync(key);
+            await db.StringIncrementAsync(attemptsKey);
+            await db.KeyExpireAsync(attemptsKey, ttl ?? TimeSpan.FromMinutes(10));
+            return Result.Failure<bool>(new Error("Auth.InvalidOtp", "Invalid or expired verification code."));
+        }
+
+        await db.KeyDeleteAsync(key);
+        await db.KeyDeleteAsync(attemptsKey);
+        await db.KeyDeleteAsync(cooldownKey);
+        return Result.Success(true);
+    }
+
+    // ── Security emails ──────────────────────────────────────────────────────────────
+
+    private static string SecurityEmailShell(string heading, string bodyHtml) => $@"
+<!DOCTYPE html>
+<html>
+<head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'></head>
+<body style=""margin:0;padding:0;background:#0a0a0f;font-family:'Segoe UI',Arial,sans-serif;"">
+  <div style='max-width:520px;margin:0 auto;padding:40px 20px;'>
+    <div style='background:#111827;border:1px solid #1f2937;border-radius:20px;padding:32px;'>
+      <p style='margin:0 0 4px;color:#10b981;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;'>Financial Planner</p>
+      <p style='margin:0 0 16px;color:#f4f4f5;font-size:20px;font-weight:700;'>{heading}</p>
+      {bodyHtml}
+    </div>
+    <p style='text-align:center;color:#52525b;font-size:12px;margin:20px 0 0;'>&copy; {DateTime.UtcNow.Year} Financial Planner</p>
+  </div>
+</body>
+</html>";
+
+    private static string DeviceDetailsHtml(string userAgent, string ipAddress, DateTime whenUtc)
+    {
+        var device = System.Net.WebUtility.HtmlEncode(Application.Common.Helpers.DeviceInfo.Describe(userAgent));
+        var ip = System.Net.WebUtility.HtmlEncode(ipAddress);
+        return $@"<table style='color:#d4d4d8;font-size:14px;line-height:1.8;margin:0 0 16px;'>
+        <tr><td style='color:#71717a;padding-right:16px;'>Device</td><td>{device}</td></tr>
+        <tr><td style='color:#71717a;padding-right:16px;'>IP address</td><td>{ip}</td></tr>
+        <tr><td style='color:#71717a;padding-right:16px;'>Time</td><td>{whenUtc:yyyy-MM-dd HH:mm} UTC</td></tr>
+      </table>";
+    }
+
+    private async Task SendNewDeviceEmailAsync(ApplicationUser user, string userAgent, string ipAddress, DateTime whenUtc)
+    {
+        try
+        {
+            var body = $@"<p style='color:#a1a1aa;font-size:15px;line-height:1.7;margin:0 0 16px;'>Hello {System.Net.WebUtility.HtmlEncode(user.Name)}, someone signed in to your account from a device we have not seen before.</p>
+      {DeviceDetailsHtml(userAgent, ipAddress, whenUtc)}
+      <p style='color:#a1a1aa;font-size:14px;line-height:1.7;margin:0 0 12px;'>If this was you, you do not need to do anything.</p>
+      <p style='color:#fbbf24;font-size:14px;line-height:1.7;margin:0;'>If it was not you, use <strong>Forgot password</strong> on the sign-in page right away. Resetting your password signs out every device.</p>";
+
+            await _emailService.SendEmailAsync(new MailRequest
+            {
+                To = user.Email!,
+                Subject = "New sign-in to your Financial Planner account",
+                Body = SecurityEmailShell("New device sign-in", body)
+            });
+        }
+        catch (Exception ex)
+        {
+            // A mail problem must never stop a valid login.
+            _logger.LogWarning(ex, "Could not send the new-device email to user {UserId}", user.Id);
+        }
+    }
+
+    private async Task SendNewDeviceCodeEmailAsync(ApplicationUser user, string otp, string userAgent, string ipAddress)
+    {
+        var body = $@"<p style='color:#a1a1aa;font-size:15px;line-height:1.7;margin:0 0 16px;'>Hello {System.Net.WebUtility.HtmlEncode(user.Name)}, a sign-in from a new device needs your confirmation. Enter this code to continue:</p>
+      <p style='text-align:center;margin:24px 0;'><span style='display:inline-block;background:#052e2b;border:2px solid #10b981;border-radius:14px;padding:16px 32px;font-size:34px;font-weight:700;color:#10b981;letter-spacing:8px;'>{otp}</span></p>
+      {DeviceDetailsHtml(userAgent, ipAddress, DateTime.UtcNow)}
+      <p style='color:#a1a1aa;font-size:13px;line-height:1.7;margin:0 0 8px;'>The code is valid for 10 minutes.</p>
+      <p style='color:#fbbf24;font-size:14px;line-height:1.7;margin:0;'>If this was not you, do not share the code, and reset your password.</p>";
+
+        await _emailService.SendEmailAsync(new MailRequest
+        {
+            To = user.Email!,
+            Subject = "Confirm your new device — Financial Planner",
+            Body = SecurityEmailShell("Confirm a new device", body)
+        });
     }
 
     public async Task<Result<string>> ForgotPasswordAsync(string email)
@@ -630,7 +918,7 @@ public class AuthService : IAuthService
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
-    private RefreshToken GenerateRefreshToken(string ipAddress)
+    private RefreshToken GenerateRefreshToken(string ipAddress, string sessionId, DateTime sessionStartedUtc, string deviceId, string? userAgent)
     {
         var randomNumber = new byte[32];
         using var rng = RandomNumberGenerator.Create();
@@ -641,7 +929,11 @@ public class AuthService : IAuthService
             Token = Convert.ToBase64String(randomNumber),
             ExpiresUtc = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenTTL), // Long life
             CreatedUtc = DateTime.UtcNow,
-            CreatedByIp = ipAddress
+            CreatedByIp = ipAddress,
+            SessionId = sessionId,
+            SessionStartedUtc = sessionStartedUtc,
+            DeviceId = deviceId,
+            UserAgent = userAgent
         };
     }
 

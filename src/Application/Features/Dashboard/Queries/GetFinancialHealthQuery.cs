@@ -138,7 +138,7 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
 
         if (threeMonthsAgoNetWorth <= 0)
         {
-            netWorthTrendScore = currentNetWorth > threeMonthsAgoNetWorth ? 15 : 8;
+            netWorthTrendScore = currentNetWorth > threeMonthsAgoNetWorth ? 11 : 6; // growth from ~zero is not proof of a trend
             netWorthExplanation = "Net worth trend measured from a near-zero or negative baseline.";
         }
         else
@@ -158,8 +158,12 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
 
         // ── 5. Emergency Fund Coverage (15 pts) — NEW, uses AccountType ─────
         var liquidBalance = await _context.Accounts
-            .Where(a => a.UserId == request.UserId &&
-                (a.AccountCategory.AccountType == AccountType.Bank || a.AccountCategory.AccountType == AccountType.Cash))
+            .Where(a => a.UserId == request.UserId)
+            .Where(CashRules.CountsForEmergencyCover)
+            .SumAsync(a => a.Balance, cancellationToken);
+        var spendableBalance = await _context.Accounts
+            .Where(a => a.UserId == request.UserId)
+            .Where(CashRules.IsSpendable)
             .SumAsync(a => a.Balance, cancellationToken);
 
         // Average of the last 3 FULLY COMPLETED months' expenses — the
@@ -216,7 +220,8 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
         }
         else
         {
-            var totalDebt = accountsWithLimits.Sum(a => Math.Abs(Math.Min(0, a.Balance)));
+            var exposureForLimits = await CreditCardExposure.ComputeAsync(_context, accountsWithLimits, cancellationToken);
+            var totalDebt = exposureForLimits.Sum(c => c.Owed);
             var totalLimit = accountsWithLimits.Sum(a => a.CreditCardDetails!.CreditLimit!.Value);
             var utilization = totalLimit > 0 ? totalDebt / totalLimit : 0;
             // Standard credit-health benchmark: under 30% utilization is
@@ -233,10 +238,9 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
         });
 
         // ── 7. Real Available Cash (5 pts) — NEW ────────────────────────────
-        var creditCardDebtSum = await _context.Accounts
-            .Where(a => a.UserId == request.UserId && a.AccountCategory.AccountType == AccountType.CreditCard)
-            .SumAsync(a => a.Balance, cancellationToken);
-        var realAvailableCash = liquidBalance + creditCardDebtSum; // debt is already negative
+        var allCardExposure = await CreditCardExposure.ComputeAsync(_context, creditCardAccounts, cancellationToken);
+        var creditCardDebtSum = -allCardExposure.Sum(c => c.Owed);
+        var realAvailableCash = spendableBalance + creditCardDebtSum; // debt is negative
 
         int cashScore = realAvailableCash >= 0 ? 5 : 0;
         components.Add(new FinancialHealthComponentDto

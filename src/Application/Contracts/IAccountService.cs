@@ -16,6 +16,7 @@ public interface IAccountService
     Task<Result<AmortizationScheduleDto>> GetAmortizationScheduleAsync(string userId, int loanAccountId);
     Task<Result<CreditCardBreakdownDto>> GetCreditCardBreakdownAsync(string userId, int accountId);
     Task<Result<List<OutstandingBillDto>>> GetOutstandingBillsAsync(string userId, int accountId);
+    Task<Result<CardHistoryDto>> GetCreditCardHistoryAsync(string userId, int accountId);
     Task<Result<AccountDto>> AdjustBalanceAsync(string userId, AdjustBalanceDto dto);
     Task<Result<CreditCardBillResultDto>> RecordCreditCardBillAsync(string userId, RecordCreditCardBillDto dto);
     Task<Result<CreditCardPaymentBatchResultDto>> MakeCreditCardPaymentBatchAsync(string userId, MakeCreditCardPaymentBatchDto dto);

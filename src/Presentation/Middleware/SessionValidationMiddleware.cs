@@ -1,18 +1,20 @@
 using System.Security.Claims;
 using Domain.Entities;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 
 namespace API.Middleware;
 
 /// <summary>
-/// Validates that the session ID embedded in the JWT still matches the user's
-/// active session in the database (single-session enforcement).
+/// Rejects an access token whose session has been signed out.
 ///
-/// INTENTIONALLY removed IP and User-Agent checks — mobile users legitimately
-/// change IP when switching WiFi ↔ 4G. Those checks caused valid users to get
-/// logged out randomly. The SessionId check alone prevents session fixation
-/// and concurrent-session abuse without breaking real users.
-/// Suspicious IP changes are now LOGGED only (audit trail without blocking).
+/// Several devices can be signed in at once. A session is live while at least one of its refresh
+/// tokens is unrevoked and unexpired; logging out, "sign out this device", "sign out other
+/// devices", a password reset or detected token reuse all revoke those tokens, so the access token
+/// stops working on its very next request instead of lingering for the rest of its 15 minutes.
+///
+/// IP and User-Agent are intentionally not checked: mobile users legitimately change IP when
+/// switching WiFi and 4G, and a browser update changes the User-Agent.
 /// </summary>
 public class SessionValidationMiddleware
 {
@@ -34,38 +36,23 @@ public class SessionValidationMiddleware
 
             if (!string.IsNullOrEmpty(userId) && !string.IsNullOrEmpty(sessionId))
             {
-                var user = await userManager.FindByIdAsync(userId);
-                if (user != null)
+                var now = DateTime.UtcNow;
+                var sessionIsLive = await userManager.Users
+                    .Where(u => u.Id == userId)
+                    .SelectMany(u => u.RefreshTokens)
+                    .AnyAsync(t => t.SessionId == sessionId && t.RevokedUtc == null && t.ExpiresUtc > now);
+
+                if (!sessionIsLive)
                 {
-                    // ── Single-session enforcement ────────────────────────────────────
-                    // If the session ID in the JWT doesn't match what's stored, the user
-                    // has logged in elsewhere (or was force-logged-out). Reject this token.
-                    if (user.CurrentSessionId != sessionId)
+                    _logger.LogWarning("Rejected a token for user {UserId}: session {SessionId} is signed out.", userId, sessionId);
+
+                    context.Response.StatusCode  = StatusCodes.Status401Unauthorized;
+                    context.Response.ContentType = "application/json";
+                    await context.Response.WriteAsJsonAsync(new
                     {
-                        _logger.LogWarning(
-                            "Session mismatch for user {UserId}. Token session={TokenSession}, DB session={DbSession}. Rejecting.",
-                            userId, sessionId, user.CurrentSessionId ?? "null");
-
-                        context.Response.StatusCode  = StatusCodes.Status401Unauthorized;
-                        context.Response.ContentType = "application/json";
-                        await context.Response.WriteAsJsonAsync(new
-                        {
-                            Message = "Session expired or signed in from another device."
-                        });
-                        return;
-                    }
-
-                    // ── Audit-only: log IP change (no block) ──────────────────────────
-                    // Blocking on IP change breaks mobile users (WiFi ↔ 4G switching).
-                    // We log it for security audit trail instead.
-                    var currentIp = API.Extensions.HttpContextExtensions.GetClientIp(context);
-
-                    if (!string.IsNullOrEmpty(user.LastKnownIp) && user.LastKnownIp != currentIp)
-                    {
-                        _logger.LogInformation(
-                            "IP change detected for user {UserId}: {OldIp} → {NewIp} (allowed, audit only)",
-                            userId, user.LastKnownIp, currentIp);
-                    }
+                        Message = "Session expired or signed out."
+                    });
+                    return;
                 }
             }
         }

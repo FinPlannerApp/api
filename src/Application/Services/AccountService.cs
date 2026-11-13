@@ -132,6 +132,7 @@ public partial class AccountService : IAccountService
             // still overwrite it with zero record of why.
             account.AccountCategoryId = dto.AccountCategoryId;
             account.Purpose = dto.Purpose;
+            account.CashRole = dto.CashRole;
             _context.Accounts.Update(account);
         }
         else
@@ -143,7 +144,8 @@ public partial class AccountService : IAccountService
                 Balance = dto.Balance,
                 AccountCategoryId = dto.AccountCategoryId,
                 UserId = userId,
-                Purpose = dto.Purpose
+                Purpose = dto.Purpose,
+                CashRole = dto.CashRole
             };
             _context.Accounts.Add(account);
             await _context.SaveChangesAsync(); // need account.Id before creating a detail record with an FK to it
@@ -449,6 +451,7 @@ public partial class AccountService : IAccountService
             AccountCategoryId = a.AccountCategoryId,
             IsArchived = a.IsArchived,
             Purpose = a.Purpose,
+            CashRole = a.CashRole,
             IsLiability = category?.IsLiability ?? false,
             AccountType = category?.AccountType ?? AccountType.Other,
             CreditCardDetails = a.CreditCardDetails is null ? null : new CreditCardDetailsDto

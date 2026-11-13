@@ -16,5 +16,9 @@ public class CreditCardBill : BaseEntity
     public decimal BillAmount { get; set; }
     public decimal? MinimumDue { get; set; }
     public DateTime? DueDate { get; set; }
+    /// <summary>Interest/fees the user says are inside BillAmount (0 = unknown; the gap is treated as untracked spend).</summary>
+    public decimal InterestAndFees { get; set; }
+    /// <summary>Other non-purchase charges in the bill (late fee, annual fee, hidden charges, GST on those).</summary>
+    public decimal OtherCharges { get; set; }
     public bool IsPaid { get; set; } = false;
 }

@@ -7,6 +7,7 @@ public class UpsertAccountDto
     public decimal Balance { get; set; }
     public int AccountCategoryId { get; set; }
     public string? Purpose { get; set; }
+    public Domain.Enums.CashRole CashRole { get; set; } = Domain.Enums.CashRole.Auto;
 
     // Frontend sends whichever ONE of these is relevant based on the
     // selected category's AccountType — the other two stay null. The

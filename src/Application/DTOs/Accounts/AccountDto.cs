@@ -11,6 +11,7 @@ public class AccountDto
     public int AccountCategoryId { get; set; }
     public bool IsArchived { get; set; }
     public string? Purpose { get; set; }
+    public Domain.Enums.CashRole CashRole { get; set; }
     public bool IsLiability { get; set; }
     public AccountType AccountType { get; set; }
 

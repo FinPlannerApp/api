@@ -61,6 +61,24 @@ public class RecurringTransactionJob
 
             try
             {
+                // Two API instances (or an overlapping run) must never post the same occurrence twice.
+                // Take a transaction-scoped lock on this item; if someone else holds it, skip it.
+                if (!await TryLockAsync(rt.Id))
+                {
+                    await dbTransaction.RollbackAsync();
+                    _logger.LogInformation("Recurring transaction {Id} is being processed elsewhere; skipping.", rt.Id);
+                    break;
+                }
+
+                // The list was loaded before we got the lock. If another run already processed this
+                // occurrence and committed, our copy is stale: reload and re-check before posting anything.
+                await ((DbContext)_context).Entry(rt).ReloadAsync();
+                if (!rt.IsActive || rt.IsDeleted || rt.NextProcessDate > now)
+                {
+                    await dbTransaction.RollbackAsync();
+                    break;
+                }
+
                 bool success;
 
                 if (rt.LinkedLoanAccountId.HasValue)
@@ -176,6 +194,21 @@ public class RecurringTransactionJob
         }
 
         _logger.LogInformation("All recurring transactions processed successfully.");
+    }
+
+    /// <summary>
+    /// Transaction-scoped Postgres advisory lock for one recurring item (released automatically on
+    /// commit/rollback). Returns true when there is no Postgres to lock against (unit tests).
+    /// </summary>
+    private async Task<bool> TryLockAsync(int recurringId)
+    {
+        var db = ((DbContext)_context).Database;
+        if (db.ProviderName == null || !db.ProviderName.Contains("Npgsql", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return await db.SqlQuery<bool>(
+                $"SELECT pg_try_advisory_xact_lock(hashtext({"recurring-tx:" + recurringId})) AS \"Value\"")
+            .SingleAsync();
     }
 
     /// <summary>

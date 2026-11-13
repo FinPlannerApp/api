@@ -24,4 +24,5 @@ public class ApplicationUser : IdentityUser, IAuditable
     public bool OverspendAlertsEnabled { get; set; } = true;
 
     public List<RefreshToken> RefreshTokens { get; set; } = new();
+    public List<UserDevice> Devices { get; set; } = new();
 }

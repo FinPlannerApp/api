@@ -45,6 +45,35 @@ public class AuthController : BaseController
         return API.Extensions.HttpContextExtensions.GetClientIp(HttpContext);
     }
 
+    private const string DeviceCookieName = "deviceId";
+
+    /// <summary>
+    /// The server-issued id of this browser/app. Random, HttpOnly, long-lived; it is created on first
+    /// contact and a session's refresh token only works together with it. Clearing it just makes the
+    /// browser a "new device" again, it can never make one device look like another.
+    /// </summary>
+    private string EnsureDeviceId()
+    {
+        if (Request.Cookies.TryGetValue(DeviceCookieName, out var existing) &&
+            Guid.TryParseExact(existing, "N", out _))
+            return existing;
+
+        var id = Guid.NewGuid().ToString("N");
+        var isLocalHttp = !Request.IsHttps &&
+                          (Request.Host.Host == "localhost" || Request.Host.Host == "127.0.0.1" || Request.Host.Host.StartsWith("192.168."));
+        Response.Cookies.Append(DeviceCookieName, id, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = !isLocalHttp,
+            SameSite = isLocalHttp ? SameSiteMode.Lax : SameSiteMode.None,
+            Expires = DateTimeOffset.UtcNow.AddDays(400), // browsers cap cookie life at about 400 days
+            Path = "/"
+        });
+        return id;
+    }
+
+    private string? CurrentSessionId => User.FindFirst("SessionId")?.Value;
+
     [HttpPost("register")]
     [AllowAnonymous]
     [EnableRateLimiting("login")]
@@ -69,7 +98,7 @@ public class AuthController : BaseController
     public async Task<IActionResult> Login([FromBody] LoginUserDto dto)
     {
         var userAgent = Request.Headers["User-Agent"].ToString();
-        var result = await _authService.LoginAsync(dto, GetIpAddress(), userAgent);
+        var result = await _authService.LoginAsync(dto, GetIpAddress(), userAgent, EnsureDeviceId());
 
         if (result.IsSuccess)
         {
@@ -81,6 +110,7 @@ public class AuthController : BaseController
     }
 
     [HttpPost("refresh")]
+    [API.Filters.CookieCsrfGuard]
     [AllowAnonymous]
     [EnableRateLimiting("login")]
     public async Task<IActionResult> Refresh()
@@ -89,7 +119,7 @@ public class AuthController : BaseController
         if (string.IsNullOrEmpty(token))
             return HandleResult(Result.Failure<LoginResponseDto>(new Error("Auth.NoToken", "No refresh token present.")));
 
-        var result = await _authService.RefreshTokenAsync(token, GetIpAddress());
+        var result = await _authService.RefreshTokenAsync(token, GetIpAddress(), EnsureDeviceId());
 
         if (result.IsSuccess)
         {
@@ -101,6 +131,7 @@ public class AuthController : BaseController
     }
 
     [HttpPost("logout")]
+    [API.Filters.CookieCsrfGuard]
     [AllowAnonymous]
     [EnableRateLimiting("login")]
     public async Task<IActionResult> Logout()
@@ -165,6 +196,32 @@ public class AuthController : BaseController
     {
         if (string.IsNullOrWhiteSpace(dto.Username)) return BadRequest("Username is required.");
         var result = await _authService.CheckUserNameAsync(dto.Username);
+        return HandleResult(result);
+    }
+
+    // ── Signed-in devices ───────────────────────────────────────────────────────────
+
+    [HttpGet("sessions")]
+    [Authorize]
+    public async Task<IActionResult> GetSessions()
+    {
+        var result = await _authService.GetSessionsAsync(UserId, CurrentSessionId);
+        return HandleResult(result);
+    }
+
+    [HttpDelete("sessions/{sessionId}")]
+    [Authorize]
+    public async Task<IActionResult> RevokeSession(string sessionId)
+    {
+        var result = await _authService.RevokeSessionAsync(UserId, sessionId, GetIpAddress());
+        return HandleResult(result);
+    }
+
+    [HttpPost("sessions/revoke-others")]
+    [Authorize]
+    public async Task<IActionResult> RevokeOtherSessions()
+    {
+        var result = await _authService.RevokeOtherSessionsAsync(UserId, CurrentSessionId, GetIpAddress());
         return HandleResult(result);
     }
 

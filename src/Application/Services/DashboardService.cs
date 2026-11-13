@@ -81,9 +81,8 @@ public class DashboardService : IDashboardService
         var netWorth = netWorthResult.NetWorth;
 
         var liquidAssets = await _context.Accounts
-            .Where(a => a.UserId == userId &&
-                (a.AccountCategory.AccountType == Domain.Enums.AccountType.Bank ||
-                 a.AccountCategory.AccountType == Domain.Enums.AccountType.Cash))
+            .Where(a => a.UserId == userId)
+            .Where(CashRules.IsSpendable)
             .SumAsync(a => a.Balance);
 
         var creditCardAccounts = await _context.Accounts
@@ -92,7 +91,10 @@ public class DashboardService : IDashboardService
             .Where(a => a.UserId == userId && a.AccountCategory.AccountType == AccountType.CreditCard)
             .ToListAsync();
 
-        var creditCardDebt = creditCardAccounts.Sum(a => a.Balance);
+        // Owed per card = max(tracked balance debt, unpaid recorded bill) — see CreditCardExposure.
+        var cardExposure = await CreditCardExposure.ComputeAsync(_context, creditCardAccounts);
+        var creditCardDebt = -cardExposure.Sum(c => c.Owed); // negative, like a balance
+        netWorth -= cardExposure.Sum(c => c.Untracked);       // recorded-but-untracked bills are real liabilities
         var realAvailableCash = liquidAssets + creditCardDebt;
 
         decimal reservedForPayment = 0;
@@ -121,9 +123,11 @@ public class DashboardService : IDashboardService
         // "sum of everything before this month across all accounts", this is a real balance
         // you can check against your statements.
         var liquidMovementSinceStart = await _context.Transactions
-            .Where(t => t.Account.UserId == userId && t.Date >= startFilter &&
-                (t.Account.AccountCategory.AccountType == AccountType.Bank ||
-                 t.Account.AccountCategory.AccountType == AccountType.Cash))
+            .Where(t => t.Account.UserId == userId && t.Date >= startFilter)
+            .Where(t => t.Account.CashRole == CashRole.Spendable ||
+                (t.Account.CashRole == CashRole.Auto &&
+                 (t.Account.AccountCategory.AccountType == AccountType.Bank ||
+                  t.Account.AccountCategory.AccountType == AccountType.Cash)))
             .SumAsync(t => t.Type == TransactionType.Income ? t.Amount : -t.Amount);
         var broughtForward = liquidAssets - liquidMovementSinceStart;
 

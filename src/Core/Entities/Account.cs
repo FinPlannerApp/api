@@ -29,6 +29,9 @@ public class Account : BaseEntity
     /// </summary>
     public string? Purpose { get; set; }
 
+    /// <summary>How this account counts toward spendable cash / emergency cover / net worth.</summary>
+    public Domain.Enums.CashRole CashRole { get; set; } = Domain.Enums.CashRole.Auto;
+
     public ICollection<Transaction> Transactions { get; set; } = new List<Transaction>();
 
     // At most ONE of these is populated at any time, matching whichever

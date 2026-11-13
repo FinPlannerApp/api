@@ -43,6 +43,7 @@ public static class InfrastructureServiceExtensions
     {
         // 1. Configure strongly typed settings objects
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
+        services.Configure<SessionSecuritySettings>(configuration.GetSection(SessionSecuritySettings.SectionName));
         EnsureJwtKeyIsSafe(configuration);
 
         // 2. Register the DbContext

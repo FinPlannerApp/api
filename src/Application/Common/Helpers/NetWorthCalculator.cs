@@ -25,7 +25,7 @@ public static class NetWorthCalculator
     public static async Task<NetWorthResult> CalculateAsync(IApplicationDbContext context, string userId, CancellationToken cancellationToken = default)
     {
         var totalAssets = await context.Accounts
-            .Where(a => a.UserId == userId && !a.AccountCategory.IsLiability)
+            .Where(a => a.UserId == userId && !a.AccountCategory.IsLiability && a.CashRole != Domain.Enums.CashRole.HeldForOthers)
             .SumAsync(a => a.Balance, cancellationToken);
 
         var totalLiabilitiesRaw = await context.Accounts

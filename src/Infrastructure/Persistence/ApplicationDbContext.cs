@@ -287,6 +287,12 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
                 a.ToTable("RefreshTokens", "identity");
                 a.WithOwner().HasForeignKey("UserId");
             });
+            e.OwnsMany(p => p.Devices, a =>
+            {
+                a.ToTable("UserDevices", "identity");
+                a.WithOwner().HasForeignKey("UserId");
+                a.HasIndex("UserId", nameof(UserDevice.DeviceId)).IsUnique();
+            });
         });
         builder.Entity<IdentityRole>(e => e.ToTable("Roles", "identity"));
         builder.Entity<IdentityUserRole<string>>(e => e.ToTable("UserRoles", "identity"));

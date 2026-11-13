@@ -61,12 +61,7 @@ public static class ApiLayerServiceExtensions
         services.Configure<BrotliCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
         services.Configure<GzipCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
 
-        var configuredOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
-        var originsSet = new HashSet<string>(configuredOrigins, StringComparer.OrdinalIgnoreCase)
-        {
-            "https://finplanner.ska97homelab.uk",
-            "http://localhost:4200"
-        };
+        var originsSet = CorsOrigins.Get(configuration);
 
         services.AddCors(options =>
         {
@@ -143,4 +138,4 @@ public static class ApiLayerServiceExtensions
 
         return services;
     }
-}
+}

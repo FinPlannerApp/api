@@ -1,4 +1,4 @@
-﻿using Application;
+using Application;
 using Application.DTOs.Transactions;
 using Application.Features.Transactions.Commands;
 using Application.Features.Transactions.Queries;
@@ -53,6 +53,12 @@ public class TransactionsController : BaseController
         var result = await _sender.Send(new SwitchAccountCommand(UserId, dto.TransactionId, dto.DestinationAccountId));
         return HandleResult(result);
     }
+
+    /// <summary>Dry run of a bulk add: reports rows that would fail and likely duplicates. Writes nothing.</summary>
+    [HttpPost("bulk-validate")]
+    [EnableRateLimiting("bulk")]
+    public async Task<IActionResult> BulkValidate([FromBody] BulkTransactionPayloadDto dto)
+        => HandleResult(await _sender.Send(new ValidateBulkTransactionsCommand(UserId, dto)));
 
     [HttpPost("bulk-upsert")]
     [EnableRateLimiting("bulk")]
