@@ -11,6 +11,7 @@ public interface ISavingsBucketService
     Task<Result<AccountBucketBreakdownDto>> GetBucketsForAccountAsync(string userId, int accountId);
     Task<Result<List<SavingsBucketDto>>> GetAllForUserAsync(string userId);
     Task<Result<SavingsBucketDto>> UpsertAsync(string userId, UpsertSavingsBucketDto dto);
+    Task<Result<SavingsBucketDto>> AddFundsAsync(string userId, AddFundsToBucketDto dto);
     Task<Result<bool>> DeleteAsync(string userId, int id);
 }
 
@@ -115,6 +116,40 @@ public class SavingsBucketService : ISavingsBucketService
             Id = bucket.Id,
             AccountId = bucket.AccountId,
             AccountName = account.Name,
+            Name = bucket.Name,
+            AllocatedAmount = bucket.AllocatedAmount,
+            TargetAmount = bucket.TargetAmount
+        });
+    }
+
+    /// <summary>Sets more of the account's money aside in an existing bucket, without re-sending the whole bucket.</summary>
+    public async Task<Result<SavingsBucketDto>> AddFundsAsync(string userId, AddFundsToBucketDto dto)
+    {
+        if (dto.Amount <= 0)
+            return Result.Failure<SavingsBucketDto>(new Error("Bucket.InvalidAmount", "The amount to add must be more than zero."));
+
+        var bucket = await _context.SavingsBuckets.Include(b => b.Account).FirstOrDefaultAsync(b => b.Id == dto.Id && b.UserId == userId);
+        if (bucket == null)
+            return Result.Failure<SavingsBucketDto>(new Error("Bucket.NotFound", "Bucket not found."));
+
+        var otherBucketsTotal = await _context.SavingsBuckets
+            .Where(b => b.AccountId == bucket.AccountId && b.UserId == userId && b.Id != bucket.Id)
+            .SumAsync(b => b.AllocatedAmount);
+        var available = bucket.Account.Balance - otherBucketsTotal - bucket.AllocatedAmount;
+        if (dto.Amount > available)
+            return Result.Failure<SavingsBucketDto>(new Error(
+                "Bucket.ExceedsBalance",
+                $"The account doesn't have that much left to set aside. Available: ₹{Math.Max(0m, available):F2}."));
+
+        bucket.AllocatedAmount += dto.Amount;
+        _context.SavingsBuckets.Update(bucket);
+        await _context.SaveChangesAsync();
+
+        return Result.Success(new SavingsBucketDto
+        {
+            Id = bucket.Id,
+            AccountId = bucket.AccountId,
+            AccountName = bucket.Account.Name,
             Name = bucket.Name,
             AllocatedAmount = bucket.AllocatedAmount,
             TargetAmount = bucket.TargetAmount

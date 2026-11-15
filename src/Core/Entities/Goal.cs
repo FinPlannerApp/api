@@ -21,5 +21,10 @@ public class Goal : BaseEntity
     public int? SavingsBucketId { get; set; }
     public SavingsBucket? SavingsBucket { get; set; }
 
+    // Else, if set, progress follows this account's live balance (an account kept only for this goal).
+    // Order of truth: SavingsBucketId, then LinkedAccountId, then ManualCurrentAmount.
+    public int? LinkedAccountId { get; set; }
+    public Account? LinkedAccount { get; set; }
+
     public decimal ManualCurrentAmount { get; set; } = 0;
 }

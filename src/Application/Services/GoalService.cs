@@ -2,6 +2,7 @@ using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Goals;
 using Domain.Entities;
+using Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace Application.Services;
@@ -26,6 +27,7 @@ public class GoalService : IGoalService
     {
         var goals = await _context.Goals
             .Include(g => g.SavingsBucket)
+            .Include(g => g.LinkedAccount)
             .Where(g => g.UserId == userId)
             .OrderBy(g => g.TargetDate ?? DateTime.MaxValue)
             .ToListAsync();
@@ -45,11 +47,26 @@ public class GoalService : IGoalService
                 return Result.Failure<GoalDto>(new Error("Goal.BucketNotFound", "Linked savings bucket not found."));
         }
 
+        // A bucket wins over an account; the account link only applies when no bucket is chosen.
+        int? linkedAccountId = dto.SavingsBucketId.HasValue ? null : dto.LinkedAccountId;
+        if (linkedAccountId.HasValue)
+        {
+            var linked = await _context.Accounts
+                .Include(a => a.AccountCategory)
+                .FirstOrDefaultAsync(a => a.Id == linkedAccountId.Value && a.UserId == userId);
+            if (linked == null)
+                return Result.Failure<GoalDto>(new Error("Goal.AccountNotFound", "Linked account not found."));
+            var type = linked.AccountCategory?.AccountType;
+            if (type == AccountType.CreditCard || type == AccountType.Loan)
+                return Result.Failure<GoalDto>(new Error("Goal.AccountNotSavings", "A goal can follow a bank, cash or savings account, not a card or a loan."));
+        }
+
         Goal goal;
         if (dto.Id.HasValue && dto.Id.Value > 0)
         {
             var existing = await _context.Goals
                 .Include(g => g.SavingsBucket)
+                .Include(g => g.LinkedAccount)
                 .FirstOrDefaultAsync(g => g.Id == dto.Id.Value);
 
             if (existing == null || existing.UserId != userId)
@@ -59,14 +76,13 @@ public class GoalService : IGoalService
             existing.TargetAmount = dto.TargetAmount;
             existing.TargetDate = dto.TargetDate;
             existing.SavingsBucketId = dto.SavingsBucketId;
+            existing.LinkedAccountId = linkedAccountId;
             existing.ManualCurrentAmount = dto.ManualCurrentAmount;
 
             // Re-check achieved status against the new target/progress —
             // editing a goal (e.g. raising the target) can un-achieve it,
             // this shouldn't silently stay stuck at whatever it was before.
-            var currentAmount = dto.SavingsBucketId.HasValue
-                ? existing.SavingsBucket?.AllocatedAmount ?? 0
-                : dto.ManualCurrentAmount;
+            var currentAmount = await CurrentAmountAsync(userId, dto.SavingsBucketId, linkedAccountId, dto.ManualCurrentAmount);
             existing.IsAchieved = currentAmount >= dto.TargetAmount;
 
             _context.Goals.Update(existing);
@@ -74,7 +90,7 @@ public class GoalService : IGoalService
         }
         else
         {
-            decimal initialAmount = dto.SavingsBucketId.HasValue ? 0 : dto.ManualCurrentAmount; // bucket amount fetched fresh on read either way
+            var initialAmount = await CurrentAmountAsync(userId, dto.SavingsBucketId, linkedAccountId, dto.ManualCurrentAmount);
             goal = new Goal
             {
                 UserId = userId,
@@ -82,6 +98,7 @@ public class GoalService : IGoalService
                 TargetAmount = dto.TargetAmount,
                 TargetDate = dto.TargetDate,
                 SavingsBucketId = dto.SavingsBucketId,
+                LinkedAccountId = linkedAccountId,
                 ManualCurrentAmount = dto.ManualCurrentAmount,
                 IsAchieved = initialAmount >= dto.TargetAmount
             };
@@ -95,6 +112,7 @@ public class GoalService : IGoalService
         // property isn't populated yet on the in-memory `goal` object.
         var reloaded = await _context.Goals
             .Include(g => g.SavingsBucket)
+            .Include(g => g.LinkedAccount)
             .FirstAsync(g => g.Id == goal.Id);
 
         return Result.Success(MapToDto(reloaded));
@@ -114,11 +132,23 @@ public class GoalService : IGoalService
         return Result.Success(true);
     }
 
+    /// <summary>Progress for a goal that is not loaded yet: the bucket, else the account's live balance, else the manual amount.</summary>
+    private async Task<decimal> CurrentAmountAsync(string userId, int? bucketId, int? accountId, decimal manual)
+    {
+        if (bucketId.HasValue)
+            return await _context.SavingsBuckets.Where(b => b.Id == bucketId.Value && b.UserId == userId).Select(b => b.AllocatedAmount).FirstOrDefaultAsync();
+        if (accountId.HasValue)
+            return Math.Max(0m, await _context.Accounts.Where(a => a.Id == accountId.Value && a.UserId == userId).Select(a => a.Balance).FirstOrDefaultAsync());
+        return manual;
+    }
+
     private static GoalDto MapToDto(Goal g)
     {
-        var currentAmount = g.SavingsBucketId.HasValue
-            ? g.SavingsBucket?.AllocatedAmount ?? 0
-            : g.ManualCurrentAmount;
+        // Bucket, then the linked account's live balance, then the manual amount.
+        var source = g.SavingsBucketId.HasValue ? "bucket" : g.LinkedAccountId.HasValue ? "account" : "manual";
+        var currentAmount = source == "bucket" ? g.SavingsBucket?.AllocatedAmount ?? 0
+                          : source == "account" ? Math.Max(0m, g.LinkedAccount?.Balance ?? 0m)
+                          : g.ManualCurrentAmount;
 
         var progressPercent = g.TargetAmount > 0
             ? Math.Min(100, (currentAmount / g.TargetAmount) * 100)
@@ -182,9 +212,12 @@ public class GoalService : IGoalService
             Name = g.Name,
             TargetAmount = g.TargetAmount,
             TargetDate = g.TargetDate,
-            IsAchieved = g.IsAchieved,
+            IsAchieved = achieved,
             SavingsBucketId = g.SavingsBucketId,
             SavingsBucketName = g.SavingsBucket?.Name,
+            LinkedAccountId = g.LinkedAccountId,
+            LinkedAccountName = g.LinkedAccount?.Name,
+            Source = source,
             CurrentAmount = currentAmount,
             ProgressPercent = progressPercent,
             RequiredMonthlySaving = requiredMonthlySaving

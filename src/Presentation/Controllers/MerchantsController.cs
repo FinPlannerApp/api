@@ -23,6 +23,11 @@ public class MerchantsController : BaseController
         return HandleResult(result);
     }
 
+    /// <summary>One page of merchants (paged in the database). ?pageNumber=1&amp;pageSize=50&amp;q=swiggy</summary>
+    [HttpGet("paged")]
+    public async Task<IActionResult> GetPaged([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 50, [FromQuery] string? q = null)
+        => HandleResult(await _service.GetPagedAsync(UserId, pageNumber, pageSize, q));
+
     [HttpPost("upsert")]
     public async Task<IActionResult> Upsert([FromBody] UpsertMerchantDto dto)
     {

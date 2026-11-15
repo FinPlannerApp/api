@@ -51,6 +51,7 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                 MinimumDueAmount = null,
                 DueDate = rt.NextProcessDate,
                 Source = "Recurring",
+                AccountId = rt.AccountId,
                 ReducesAvailableCash = hitsCash
             };
             // Paid from a closed-loop wallet / non-liquid account: the wallet's own balance pays first, and only
@@ -113,6 +114,8 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                     MinimumDueAmount = bill.MinimumDue,
                     DueDate = bill.DueDate.Value,
                     Source = "CreditCard",
+                    AccountId = account.Id,
+                    CreditCardBillId = bill.Id,
                     IsOverdue = bill.DueDate.Value.Date < today.Date,
                     ReducesAvailableCash = false // already inside Real Available Cash via the card's balance
                 });

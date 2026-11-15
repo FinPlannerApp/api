@@ -269,6 +269,25 @@ public partial class AccountService
         });
     }
 
+    /// <summary>
+    /// Marks a statement as paid without recording a new payment: for a bill that was already paid
+    /// (the payment is already in the ledger) but never marked, so it keeps showing as an overdue obligation.
+    /// </summary>
+    public async Task<Result<bool>> MarkCreditCardBillPaidAsync(string userId, int billId)
+    {
+        var bill = await _context.CreditCardBills.FirstOrDefaultAsync(b => b.Id == billId && b.UserId == userId);
+        if (bill == null)
+            return Result.Failure<bool>(new Error("CreditCardBill.NotFound", "Statement not found."));
+        if (!bill.IsPaid)
+        {
+            bill.IsPaid = true;
+            _context.CreditCardBills.Update(bill);
+            await _context.SaveChangesAsync();
+        }
+        await _cache.InvalidateDashboardAsync(userId);
+        return Result.Success(true);
+    }
+
     public async Task<Result<CreditCardPaymentBatchResultDto>> MakeCreditCardPaymentBatchAsync(
         string userId, MakeCreditCardPaymentBatchDto dto)
     {

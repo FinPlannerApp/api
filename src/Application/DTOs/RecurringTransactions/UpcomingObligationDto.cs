@@ -43,6 +43,12 @@ public class UpcomingObligationDto
     /// <summary>Loan obligations only: the loan account's id (used by "Already paid").</summary>
     public int? LoanAccountId { get; set; }
 
+    /// <summary>The account this obligation is on (card, loan or paying account).</summary>
+    public int? AccountId { get; set; }
+
+    /// <summary>Credit card statement obligations only: the bill id.</summary>
+    public int? CreditCardBillId { get; set; }
+
     /// <summary>Loan obligations only: how many EMIs have fallen due and are still unrecorded.</summary>
     public int OverdueInstallments { get; set; }
 

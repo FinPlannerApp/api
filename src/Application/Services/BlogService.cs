@@ -20,7 +20,7 @@ public class BlogService
 
     // ── Public reads — no auth required, only ever returns published posts ────
 
-    public async Task<PagedResult<BlogPostSummaryDto>> GetPublishedPagedAsync(int pageNumber = 1, int pageSize = 6, string? search = null, string? tag = null)
+    public async Task<PaginatedResult<BlogPostSummaryDto>> GetPublishedPagedAsync(int pageNumber = 1, int pageSize = 6, string? search = null, string? tag = null)
     {
         var query = _context.BlogPosts
             .AsNoTracking()
@@ -55,7 +55,7 @@ public class BlogService
             })
             .ToListAsync();
 
-        return new PagedResult<BlogPostSummaryDto>(items, totalCount, pageNumber, pageSize);
+        return new PaginatedResult<BlogPostSummaryDto>(items, totalCount, pageNumber, pageSize);
     }
 
     public async Task<List<BlogPostSummaryDto>> GetPublishedAsync()

@@ -81,6 +81,7 @@ public static class ApiLayerServiceExtensions
                               {
                                   policy.WithOrigins(originsSet.ToArray())
                                         .AllowAnyHeader()
+                                        .WithExposedHeaders("X-Total-Count", "X-Page-Number", "X-Page-Size", "X-Truncated")
                                         .AllowAnyMethod()
                                         .AllowCredentials();
                               });

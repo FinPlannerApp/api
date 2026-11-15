@@ -9,6 +9,7 @@ namespace Application.Services;
 public interface IMerchantService
 {
     Task<Result<List<MerchantDto>>> GetAllAsync(string userId);
+    Task<Result<PaginatedResult<MerchantDto>>> GetPagedAsync(string userId, int pageNumber, int pageSize, string? search);
     Task<Result<MerchantDto>> UpsertAsync(string userId, UpsertMerchantDto dto);
     Task<Result<bool>> DeleteAsync(string userId, int id);
     Task<Result<int?>> SuggestMerchantForDescriptionAsync(string userId, string description);
@@ -39,6 +40,30 @@ public class MerchantService : IMerchantService
             .ToListAsync();
 
         return Result.Success(merchants);
+    }
+
+    /// <summary>One page of merchants, paged in the database, optionally filtered by name or alias.</summary>
+    public async Task<Result<PaginatedResult<MerchantDto>>> GetPagedAsync(string userId, int pageNumber, int pageSize, string? search)
+    {
+        pageNumber = Math.Max(1, pageNumber);
+        pageSize = Math.Clamp(pageSize, 1, 200);
+
+        var query = _context.Merchants.Where(m => m.UserId == userId);
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim().ToLower();
+            query = query.Where(m => m.Name.ToLower().Contains(term) || m.Aliases.Any(a => a.Alias.ToLower().Contains(term)));
+        }
+
+        var total = await query.CountAsync();
+        var items = await query
+            .OrderBy(m => m.Name)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .Select(m => new MerchantDto { Id = m.Id, Name = m.Name, Aliases = m.Aliases.Select(a => a.Alias).ToList() })
+            .ToListAsync();
+
+        return Result.Success(new PaginatedResult<MerchantDto>(items, total, pageNumber, pageSize));
     }
 
     public async Task<Result<MerchantDto>> UpsertAsync(string userId, UpsertMerchantDto dto)

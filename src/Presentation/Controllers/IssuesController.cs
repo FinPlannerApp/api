@@ -374,6 +374,90 @@ public class IssuesController : ControllerBase
         return Ok(issue.Id);
     }
 
+    /// <summary>
+    /// The quick bug report button: creates a normal Feedback Hub issue and keeps the screenshot and technical context
+    /// (page, recent errors, API calls) with it, so the problem can be understood without asking the user again.
+    /// </summary>
+    [HttpPost("quick-report")]
+    [Authorize]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("bulk")]
+    public async Task<ActionResult> QuickReport([FromBody] Application.DTOs.Issue.QuickReportDto input)
+    {
+        static ActionResult Fail(string message) => new OkObjectResult(new { isSuccess = false, error = new { code = "QuickReport.Invalid", description = message } });
+
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId == null) return Unauthorized();
+
+        var text = (input.Description ?? string.Empty).Trim();
+        if (text.Length < 3) return Fail("Please describe the problem in a few words.");
+        if (text.Length > 4000) return Fail("The description is too long. Please keep it under 4000 characters.");
+        var context = input.ContextJson ?? "{}";
+        if (context.Length > 200_000) return Fail("The technical details are too large to send.");
+
+        byte[]? shot = null;
+        string? shotType = null;
+        if (!string.IsNullOrWhiteSpace(input.ScreenshotBase64))
+        {
+            var b64 = input.ScreenshotBase64;
+            var comma = b64.IndexOf(',');
+            if (b64.StartsWith("data:", StringComparison.OrdinalIgnoreCase) && comma > 0) b64 = b64[(comma + 1)..];
+            if (b64.Length > 3_000_000) return Fail("The screenshot is too large.");
+            try { shot = Convert.FromBase64String(b64); } catch (FormatException) { return Fail("The screenshot could not be read."); }
+            if (shot.Length > 2_200_000) return Fail("The screenshot is too large.");
+            if (shot.Length > 3 && shot[0] == 0xFF && shot[1] == 0xD8) shotType = "image/jpeg";
+            else if (shot.Length > 4 && shot[0] == 0x89 && shot[1] == 0x50 && shot[2] == 0x4E && shot[3] == 0x47) shotType = "image/png";
+            else return Fail("The screenshot must be a JPEG or PNG image.");
+        }
+
+        var firstLine = Application.Common.Helpers.HtmlSanitizer.Clean(text.Split((char)10, 2)[0]).Trim();
+        var title = "Bug: " + (firstLine.Length > 80 ? firstLine[..80].TrimEnd() + "…" : firstLine);
+        var created = await Create(new CreateIssueDto
+        {
+            Title = title,
+            Description = text,
+            Type = "Bug",
+            Severity = input.Severity ?? "Minor",
+            ImpactsMoney = input.ImpactsMoney ?? false
+        });
+        if (created.Result is not OkObjectResult ok || ok.Value is not int issueId)
+            return Fail("The report could not be saved. Please try again.");
+
+        _context.IssueDiagnostics.Add(new IssueDiagnostic
+        {
+            IssueId = issueId,
+            UserId = userId,
+            ContextJson = context,
+            Screenshot = shot,
+            ScreenshotContentType = shotType
+        });
+        await _context.SaveChangesAsync();
+
+        return Ok(new { isSuccess = true, value = new { id = issueId } });
+    }
+
+    /// <summary>The technical context saved with a quick report. Only the reporter and admins can read it.</summary>
+    [HttpGet("{id}/diagnostics")]
+    [Authorize]
+    public async Task<ActionResult> GetDiagnostics(int id)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var d = await _context.IssueDiagnostics.Where(x => x.IssueId == id).OrderByDescending(x => x.Id).FirstOrDefaultAsync();
+        if (d == null) return NotFound();
+        if (d.UserId != userId && !User.IsInRole("Admin")) return Forbid();
+        return Ok(new { isSuccess = true, value = new { contextJson = d.ContextJson, hasScreenshot = d.Screenshot != null, createdAt = d.CreatedAt } });
+    }
+
+    [HttpGet("{id}/diagnostics/screenshot")]
+    [Authorize]
+    public async Task<ActionResult> GetDiagnosticsScreenshot(int id)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var d = await _context.IssueDiagnostics.Where(x => x.IssueId == id && x.Screenshot != null).OrderByDescending(x => x.Id).FirstOrDefaultAsync();
+        if (d == null) return NotFound();
+        if (d.UserId != userId && !User.IsInRole("Admin")) return Forbid();
+        return File(d.Screenshot!, d.ScreenshotContentType ?? "image/jpeg");
+    }
+
     [HttpPut("{id}")]
     [Authorize]
     public async Task<ActionResult> UpdateIssue(int id, [FromBody] UpdateIssueDto input)

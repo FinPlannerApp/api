@@ -68,6 +68,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
 
     // --- DbSets for Issue System ---
     public DbSet<Issue> Issues { get; set; }
+    public DbSet<IssueDiagnostic> IssueDiagnostics { get; set; }
     public DbSet<IssueTaxonomy> IssueTaxonomies { get; set; }
     public DbSet<IssueComment> IssueComments { get; set; }
     public DbSet<IssueVote> IssueVotes { get; set; }
@@ -448,6 +449,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<RecurringTransaction>().HasQueryFilter(rt => !rt.IsDeleted);
         builder.Entity<Subscription>().HasQueryFilter(s => !s.IsDeleted);
         builder.Entity<Issue>().HasQueryFilter(i => !i.IsDeleted);
+        builder.Entity<IssueDiagnostic>().HasQueryFilter(d => !d.IsDeleted);
         builder.Entity<IssueComment>().HasQueryFilter(c => !c.IsDeleted);
         builder.Entity<ChallengeDay>().HasQueryFilter(cd => !cd.IsDeleted);
         builder.Entity<UserChallengeEnrollment>().HasQueryFilter(uce => !uce.IsDeleted);
@@ -655,6 +657,13 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         });
 
         // --- ISSUE SCHEMA ---
+        builder.Entity<IssueDiagnostic>(e =>
+        {
+            e.ToTable("IssueDiagnostics");
+            e.HasIndex(d => d.IssueId);
+            e.HasOne<Issue>().WithMany().HasForeignKey(d => d.IssueId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         builder.Entity<Issue>(e =>
         {
             e.ToTable("Issues");
@@ -858,6 +867,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
             e.HasOne(g => g.SavingsBucket)
                 .WithMany()
                 .HasForeignKey(g => g.SavingsBucketId)
+                .OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(g => g.LinkedAccount)
+                .WithMany()
+                .HasForeignKey(g => g.LinkedAccountId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 

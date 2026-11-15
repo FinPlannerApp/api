@@ -10,6 +10,13 @@ public class SavingsBucketDto
     public decimal? TargetAmount { get; set; }
 }
 
+public class AddFundsToBucketDto
+{
+    public int Id { get; set; }
+    /// <summary>Money to add to the bucket (more than zero). The account must have that much not yet set aside.</summary>
+    public decimal Amount { get; set; }
+}
+
 public class UpsertSavingsBucketDto
 {
     public int? Id { get; set; }

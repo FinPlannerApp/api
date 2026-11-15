@@ -26,6 +26,7 @@ public interface IApplicationDbContext
     DbSet<ApplicationUser> Users { get; }
 
     DbSet<Issue> Issues { get; }
+    DbSet<IssueDiagnostic> IssueDiagnostics { get; }
     DbSet<IssueTaxonomy> IssueTaxonomies { get; }
     DbSet<IssueComment> IssueComments { get; }
     DbSet<IssueVote> IssueVotes { get; }

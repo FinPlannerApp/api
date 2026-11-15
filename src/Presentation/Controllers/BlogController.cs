@@ -36,7 +36,7 @@ public class BlogController : BaseController
         [FromQuery] int pageSize = 6,
         [FromQuery] string? search = null,
         [FromQuery] string? tag = null)
-        => Ok(ApiResult<PagedResult<BlogPostSummaryDto>>.Success(await _blogService.GetPublishedPagedAsync(pageNumber, pageSize, search, tag)));
+        => Ok(ApiResult<PaginatedResult<BlogPostSummaryDto>>.Success(await _blogService.GetPublishedPagedAsync(pageNumber, pageSize, search, tag)));
 
     [HttpGet("published/{slug}/comments")]
     [AllowAnonymous]

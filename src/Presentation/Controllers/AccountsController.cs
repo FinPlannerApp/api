@@ -143,6 +143,10 @@ public class AccountsController : BaseController
         return HandleResult(result);
     }
 
+    [HttpPost("credit-card-bills/{billId}/mark-paid")]
+    public async Task<IActionResult> MarkCreditCardBillPaid(int billId)
+        => HandleResult(await _accountService.MarkCreditCardBillPaidAsync(UserId, billId));
+
     [HttpPost("adjust-balance")]
     public async Task<IActionResult> AdjustBalance([FromBody] AdjustBalanceDto dto)
     {

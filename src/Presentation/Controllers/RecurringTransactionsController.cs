@@ -54,6 +54,14 @@ public class RecurringTransactionsController : BaseController
         return HandleResult(result);
     }
 
+    /// <summary>Overdue obligations that a recent transaction suggests were already paid.</summary>
+    [HttpGet("overdue-suggestions")]
+    public async Task<IActionResult> GetOverdueSuggestions()
+    {
+        var result = await _mediator.Send(new Application.Features.RecurringTransactions.Queries.GetOverdueSuggestionsQuery(UserId));
+        return HandleResult(result);
+    }
+
     [HttpGet("upcoming-obligations")]
     public async Task<IActionResult> GetUpcomingObligations([FromQuery] int daysAhead = 30)
     {

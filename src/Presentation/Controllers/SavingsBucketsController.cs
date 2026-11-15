@@ -30,6 +30,13 @@ public class SavingsBucketsController : BaseController
         return HandleResult(result);
     }
 
+    [HttpPost("add-funds")]
+    public async Task<IActionResult> AddFunds([FromBody] AddFundsToBucketDto dto)
+    {
+        var result = await _service.AddFundsAsync(UserId, dto);
+        return HandleResult(result);
+    }
+
     [HttpPost("delete")]
     public async Task<IActionResult> Delete([FromBody] DeleteDto dto)
     {
