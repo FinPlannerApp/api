@@ -1,3 +1,4 @@
+using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Issue;
 using Application.Services;
@@ -422,17 +423,97 @@ public class IssuesController : ControllerBase
         if (created.Result is not OkObjectResult ok || ok.Value is not int issueId)
             return Fail("The report could not be saved. Please try again.");
 
+        var fingerprint = Application.Common.Helpers.ReportFingerprint.From(context);
         _context.IssueDiagnostics.Add(new IssueDiagnostic
         {
             IssueId = issueId,
             UserId = userId,
             ContextJson = context,
+            Fingerprint = fingerprint,
             Screenshot = shot,
             ScreenshotContentType = shotType
         });
         await _context.SaveChangesAsync();
 
-        return Ok(new { isSuccess = true, value = new { id = issueId } });
+        // How many other people already reported the same thing (same page, error and failing call).
+        var similar = fingerprint == null ? 0 : await _context.IssueDiagnostics
+            .Where(d => d.Fingerprint == fingerprint && d.UserId != userId).Select(d => d.UserId).Distinct().CountAsync();
+
+        return Ok(new { isSuccess = true, value = new { id = issueId, similarReports = similar } });
+    }
+
+    /// <summary>
+    /// The signed-in person's own reports, newest first, with their status. Paged by keyset: pass the previous page's
+    /// nextCursor as ?cursor= (served from IX_Issues_CreatorUserId_CreatedAt_Id_Live, so page 50 costs the same as page 2).
+    /// </summary>
+    [HttpGet("my-reports")]
+    [Authorize]
+    public async Task<ActionResult> GetMyReports([FromQuery] string? cursor = null, [FromQuery] int pageSize = 20)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId == null) return Unauthorized();
+        pageSize = Math.Clamp(pageSize, 1, 50);
+
+        var query = _context.Issues.Where(i => i.CreatorUserId == userId);
+        var total = -1;
+        if (Application.Common.Models.Keyset.TryDecode(cursor, out var afterDate, out var afterId))
+            query = query.After(i => i.CreatedAt, i => i.Id, afterDate, afterId);
+        else
+            total = await query.CountAsync(); // only the first page counts
+
+        var rows = await query
+            .OrderByDescending(i => i.CreatedAt).ThenByDescending(i => i.Id)
+            .Take(pageSize + 1)
+            .Select(i => new
+            {
+                i.Id, i.Title, i.Status, i.Severity, i.IsClosed, i.CreatedAt,
+                Diag = _context.IssueDiagnostics.Where(d => d.IssueId == i.Id)
+                    .Select(d => new { d.Fingerprint, HasShot = d.Screenshot != null }).FirstOrDefault()
+            })
+            .ToListAsync();
+
+        var hasMore = rows.Count > pageSize;
+        var page = hasMore ? rows.Take(pageSize).ToList() : rows;
+
+        var fingerprints = page.Where(r => r.Diag?.Fingerprint != null).Select(r => r.Diag!.Fingerprint!).Distinct().ToList();
+        var reporters = fingerprints.Count == 0
+            ? new Dictionary<string, int>()
+            : await _context.IssueDiagnostics.Where(d => d.Fingerprint != null && fingerprints.Contains(d.Fingerprint))
+                .GroupBy(d => d.Fingerprint!).Select(g => new { g.Key, Users = g.Select(x => x.UserId).Distinct().Count() })
+                .ToDictionaryAsync(x => x.Key, x => x.Users);
+
+        var data = page.Select(r => new Application.DTOs.Issue.MyReportDto
+        {
+            Id = r.Id,
+            Title = r.Title,
+            Status = r.Status.ToString(),
+            Severity = r.Severity.ToString(),
+            IsClosed = r.IsClosed,
+            CreatedAt = r.CreatedAt,
+            HasDiagnostics = r.Diag != null,
+            HasScreenshot = r.Diag?.HasShot ?? false,
+            SimilarReports = r.Diag?.Fingerprint != null && reporters.TryGetValue(r.Diag.Fingerprint, out var users) ? Math.Max(0, users - 1) : 0
+        }).ToList();
+
+        var result = new Application.Common.Models.PaginatedResult<Application.DTOs.Issue.MyReportDto>(data, total, 1, pageSize)
+        {
+            HasMore = hasMore,
+            NextCursor = hasMore && page.Count > 0 ? Application.Common.Models.Keyset.Encode(page[^1].CreatedAt, page[^1].Id) : null
+        };
+        return Ok(new { isSuccess = true, value = result });
+    }
+
+    /// <summary>For the team: the problems reported most often, grouped by fingerprint, with one example issue each.</summary>
+    [HttpGet("report-groups")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult> GetReportGroups([FromQuery] int top = 20)
+    {
+        top = Math.Clamp(top, 1, 100);
+        var groups = await _context.IssueDiagnostics.Where(d => d.Fingerprint != null)
+            .GroupBy(d => d.Fingerprint!)
+            .Select(g => new { Fingerprint = g.Key, Reports = g.Count(), Reporters = g.Select(x => x.UserId).Distinct().Count(), ExampleIssueId = g.Min(x => x.IssueId), Latest = g.Max(x => x.CreatedAt) })
+            .OrderByDescending(g => g.Reporters).ThenByDescending(g => g.Reports).Take(top).ToListAsync();
+        return Ok(new { isSuccess = true, value = groups });
     }
 
     /// <summary>The technical context saved with a quick report. Only the reporter and admins can read it.</summary>

@@ -27,6 +27,9 @@ public class QueryParameters
 
     public string? GlobalSearch { get; set; }
 
+    /// <summary>Keyset paging: the NextCursor of the previous page. When given, pageNumber is ignored and no OFFSET or COUNT is used.</summary>
+    public string? Cursor { get; set; }
+
     public Dictionary<string, string> Filters { get; set; } = new Dictionary<string, string>();
 
     [FromQuery(Name = "month")]

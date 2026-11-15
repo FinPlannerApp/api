@@ -139,7 +139,19 @@ public class TransactionService : ITransactionService
             queryable = queryable.Where(t => t.Amount <= queryParams.MaxAmount.Value);
         }
 
-        var totalRecords = await queryable.CountAsync();
+        // Newest first is the default and the order the (AccountId, Date DESC, Id DESC) index serves directly.
+        var isDefaultOrder = queryParams.SortBy == null || (queryParams.SortBy.Equals("date", StringComparison.OrdinalIgnoreCase) && queryParams.SortOrder != "asc");
+        var useCursor = isDefaultOrder && Keyset.TryDecode(queryParams.Cursor, out _, out _);
+
+        // The total is only worked out for the first page / a page-number jump. A cursor request (the next page of an
+        // infinite list) skips the COUNT and the OFFSET completely: that is what keeps page 5000 as fast as page 2.
+        var totalRecords = useCursor ? -1 : await queryable.CountAsync();
+
+        if (useCursor)
+        {
+            Keyset.TryDecode(queryParams.Cursor, out var afterDate, out var afterId);
+            queryable = queryable.After(t => t.Date, t => t.Id, afterDate, afterId);
+        }
 
         // Apply dynamic sorting
         queryable = queryParams.SortBy?.ToLower() switch
@@ -151,20 +163,30 @@ public class TransactionService : ITransactionService
             _ => queryable.OrderByDescending(t => t.Date).ThenByDescending(t => t.Id) // Default
         };
 
-        var items = await queryable
+        // One extra row tells us whether another page exists, without counting.
+        var skip = useCursor ? 0 : (queryParams.PageNumber - 1) * queryParams.PageSize;
+        var rows = await queryable
             .Include(t => t.TransactionCategory)
             .Include(t => t.Account)
             .Include(t => t.Merchant)
-            .Skip((queryParams.PageNumber - 1) * queryParams.PageSize)
-            .Take(queryParams.PageSize)
+            .Skip(skip)
+            .Take(queryParams.PageSize + 1)
             .ToListAsync();
+
+        var hasMore = rows.Count > queryParams.PageSize;
+        var items = hasMore ? rows.Take(queryParams.PageSize).ToList() : rows;
 
         var pagedDto = new PaginatedResult<TransactionDto>(
             items.Select(MapToDto).ToList(),
             totalRecords,
             queryParams.PageNumber,
             queryParams.PageSize
-        );
+        )
+        {
+            HasMore = hasMore,
+            // Only the default order can be continued by cursor; other sorts keep using page numbers.
+            NextCursor = isDefaultOrder && hasMore && items.Count > 0 ? Keyset.Encode(items[^1].Date, items[^1].Id) : null
+        };
         return Result.Success(pagedDto);
     }
 
