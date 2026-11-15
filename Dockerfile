@@ -7,7 +7,7 @@ RUN dotnet restore ./src/Presentation/API.csproj
 RUN dotnet publish ./src/Presentation/API.csproj -c Release -o /app /p:UseAppHost=false
 
 # --- runtime stage (.NET 10 ASP.NET) ---
-FROM mcr.microsoft.com/dotnet/aspnet:10.0
+FROM mcr.microsoft.com/dotnet/aspnet:11.0
 WORKDIR /app
 COPY --from=build /app .
 # The non-root user must be able to write logs and uploads (Serilog file sink, issue attachments, receipts).
