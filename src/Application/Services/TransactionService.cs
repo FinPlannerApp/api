@@ -107,7 +107,9 @@ public class TransactionService : ITransactionService
         if (queryParams.Filters.TryGetValue("tag", out var tagFilter) && !string.IsNullOrWhiteSpace(tagFilter))
         {
             var like = TransactionTags.Pattern(tagFilter);
-            queryable = queryable.Where(t => t.Tags != null && EF.Functions.Like(t.Tags, like));
+            // Explicit escape character: the 2-argument overload becomes "ESCAPE ''" on Npgsql, which switches escaping off
+            // and made tags containing _ or % unfindable.
+            queryable = queryable.Where(t => t.Tags != null && EF.Functions.Like(t.Tags, like, "\\"));
         }
 
         if (!string.IsNullOrWhiteSpace(queryParams.GlobalSearch))
@@ -913,7 +915,7 @@ public class TransactionService : ITransactionService
         if (queryParams.Filters.TryGetValue("tag", out var tagFilter2) && !string.IsNullOrWhiteSpace(tagFilter2))
         {
             var like2 = TransactionTags.Pattern(tagFilter2);
-            monthlyQuery = monthlyQuery.Where(t => t.Tags != null && EF.Functions.Like(t.Tags, like2));
+            monthlyQuery = monthlyQuery.Where(t => t.Tags != null && EF.Functions.Like(t.Tags, like2, "\\"));
         }
 
         var totalIncome = await monthlyQuery
