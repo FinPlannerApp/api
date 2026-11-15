@@ -128,7 +128,8 @@ public class IssuesController : ControllerBase
         [FromQuery] string? severity,
         [FromQuery] string? sort = "pain", 
         [FromQuery] int page = 1, 
-        [FromQuery] int pageSize = 10)
+        [FromQuery] int pageSize = 10,
+        [FromQuery] string? cursor = null)
     {
         var query = _context.Issues
             .Include(i => i.Category)
@@ -151,18 +152,39 @@ public class IssuesController : ControllerBase
         if (!string.IsNullOrEmpty(severity) && Enum.TryParse<IssueSeverity>(severity, true, out var issueSeverity))
             query = query.Where(i => i.Severity == issueSeverity);
 
-        query = sort switch
-        {
-            "date" => query.OrderByDescending(i => i.CreatedAt),
-            "votes" => query.OrderByDescending(i => i.Votes),
-            "velocity" => query.OrderByDescending(i => i.PainVelocity),
-            _ => query.OrderByDescending(i => i.PainScore)
-        };
-
-        var totalItems = await query.CountAsync();
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
-        var issues = await query.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync();
+
+        // Every sort continues by cursor (sort key, then id): no OFFSET, and no COUNT after the first page.
+        // Without a cursor the page number still works, so existing callers keep their behaviour.
+        var skip = (page - 1) * pageSize;
+        var seeking = !string.IsNullOrEmpty(cursor);
+        var totalItems = 0;
+        List<Domain.Entities.Issue> issues;
+        bool hasMore;
+        string? nextCursor;
+        switch (sort)
+        {
+            case "date":
+                (issues, hasMore, nextCursor, totalItems) = await PageIssuesAsync(query, i => i.CreatedAt);
+                break;
+            case "votes":
+                (issues, hasMore, nextCursor, totalItems) = await PageIssuesAsync(query, i => i.Votes);
+                break;
+            case "velocity":
+                (issues, hasMore, nextCursor, totalItems) = await PageIssuesAsync(query, i => i.PainVelocity);
+                break;
+            default:
+                (issues, hasMore, nextCursor, totalItems) = await PageIssuesAsync(query, i => i.PainScore);
+                break;
+        }
+
+        async Task<(List<Domain.Entities.Issue>, bool, string?, int)> PageIssuesAsync<TKey>(IQueryable<Domain.Entities.Issue> q, System.Linq.Expressions.Expression<Func<Domain.Entities.Issue, TKey>> key)
+        {
+            var total = seeking && KeysetPager.TryDecodeCursor<TKey>(cursor, out _, out _) ? -1 : await q.CountAsync();
+            var p = await q.ToKeysetPageAsync(key, i => i.Id, true, true, cursor, pageSize, skip: skip);
+            return (p.Items, p.HasMore, p.NextCursor, total);
+        }
 
         // Get comment counts
         var issueIds = issues.Select(i => i.Id).ToList();
@@ -209,7 +231,7 @@ public class IssuesController : ControllerBase
             GitHubIssueUrl = i.GitHubIssueUrl
         }).ToList();
 
-        return Ok(new { data = dtos, totalItems, page, pageSize });
+        return Ok(new { data = dtos, totalItems, page, pageSize, hasMore, nextCursor });
     }
 
     [HttpGet("{id}")]
@@ -523,8 +545,8 @@ public class IssuesController : ControllerBase
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         var d = await _context.IssueDiagnostics.Where(x => x.IssueId == id).OrderByDescending(x => x.Id).FirstOrDefaultAsync();
-        if (d == null) return NotFound();
-        if (d.UserId != userId && !User.IsInRole("Admin")) return Forbid();
+        // No report details (a normal issue) or not yours to see: an empty result, not an error, so the page shows nothing.
+        if (d == null || (d.UserId != userId && !User.IsInRole("Admin"))) return Ok(new { isSuccess = true, value = (object?)null });
         return Ok(new { isSuccess = true, value = new { contextJson = d.ContextJson, hasScreenshot = d.Screenshot != null, createdAt = d.CreatedAt } });
     }
 

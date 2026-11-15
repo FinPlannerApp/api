@@ -1453,6 +1453,32 @@ public class SplitService : ISplitService
     }
 
     /// <summary>Recently deleted expenses (newest first) — the "undo" list.</summary>
+    /// <summary>Deleted expenses (for undo) newest first, one page at a time by cursor.</summary>
+    public async Task<Result<PaginatedResult<ExpenseDto>>> GetDeletedExpensesPagedAsync(string userId, int groupId, string? cursor, int pageSize)
+    {
+        var hasAccess = await _context.SplitGroups.AnyAsync(g =>
+            g.Id == groupId && (g.CreatedByUserId == userId || g.Members.Any(m => m.LinkedUserId == userId)));
+        if (!hasAccess)
+            return Result.Failure<PaginatedResult<ExpenseDto>>(new Error("SplitGroup.NotFound", "Group not found."));
+        pageSize = Math.Clamp(pageSize, 1, 100);
+
+        var query = _context.SplitExpenses.IgnoreQueryFilters().AsNoTracking().Where(e => e.SplitGroupId == groupId && e.IsDeleted);
+        var seeking = KeysetPager.TryDecodeCursor<DateTime>(cursor, out _, out _);
+        var total = seeking ? -1 : await query.CountAsync();
+        var page = await query.ToKeysetPageAsync(e => e.DeletedAt ?? e.CreatedAt, e => e.Id, true, true, cursor, pageSize,
+            include: q => q.Include(e => e.Payers).ThenInclude(p => p.SplitGroupMember).Include(e => e.Participants).ThenInclude(p => p.SplitGroupMember));
+
+        // IgnoreQueryFilters also lifts the filter on the lines: keep only the live ones.
+        foreach (var e in page.Items)
+        {
+            e.Payers = e.Payers.Where(p => !p.IsDeleted).ToList();
+            e.Participants = e.Participants.Where(p => !p.IsDeleted).ToList();
+        }
+
+        var dtos = page.Items.Select(r => { var d = MapExpenseToDto(r); d.DeletedAt = r.DeletedAt; return d; }).ToList();
+        return Result.Success(new PaginatedResult<ExpenseDto>(dtos, total, 1, pageSize) { HasMore = page.HasMore, NextCursor = page.NextCursor });
+    }
+
     public async Task<Result<List<ExpenseDto>>> GetDeletedExpensesAsync(string userId, int groupId)
     {
         var hasAccess = await _context.SplitGroups.AnyAsync(g =>
@@ -2069,6 +2095,24 @@ public class SplitService : ISplitService
             TransactionsCreated = imported,
             AlreadyImportedCount = participations.Count - imported
         });
+    }
+
+    /// <summary>Settlements newest first, one page at a time by cursor (no OFFSET, no COUNT after the first page).</summary>
+    public async Task<Result<PaginatedResult<SettlementDto>>> GetSettlementHistoryPagedAsync(string userId, int groupId, string? cursor, int pageSize)
+    {
+        var group = await LoadGroupForUserAsync(userId, groupId);
+        if (group == null)
+            return Result.Failure<PaginatedResult<SettlementDto>>(new Error("SplitGroup.NotFound", "Group not found."));
+        pageSize = Math.Clamp(pageSize, 1, 100);
+
+        var query = _context.SplitSettlements.Where(s => s.SplitGroupId == groupId);
+        var seeking = KeysetPager.TryDecodeCursor<DateTime>(cursor, out _, out _);
+        var total = seeking ? -1 : await query.CountAsync();
+        var page = await query.ToKeysetPageAsync(s => s.CompletedAt ?? s.CreatedAt, s => s.Id, true, true, cursor, pageSize,
+            include: q => q.Include(s => s.FromMember).Include(s => s.ToMember));
+
+        return Result.Success(new PaginatedResult<SettlementDto>(page.Items.Select(MapSettlementToDto).ToList(), total, 1, pageSize)
+        { HasMore = page.HasMore, NextCursor = page.NextCursor });
     }
 
     public async Task<Result<List<SettlementDto>>> GetSettlementHistoryAsync(string userId, int groupId)

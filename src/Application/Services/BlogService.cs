@@ -20,7 +20,7 @@ public class BlogService
 
     // ── Public reads — no auth required, only ever returns published posts ────
 
-    public async Task<PaginatedResult<BlogPostSummaryDto>> GetPublishedPagedAsync(int pageNumber = 1, int pageSize = 6, string? search = null, string? tag = null)
+    public async Task<PaginatedResult<BlogPostSummaryDto>> GetPublishedPagedAsync(int pageNumber = 1, int pageSize = 6, string? search = null, string? tag = null, string? cursor = null)
     {
         var query = _context.BlogPosts
             .AsNoTracking()
@@ -40,22 +40,21 @@ public class BlogService
 
         pageNumber = Math.Max(1, pageNumber);
         pageSize = Math.Clamp(pageSize, 1, 50);
-        var totalCount = await query.CountAsync();
-        var items = await query
-            .OrderByDescending(p => p.PublishedAt ?? p.CreatedAt)
-            .Skip((pageNumber - 1) * pageSize)
-            .Take(pageSize)
-            .Select(p => new BlogPostSummaryDto
-            {
-                Id = p.Id,
-                Title = p.Title,
-                Slug = p.Slug,
-                Excerpt = p.Excerpt,
-                PublishedAt = p.PublishedAt
-            })
-            .ToListAsync();
+        // Newest first, continued by cursor (no OFFSET, no COUNT after the first page).
+        var seeking = KeysetPager.TryDecodeCursor<DateTime>(cursor, out _, out _);
+        var totalCount = seeking ? -1 : await query.CountAsync();
+        var page = await query.ToKeysetPageAsync(p => p.PublishedAt ?? p.CreatedAt, p => p.Id, true, true, cursor, pageSize,
+            skip: (pageNumber - 1) * pageSize);
+        var items = page.Items.Select(p => new BlogPostSummaryDto
+        {
+            Id = p.Id,
+            Title = p.Title,
+            Slug = p.Slug,
+            Excerpt = p.Excerpt,
+            PublishedAt = p.PublishedAt
+        }).ToList();
 
-        return new PaginatedResult<BlogPostSummaryDto>(items, totalCount, pageNumber, pageSize);
+        return new PaginatedResult<BlogPostSummaryDto>(items, totalCount, pageNumber, pageSize) { HasMore = page.HasMore, NextCursor = page.NextCursor };
     }
 
     public async Task<List<BlogPostSummaryDto>> GetPublishedAsync()
@@ -90,6 +89,42 @@ public class BlogService
             ContentMarkdown = post.ContentMarkdown,
             IsPublished = post.IsPublished
         });
+    }
+
+    /// <summary>One page of a post's comments: top-level comments newest first by cursor, each with its replies.</summary>
+    public async Task<PaginatedResult<BlogCommentDto>> GetCommentsPagedAsync(string slug, string? cursor, int pageSize)
+    {
+        pageSize = Math.Clamp(pageSize, 1, 50);
+        var post = await _context.BlogPosts.FirstOrDefaultAsync(p => p.Slug == slug && p.IsPublished && !p.IsDeleted);
+        if (post == null) return new PaginatedResult<BlogCommentDto>(new List<BlogCommentDto>(), 0, 1, pageSize);
+
+        var roots = _context.BlogPostComments.AsNoTracking().Where(c => c.BlogPostId == post.Id && c.ParentCommentId == null);
+        var seeking = KeysetPager.TryDecodeCursor<DateTime>(cursor, out _, out _);
+        var total = seeking ? -1 : await roots.CountAsync();
+        var page = await roots.ToKeysetPageAsync(c => c.CreatedAt, c => c.Id, true, true, cursor, pageSize);
+
+        BlogCommentDto ToDto(BlogPostComment c) => new()
+        {
+            Id = c.Id, Author = c.UserName, Content = c.Content, CreatedAt = c.CreatedAt.ToString("g"), Likes = c.LikesCount, ParentCommentId = c.ParentCommentId
+        };
+        var byId = page.Items.ToDictionary(c => c.Id, ToDto);
+        var parentIds = byId.Keys.ToList();
+        for (var depth = 0; depth < 6 && parentIds.Count > 0; depth++)
+        {
+            var children = await _context.BlogPostComments.AsNoTracking()
+                .Where(c => c.BlogPostId == post.Id && c.ParentCommentId != null && parentIds.Contains(c.ParentCommentId.Value))
+                .OrderBy(c => c.CreatedAt).ThenBy(c => c.Id).ToListAsync();
+            foreach (var child in children)
+            {
+                var dto = ToDto(child);
+                byId[child.Id] = dto;
+                if (child.ParentCommentId.HasValue && byId.TryGetValue(child.ParentCommentId.Value, out var parent)) parent.Replies.Add(dto);
+            }
+            parentIds = children.Select(c => c.Id).ToList();
+        }
+
+        var rootDtos = page.Items.Select(c => byId[c.Id]).ToList();
+        return new PaginatedResult<BlogCommentDto>(rootDtos, total, 1, pageSize) { HasMore = page.HasMore, NextCursor = page.NextCursor };
     }
 
     public async Task<List<BlogCommentDto>> GetCommentsAsync(string slug)

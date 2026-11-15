@@ -33,6 +33,16 @@ public class CommentsController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>One page of the thread (top-level comments by cursor, with their replies): ?cursor=&pageSize=</summary>
+    [HttpGet("paged")]
+    [AllowAnonymous]
+    public async Task<ActionResult> GetCommentsPaged(int issueId, [FromQuery] string? cursor = null, [FromQuery] int pageSize = 20)
+    {
+        var userId = User.Identity?.IsAuthenticated == true ? User.FindFirstValue(ClaimTypes.NameIdentifier) : null;
+        var (items, hasMore, nextCursor, total) = await _commentService.GetCommentsPagedAsync(issueId, userId, cursor, pageSize);
+        return Ok(new { data = items, totalRecords = total, pageSize, hasMore, nextCursor });
+    }
+
     [HttpPost]
     [Authorize]
     public async Task<ActionResult> AddComment(int issueId, [FromBody] CreateCommentDto input)

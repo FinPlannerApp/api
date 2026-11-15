@@ -221,6 +221,11 @@ public class SplitController : BaseController
     public async Task<IActionResult> GetSettlementHistory(int groupId)
         => HandleResult(await _service.GetSettlementHistoryAsync(UserId, groupId));
 
+    /// <summary>Settlement history one page at a time: pass the previous page's nextCursor as ?cursor=.</summary>
+    [HttpGet("groups/{groupId}/settlements/paged")]
+    public async Task<IActionResult> GetSettlementHistoryPaged(int groupId, [FromQuery] string? cursor = null, [FromQuery] int pageSize = 30)
+        => HandleResult(await _service.GetSettlementHistoryPagedAsync(UserId, groupId, cursor, pageSize));
+
     /// <summary>Leave the group (yourself) or remove a member (admin). Needs a zero balance.</summary>
     [HttpDelete("members/{memberId}")]
     public async Task<IActionResult> RemoveMember(int memberId)
@@ -252,6 +257,11 @@ public class SplitController : BaseController
     [HttpGet("groups/{groupId}/expenses/deleted")]
     public async Task<IActionResult> GetDeletedExpenses(int groupId)
         => HandleResult(await _service.GetDeletedExpensesAsync(UserId, groupId));
+
+    /// <summary>Deleted expenses one page at a time: pass the previous page's nextCursor as ?cursor=.</summary>
+    [HttpGet("groups/{groupId}/expenses/deleted/paged")]
+    public async Task<IActionResult> GetDeletedExpensesPaged(int groupId, [FromQuery] string? cursor = null, [FromQuery] int pageSize = 30)
+        => HandleResult(await _service.GetDeletedExpensesPagedAsync(UserId, groupId, cursor, pageSize));
 
     [HttpPost("expenses/{id}/restore")]
     public async Task<IActionResult> RestoreExpense(int id)

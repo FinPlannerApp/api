@@ -38,6 +38,33 @@ public class CommentService
     /// <summary>
     /// Get all comments for an issue with user vote state.
     /// </summary>
+    /// <summary>
+    /// One page of a thread: the top-level comments after the cursor (oldest first, keyset), each with all of its replies.
+    /// The items are the same flat shape as <see cref="GetCommentsAsync"/>, so the client builds the tree the same way.
+    /// </summary>
+    public async Task<(List<object> Items, bool HasMore, string? NextCursor, int Total)> GetCommentsPagedAsync(int issueId, string? currentUserId, string? cursor, int pageSize)
+    {
+        pageSize = Math.Clamp(pageSize, 1, 50);
+        var roots = _context.IssueComments.AsNoTracking().Where(c => c.IssueId == issueId && c.ParentCommentId == null);
+        var seeking = Application.Common.Models.KeysetPager.TryDecodeCursor<DateTime>(cursor, out _, out _);
+        var total = seeking ? -1 : await roots.CountAsync();
+        var page = await Application.Common.Models.KeysetPager.ToKeysetPageAsync(roots, c => c.CreatedAt, c => c.Id, false, false, cursor, pageSize);
+
+        // Every reply under this page's comments (replies to replies too, a few levels deep).
+        var all = new List<IssueComment>(page.Items);
+        var parentIds = page.Items.Select(c => c.Id).ToList();
+        for (var depth = 0; depth < 6 && parentIds.Count > 0; depth++)
+        {
+            var children = await _context.IssueComments.AsNoTracking()
+                .Where(c => c.IssueId == issueId && c.ParentCommentId != null && parentIds.Contains(c.ParentCommentId.Value))
+                .OrderBy(c => c.CreatedAt).ThenBy(c => c.Id).ToListAsync();
+            all.AddRange(children);
+            parentIds = children.Select(c => c.Id).ToList();
+        }
+
+        return (await BuildCommentObjectsAsync(all, currentUserId), page.HasMore, page.NextCursor, total);
+    }
+
     public async Task<List<object>> GetCommentsAsync(int issueId, string? currentUserId)
     {
         var comments = await _context.IssueComments
@@ -46,6 +73,11 @@ public class CommentService
             .AsNoTracking()
             .ToListAsync();
 
+        return await BuildCommentObjectsAsync(comments, currentUserId);
+    }
+
+    private async Task<List<object>> BuildCommentObjectsAsync(List<IssueComment> comments, string? currentUserId)
+    {
         var commentIds = comments.Select(c => c.Id).ToList();
         var userCommentVotes = currentUserId != null
             ? await _context.CommentVotes.Where(v => v.UserId == currentUserId && commentIds.Contains(v.CommentId)).ToListAsync()

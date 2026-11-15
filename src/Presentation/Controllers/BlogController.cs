@@ -35,13 +35,20 @@ public class BlogController : BaseController
         [FromQuery] int pageNumber = 1,
         [FromQuery] int pageSize = 6,
         [FromQuery] string? search = null,
-        [FromQuery] string? tag = null)
-        => Ok(ApiResult<PaginatedResult<BlogPostSummaryDto>>.Success(await _blogService.GetPublishedPagedAsync(pageNumber, pageSize, search, tag)));
+        [FromQuery] string? tag = null,
+        [FromQuery] string? cursor = null)
+        => Ok(ApiResult<PaginatedResult<BlogPostSummaryDto>>.Success(await _blogService.GetPublishedPagedAsync(pageNumber, pageSize, search, tag, cursor)));
 
     [HttpGet("published/{slug}/comments")]
     [AllowAnonymous]
     public async Task<IActionResult> GetComments(string slug)
         => Ok(await _blogService.GetCommentsAsync(slug));
+
+    /// <summary>One page of comments (top-level by cursor, with replies): ?cursor=&pageSize=</summary>
+    [HttpGet("published/{slug}/comments/paged")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetCommentsPaged(string slug, [FromQuery] string? cursor = null, [FromQuery] int pageSize = 20)
+        => Ok(ApiResult<PaginatedResult<BlogCommentDto>>.Success(await _blogService.GetCommentsPagedAsync(slug, cursor, pageSize)));
 
     [HttpGet("published/{slug}")]
     [AllowAnonymous]

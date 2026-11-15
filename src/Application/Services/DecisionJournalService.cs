@@ -25,21 +25,17 @@ public class DecisionJournalService : IDecisionJournalService
 
     public async Task<Result<PaginatedResult<DecisionJournalEntryDto>>> GetPagedAsync(string userId, QueryParameters queryParams)
     {
-        var queryable = _context.DecisionJournalEntries
-            .Where(d => d.UserId == userId)
-            .OrderByDescending(d => d.DecisionDate)
-            .AsQueryable();
+        // Newest decision first, continued by cursor (no OFFSET, no COUNT after the first page).
+        var queryable = _context.DecisionJournalEntries.Where(d => d.UserId == userId);
+        var seeking = KeysetPager.TryDecodeCursor<DateTime>(queryParams.Cursor, out _, out _);
+        var totalRecords = seeking ? -1 : await queryable.CountAsync();
 
-        var totalRecords = await queryable.CountAsync();
-
-        var items = await queryable
-            .Skip((queryParams.PageNumber - 1) * queryParams.PageSize)
-            .Take(queryParams.PageSize)
-            .Select(d => MapToDto(d))
-            .ToListAsync();
+        var page = await queryable.ToKeysetPageAsync(d => d.DecisionDate, d => d.Id, true, true, queryParams.Cursor, queryParams.PageSize,
+            skip: (queryParams.PageNumber - 1) * queryParams.PageSize);
 
         return Result.Success(new PaginatedResult<DecisionJournalEntryDto>(
-            items, totalRecords, queryParams.PageNumber, queryParams.PageSize));
+            page.Items.Select(d => MapToDto(d)).ToList(), totalRecords, queryParams.PageNumber, queryParams.PageSize)
+        { HasMore = page.HasMore, NextCursor = page.NextCursor });
     }
 
     public async Task<Result<DecisionJournalEntryDto>> UpsertAsync(string userId, UpsertDecisionJournalEntryDto dto)

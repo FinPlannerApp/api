@@ -963,23 +963,19 @@ public class TransactionService : ITransactionService
                 t.Account.Name.ToLower().Contains(search));
         }
 
-        var totalRecords = await filteredQuery.CountAsync();
+        // Newest first, continued by cursor: no OFFSET, and no COUNT after the first page.
+        var seeking = KeysetPager.TryDecodeCursor<DateTime>(queryParams.Cursor, out _, out _);
+        var totalRecords = seeking ? -1 : await filteredQuery.CountAsync();
 
-        var items = await filteredQuery
-            .Include(t => t.TransactionCategory)
-            .Include(t => t.Account)
-            .Include(t => t.Merchant)
-            .OrderByDescending(t => t.Date)
-            .ThenByDescending(t => t.Id)
-            .Skip((queryParams.PageNumber - 1) * queryParams.PageSize)
-            .Take(queryParams.PageSize)
-            .ToListAsync();
+        var keysetPage = await filteredQuery.ToKeysetPageAsync(t => t.Date, t => t.Id, true, true, queryParams.Cursor, queryParams.PageSize,
+            include: q => q.Include(t => t.TransactionCategory).Include(t => t.Account).Include(t => t.Merchant),
+            skip: (queryParams.PageNumber - 1) * queryParams.PageSize);
 
-        var dtos = items.Select(MapToDto).ToList();
+        var dtos = keysetPage.Items.Select(MapToDto).ToList();
 
         var result = new TransactionPageResultDto
         {
-            Transactions = new PaginatedResult<TransactionDto>(dtos, totalRecords, queryParams.PageNumber, queryParams.PageSize),
+            Transactions = new PaginatedResult<TransactionDto>(dtos, totalRecords, queryParams.PageNumber, queryParams.PageSize) { HasMore = keysetPage.HasMore, NextCursor = keysetPage.NextCursor },
             BalanceBroughtForward = balanceBF,
             ClosingBalance = closingBalance,
             TotalIncome = totalIncome,

@@ -44,6 +44,19 @@ public partial class AccountService : IAccountService
             queryable = queryable.Where(a => a.AccountCategoryId == queryParams.AccountCategoryId.Value);
         }
 
+        // Default order (name A-Z) continues by cursor: no OFFSET, and no COUNT after the first page.
+        if (queryParams.SortBy == null)
+        {
+            var seeking = KeysetPager.TryDecodeCursor<string>(queryParams.Cursor, out _, out _);
+            var total = seeking ? -1 : await queryable.CountAsync();
+            var page = await queryable.ToKeysetPageAsync(a => a.Name.ToLower(), a => a.Id, false, true, queryParams.Cursor, queryParams.PageSize,
+                skip: (queryParams.PageNumber - 1) * queryParams.PageSize);
+            var pageDtos = page.Items.Select(a => MapToDto(a, null)).ToList();
+            await PopulateCreditCardBillingDetailsAsync(userId, pageDtos);
+            return Result.Success(new PaginatedResult<AccountDto>(pageDtos, total, queryParams.PageNumber, queryParams.PageSize)
+            { HasMore = page.HasMore, NextCursor = page.NextCursor });
+        }
+
         var totalRecords = await queryable.CountAsync();
 
         queryable = queryParams.SortBy?.ToLower() switch

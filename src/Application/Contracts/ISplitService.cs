@@ -36,11 +36,13 @@ public interface ISplitService
     Task<Result<bool>> LockGroupAsync(string userId, int groupId);
     Task<Result<ImportToLedgerResultDto>> ImportToLedgerAsync(string userId, ImportToLedgerDto dto);
     Task<Result<List<SettlementDto>>> GetSettlementHistoryAsync(string userId, int groupId);
+    Task<Result<PaginatedResult<SettlementDto>>> GetSettlementHistoryPagedAsync(string userId, int groupId, string? cursor, int pageSize);
     Task<Result<bool>> RemoveMemberAsync(string userId, int memberId);
     Task<Result<bool>> UnlinkMemberAsync(string userId, int memberId);
     Task<Result<bool>> DeleteGroupAsync(string userId, int groupId);
     Task<Result<ActivityPageDto>> GetActivityAsync(string userId, int groupId, string? cursor, int? limit);
     Task<Result<List<ExpenseDto>>> GetDeletedExpensesAsync(string userId, int groupId);
+    Task<Result<PaginatedResult<ExpenseDto>>> GetDeletedExpensesPagedAsync(string userId, int groupId, string? cursor, int pageSize);
     Task<Result<ExpenseDto>> RestoreExpenseAsync(string userId, int expenseId);
     Task<Result<bool>> CanAttachReceiptAsync(string userId, int expenseId);
     Task<Result<ReceiptChangeDto>> SetReceiptAsync(string userId, int expenseId, string? receiptPath);

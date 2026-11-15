@@ -33,6 +33,17 @@ public class AccountCategoryService : ICategoryService<AccountCategoryDto, Upser
             query = query.Where(c => c.Name.ToLower().Contains(queryParams.GlobalSearch.ToLower()));
         }
 
+        // Default order (name A-Z) continues by cursor: no OFFSET, and no COUNT after the first page.
+        if (queryParams.SortBy == null || (queryParams.SortBy.Equals("name", StringComparison.OrdinalIgnoreCase) && queryParams.SortOrder != "desc"))
+        {
+            var seeking = KeysetPager.TryDecodeCursor<string>(queryParams.Cursor, out _, out _);
+            var total = seeking ? -1 : await query.CountAsync();
+            var page = await query.ToKeysetPageAsync(c => c.Name, c => c.Id, false, false, queryParams.Cursor, queryParams.PageSize,
+                skip: (queryParams.PageNumber - 1) * queryParams.PageSize);
+            return Result.Success(new PaginatedResult<AccountCategoryDto>(page.Items.Select(MapToDto).ToList(), total, queryParams.PageNumber, queryParams.PageSize)
+            { HasMore = page.HasMore, NextCursor = page.NextCursor });
+        }
+
         // Get total count before pagination
         var totalRecords = await query.CountAsync();
 

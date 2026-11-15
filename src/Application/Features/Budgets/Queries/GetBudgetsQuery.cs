@@ -31,6 +31,29 @@ public class GetBudgetsQueryHandler : IRequestHandler<GetBudgetsQuery, Result<Pa
             query = query.Where(b => b.TransactionCategory != null && b.TransactionCategory.Name.ToLower().Contains(search));
         }
 
+        // Default order (category A-Z, "Overall" for the all-spending budget) continues by cursor: no OFFSET, no COUNT after the first page.
+        if (request.QueryParams.SortBy == null)
+        {
+            var seeking = KeysetPager.TryDecodeCursor<string>(request.QueryParams.Cursor, out _, out _);
+            var total = seeking ? -1 : await query.CountAsync(cancellationToken);
+            var page = await query.ToKeysetPageAsync(b => b.TransactionCategory != null ? b.TransactionCategory.Name : "Overall", b => b.Id,
+                false, false, request.QueryParams.Cursor, request.QueryParams.PageSize,
+                skip: (request.QueryParams.PageNumber - 1) * request.QueryParams.PageSize, ct: cancellationToken);
+            var dtos = page.Items.Select(b => new BudgetDto
+            {
+                Id = b.Id,
+                TransactionCategoryId = b.TransactionCategoryId,
+                CategoryName = b.TransactionCategory != null ? b.TransactionCategory.Name : null,
+                Amount = b.Amount,
+                Period = b.Period,
+                StartDate = b.StartDate,
+                EndDate = b.EndDate,
+                AlertThresholdPercent = b.AlertThresholdPercent
+            }).ToList();
+            return Result.Success(new PaginatedResult<BudgetDto>(dtos, total, request.QueryParams.PageNumber, request.QueryParams.PageSize)
+            { HasMore = page.HasMore, NextCursor = page.NextCursor });
+        }
+
         var totalRecords = await query.CountAsync(cancellationToken);
 
         // Sorting

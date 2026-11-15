@@ -9,7 +9,7 @@ namespace Application.Services;
 public interface IMerchantService
 {
     Task<Result<List<MerchantDto>>> GetAllAsync(string userId);
-    Task<Result<PaginatedResult<MerchantDto>>> GetPagedAsync(string userId, int pageNumber, int pageSize, string? search);
+    Task<Result<PaginatedResult<MerchantDto>>> GetPagedAsync(string userId, int pageNumber, int pageSize, string? search, string? cursor = null);
     Task<Result<MerchantDto>> UpsertAsync(string userId, UpsertMerchantDto dto);
     Task<Result<bool>> DeleteAsync(string userId, int id);
     Task<Result<int?>> SuggestMerchantForDescriptionAsync(string userId, string description);
@@ -43,7 +43,7 @@ public class MerchantService : IMerchantService
     }
 
     /// <summary>One page of merchants, paged in the database, optionally filtered by name or alias.</summary>
-    public async Task<Result<PaginatedResult<MerchantDto>>> GetPagedAsync(string userId, int pageNumber, int pageSize, string? search)
+    public async Task<Result<PaginatedResult<MerchantDto>>> GetPagedAsync(string userId, int pageNumber, int pageSize, string? search, string? cursor = null)
     {
         pageNumber = Math.Max(1, pageNumber);
         pageSize = Math.Clamp(pageSize, 1, 200);
@@ -55,15 +55,14 @@ public class MerchantService : IMerchantService
             query = query.Where(m => m.Name.ToLower().Contains(term) || m.Aliases.Any(a => a.Alias.ToLower().Contains(term)));
         }
 
-        var total = await query.CountAsync();
-        var items = await query
-            .OrderBy(m => m.Name)
-            .Skip((pageNumber - 1) * pageSize)
-            .Take(pageSize)
-            .Select(m => new MerchantDto { Id = m.Id, Name = m.Name, Aliases = m.Aliases.Select(a => a.Alias).ToList() })
-            .ToListAsync();
+        // A-Z by name, continued by cursor (no OFFSET, no COUNT after the first page).
+        var seeking = KeysetPager.TryDecodeCursor<string>(cursor, out _, out _);
+        var total = seeking ? -1 : await query.CountAsync();
+        var page = await query.Include(m => m.Aliases).ToKeysetPageAsync(m => m.Name, m => m.Id, false, false, cursor, pageSize,
+            skip: (pageNumber - 1) * pageSize);
+        var items = page.Items.Select(m => new MerchantDto { Id = m.Id, Name = m.Name, Aliases = m.Aliases.Select(a => a.Alias).ToList() }).ToList();
 
-        return Result.Success(new PaginatedResult<MerchantDto>(items, total, pageNumber, pageSize));
+        return Result.Success(new PaginatedResult<MerchantDto>(items, total, pageNumber, pageSize) { HasMore = page.HasMore, NextCursor = page.NextCursor });
     }
 
     public async Task<Result<MerchantDto>> UpsertAsync(string userId, UpsertMerchantDto dto)
