@@ -61,6 +61,7 @@ jobs:
 
       # Dry check BEFORE touching production: fails the pipeline (and changes nothing) if an applied
       # migration was edited or a file is missing. Take a Neon branch/snapshot before merging a destructive migration.
+      # New migrations are still pending at this point, so they are ignored here (-ignoreMigrationPatterns); `validate` alone fails on them.
       - name: Validate Flyway Migrations (Production, no changes made)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
@@ -75,7 +76,7 @@ jobs:
             -v ${{ github.workspace }}/db/migrations:/flyway/sql \
             -v ${{ github.workspace }}/flyway.conf:/flyway/conf/flyway.conf \
             flyway/flyway:11 \
-            validate
+            validate -ignoreMigrationPatterns='*:pending'
 
       # Run migrations on production database when pushing to main
       - name: Run Flyway Migrations (Production)
