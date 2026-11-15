@@ -66,3 +66,14 @@ public class SettleWithPersonResultDto
     public int PaymentsRecorded { get; set; }
     public decimal Net { get; set; }
 }
+
+
+public class SetAdminDto
+{
+    public bool IsAdmin { get; set; }
+}
+
+public class SetGuestDto
+{
+    public bool IsGuest { get; set; }
+}

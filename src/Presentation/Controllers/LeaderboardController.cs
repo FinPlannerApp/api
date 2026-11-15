@@ -4,6 +4,7 @@ using Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
@@ -11,6 +12,7 @@ namespace Presentation.Controllers;
 
 [ApiController]
 [Route("api/gamification")]
+[EnableRateLimiting("api")]
 public class LeaderboardController : ControllerBase
 {
     private readonly IApplicationDbContext _context;
@@ -29,20 +31,10 @@ public class LeaderboardController : ControllerBase
 
     [HttpGet("leaderboard")]
     [AllowAnonymous]
+    [ResponseCache(Duration = 60, Location = ResponseCacheLocation.Any)]
     public async Task<ActionResult> GetLeaderboard()
     {
-        var userIds = await _userManager.Users.Select(u => u.Id).ToListAsync();
-        var existingProfileUserIds = await _context.UserGamificationProfiles
-            .Select(p => p.UserId)
-            .ToListAsync();
-        var existingProfileSet = new HashSet<string>(existingProfileUserIds);
-
-        var missingUserIds = userIds.Where(uid => !existingProfileSet.Contains(uid)).ToList();
-        foreach (var missingUserId in missingUserIds)
-        {
-            await _gamificationService.RecalculateKarma(missingUserId);
-        }
-
+        // Read-only: profiles are created when a user first earns karma, never from an anonymous GET.
         var profiles = await _context.UserGamificationProfiles
             .OrderByDescending(p => p.KarmaScore)
             .Take(10)

@@ -100,16 +100,13 @@ public class DashboardService : IDashboardService
         decimal reservedForPayment = 0;
         foreach (var card in creditCardAccounts)
         {
-            var recentBill = await _context.CreditCardBills
-                .Where(b => b.AccountId == card.Id)
-                .OrderByDescending(b => b.StatementDate)
-                .FirstOrDefaultAsync();
+            var hasBill = await _context.CreditCardBills.AnyAsync(b => b.AccountId == card.Id);
 
-            if (recentBill != null)
+            if (hasBill)
             {
-                // Only what is STILL unpaid on the latest statement — a settled or
-                // part-paid bill must stop counting as "reserved".
-                reservedForPayment += await CreditCardBillMath.RemainingAsync(_context, recentBill);
+                // Only what is STILL unpaid, across every statement — a settled or
+                // part-paid bill must stop counting as "reserved", an older unpaid one must not vanish.
+                reservedForPayment += (await CreditCardBillMath.UnpaidBillsAsync(_context, card.Id)).Sum(u => u.Remaining);
             }
             else
             {
@@ -151,7 +148,7 @@ public class DashboardService : IDashboardService
         {
             upcomingObligations = obligationsResult.Value
                 .Where(o => o.ReducesAvailableCash && o.Amount.HasValue)
-                .Sum(o => o.Amount!.Value);
+                .Sum(o => o.CashImpactAmount ?? o.Amount!.Value);
         }
 
         var summary = new DashboardSummaryDto
@@ -310,6 +307,7 @@ public class DashboardService : IDashboardService
 
     public async Task<Result<List<MonthlyTrendPointDto>>> GetMonthlyTrendAsync(string userId, int monthsBack = 6)
     {
+        monthsBack = Math.Clamp(monthsBack, 1, 60);
         var results = new List<MonthlyTrendPointDto>();
         var now = DateTime.UtcNow;
 

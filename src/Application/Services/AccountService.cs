@@ -12,11 +12,13 @@ public partial class AccountService : IAccountService
 {
     private readonly IApplicationDbContext _context;
     private readonly ICacheService _cache;
+    private readonly IMarketPriceService _prices;
 
-    public AccountService(IApplicationDbContext context, ICacheService cache)
+    public AccountService(IApplicationDbContext context, ICacheService cache, IMarketPriceService prices)
     {
         _context = context;
         _cache = cache;
+        _prices = prices;
     }
 
     public async Task<Result<PaginatedResult<AccountDto>>> GetPagedAccountsAsync(string userId, QueryParameters queryParams)
@@ -252,6 +254,8 @@ public partial class AccountService : IAccountService
             account.BankAccountDetails.InterestRate = dto.BankAccountDetails.InterestRate;
             account.BankAccountDetails.InterestFrequency = dto.BankAccountDetails.InterestFrequency;
             account.BankAccountDetails.MinimumBalance = dto.BankAccountDetails.MinimumBalance;
+            account.BankAccountDetails.InterestCreditDay = dto.BankAccountDetails.InterestCreditDay is >= 1 and <= 31 ? dto.BankAccountDetails.InterestCreditDay : null;
+            account.BankAccountDetails.AutoPostInterest = dto.BankAccountDetails.AutoPostInterest;
         }
         else if (account.BankAccountDetails != null)
         {
@@ -268,6 +272,13 @@ public partial class AccountService : IAccountService
         account.IsDeleted = true;
         account.DeletedAt = DateTime.UtcNow;
         _context.Accounts.Update(account);
+
+        // Scheduled items pointing at a deleted account would fail every night forever: switch them off.
+        var orphaned = await _context.RecurringTransactions
+            .Where(r => r.UserId == userId && r.AccountId == accountId && r.IsActive)
+            .ToListAsync();
+        foreach (var r in orphaned) r.IsActive = false;
+
         await _context.SaveChangesAsync();
 
         await _cache.InvalidateDashboardAsync(userId); // Invalidate net worth
@@ -298,6 +309,12 @@ public partial class AccountService : IAccountService
         }
         _context.Transactions.UpdateRange(affectedTransactions);
 
+        // Scheduled items follow their transactions to the surviving account.
+        var movedRecurring = await _context.RecurringTransactions
+            .Where(r => r.UserId == userId && r.AccountId == dto.SourceAccountId)
+            .ToListAsync();
+        foreach (var r in movedRecurring) r.AccountId = dto.TargetAccountId;
+
         // Sets the balance directly rather than deriving it — deliberately
         // NOT subject to the negative-balance guard from earlier. A merge
         // is a data-correction/consolidation action with the user seeing
@@ -305,6 +322,26 @@ public partial class AccountService : IAccountService
         // DeleteTransactionAsync is also exempt from that guard: forcing
         // extra hoops on a correction the user explicitly chose isn't
         // protection, it's friction.
+        // The user may still choose the final balance, but any difference from "both balances added together"
+        // is written to the ledger as a visible adjustment, so the balance always equals the sum of its transactions.
+        var expected = source.Balance + target.Balance;
+        var mergeDelta = dto.FinalBalance - expected;
+        if (mergeDelta != 0)
+        {
+            _context.Transactions.Add(new Transaction
+            {
+                Description = "Balance Adjustment — account merge",
+                Amount = Math.Abs(mergeDelta),
+                Date = DateTime.UtcNow,
+                Type = mergeDelta > 0 ? TransactionType.Income : TransactionType.Expense,
+                AccountId = dto.TargetAccountId,
+                UserId = userId,
+                IsBalanceAdjustment = true,
+                Kind = TransactionKind.BalanceAdjustment,
+                TransferGroupId = Guid.NewGuid()
+            });
+        }
+
         target.Balance = dto.FinalBalance;
         _context.Accounts.Update(target);
 
@@ -313,7 +350,9 @@ public partial class AccountService : IAccountService
         source.DeletedAt = DateTime.UtcNow;
         _context.Accounts.Update(source);
 
-        await _context.SaveChangesAsync();
+        var mergeSave = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
+        if (mergeSave.IsFailure)
+            return Result.Failure<bool>(mergeSave.Error);
         await _cache.InvalidateDashboardAsync(userId);
 
         return Result.Success(true);
@@ -477,7 +516,9 @@ public partial class AccountService : IAccountService
             {
                 InterestRate = a.BankAccountDetails.InterestRate,
                 InterestFrequency = a.BankAccountDetails.InterestFrequency,
-                MinimumBalance = a.BankAccountDetails.MinimumBalance
+                MinimumBalance = a.BankAccountDetails.MinimumBalance,
+                InterestCreditDay = a.BankAccountDetails.InterestCreditDay,
+                AutoPostInterest = a.BankAccountDetails.AutoPostInterest
             }
         };
     }

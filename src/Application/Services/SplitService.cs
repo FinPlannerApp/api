@@ -1,4 +1,4 @@
-using Application.Common.Helpers;
+﻿using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Split;
@@ -91,10 +91,9 @@ public class SplitService : ISplitService
             return Result.Failure<MemberDto>(new Error(
                 "SplitGroup.DirectLedger", "A friend ledger is just between two people. Create a group to split with more people."));
 
-        var isCallerInGroup = group.CreatedByUserId == userId || group.Members.Any(m => m.LinkedUserId == userId);
-        if (!isCallerInGroup)
+        if (!IsAdminLoaded(group, userId))
             return Result.Failure<MemberDto>(new Error(
-                "SplitGroup.Forbidden", "Only group members can add new members."));
+                "SplitGroup.Forbidden", "Only a group admin can add members."));
 
         var member = new SplitGroupMember
         {
@@ -129,11 +128,18 @@ public class SplitService : ISplitService
 
         // A registered/linked user can ONLY update their own UPI ID unless the caller is the group admin.
         // A manually added person (LinkedUserId == null) can have their UPI ID updated by group members.
-        var isAdmin = member.SplitGroup.CreatedByUserId == userId;
+        var isAdmin = IsAdminLoaded(member.SplitGroup, userId);
         if (member.LinkedUserId != null && member.LinkedUserId != userId && !isAdmin)
             return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "You can only update your own payment details unless you are the group admin."));
 
-        member.UpiId = dto.UpiId;
+        var upi = dto.UpiId?.Trim();
+        if (!string.IsNullOrEmpty(upi) && !System.Text.RegularExpressions.Regex.IsMatch(upi, @"^[A-Za-z0-9._\-]{2,64}@[A-Za-z0-9.\-]{2,32}$"))
+            return Result.Failure<bool>(new Error("SplitMember.InvalidUpi", "Enter a valid UPI ID like name@bank."));
+        // Name-only members: only the admin or the member themself may change where money is sent.
+        if (member.LinkedUserId == null && !isAdmin)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group admin can set payment details for a member who hasn't joined."));
+
+        member.UpiId = string.IsNullOrEmpty(upi) ? null : upi;
         _context.SplitGroupMembers.Update(member);
         await _context.SaveChangesAsync();
 
@@ -148,15 +154,24 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<ExpenseDto>(new Error("SplitGroup.NotFound", "Group not found."));
 
-        if (group.Status == SplitGroupStatus.Settled || group.Status == SplitGroupStatus.Archived)
+        if (IsGuestLoaded(group, userId))
+            return Result.Failure<ExpenseDto>(new Error("SplitGroup.Forbidden", "Guests can view this group but can't add expenses."));
+
+        if (group.Status != SplitGroupStatus.Active)
             return Result.Failure<ExpenseDto>(new Error(
-                "SplitExpense.GroupClosed", "This group is closed — new expenses can't be added."));
+                "SplitExpense.GroupClosed", "This group is locked or closed — new expenses can't be added. Unlock it first."));
 
         if (dto.Amount <= 0)
             return Result.Failure<ExpenseDto>(new Error("SplitExpense.InvalidAmount", "Amount must be greater than zero."));
 
+        if (dto.Amount > 1_000_000_000m || dto.Amount != Math.Round(dto.Amount, 2))
+            return Result.Failure<ExpenseDto>(new Error("SplitExpense.InvalidAmount", "Amount must be at most 1,000,000,000 with up to 2 decimal places."));
+        if (dto.Payers.Any(p => p.AmountPaid <= 0 || p.AmountPaid != Math.Round(p.AmountPaid, 2)) ||
+            dto.Payers.Select(p => p.MemberId).Distinct().Count() != dto.Payers.Count)
+            return Result.Failure<ExpenseDto>(new Error("SplitExpense.InvalidPayers", "Each payer must appear once with a positive amount (max 2 decimals)."));
+
         var payersSum = dto.Payers.Sum(p => p.AmountPaid);
-        if (Math.Abs(payersSum - dto.Amount) > 0.01m)
+        if (payersSum != dto.Amount) // amounts are validated to 2 decimals above, so exact equality is right
             return Result.Failure<ExpenseDto>(new Error(
                 "SplitExpense.PayersMismatch",
                 $"Payers add up to {payersSum:F2}, but the expense total is {dto.Amount:F2} — they need to match."));
@@ -201,6 +216,7 @@ public class SplitService : ISplitService
         var expense = new SplitExpense
         {
             SplitGroupId = dto.GroupId,
+            AddedByUserId = userId,
             Description = dto.Description,
             Amount = dto.Amount,
             Date = EnsureUtc(dto.Date),
@@ -310,14 +326,31 @@ public class SplitService : ISplitService
             GroupName = group.Name,
             Currency = group.Currency,
             ExportedAtUtc = DateTime.UtcNow,
-            Members = group.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, LinkedUserId = m.LinkedUserId, UpiId = m.UpiId, LeftAt = m.LeftAt }).ToList(),
+            Members = group.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, LinkedUserId = m.LinkedUserId, UpiId = m.UpiId, LeftAt = m.LeftAt, IsAdmin = m.IsAdmin, IsGuest = m.IsGuest }).ToList(),
             Expenses = expenses.Select(MapExpenseToDto).ToList(),
             Settlements = settlements.Select(MapSettlementToDto).ToList(),
             Balances = ComputeBalancesDto(group)
         });
     }
 
+    /// <summary>
+    /// Serialised per group with a Postgres advisory lock inside one transaction, so a double-tap or two
+    /// devices can't both pass the "how much is still owed" check and record the same payment twice.
+    /// </summary>
     public async Task<Result<SettlementDto>> CreateSettlementAsync(string userId, CreateSettlementDto dto)
+    {
+        var db = _context as DbContext;
+        if (db == null || db.Database.ProviderName?.Contains("Npgsql") != true || db.Database.CurrentTransaction != null)
+            return await CreateSettlementCoreAsync(userId, dto);
+
+        await using var tx = await db.Database.BeginTransactionAsync();
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtext({"split-settle:" + dto.GroupId}))");
+        var result = await CreateSettlementCoreAsync(userId, dto);
+        if (result.IsSuccess) await tx.CommitAsync(); else await tx.RollbackAsync();
+        return result;
+    }
+
+    private async Task<Result<SettlementDto>> CreateSettlementCoreAsync(string userId, CreateSettlementDto dto)
     {
         var group = await LoadGroupForUserAsync(userId, dto.GroupId);
         if (group == null)
@@ -325,6 +358,9 @@ public class SplitService : ISplitService
 
         if (group.Status == SplitGroupStatus.Archived)
             return Result.Failure<SettlementDto>(new Error("SplitSettlement.GroupClosed", "This group is closed — payments can't be recorded."));
+
+        if (IsGuestLoaded(group, userId))
+            return Result.Failure<SettlementDto>(new Error("SplitGroup.Forbidden", "Guests can view this group but can't record payments."));
 
         if (dto.Amount <= 0)
             return Result.Failure<SettlementDto>(new Error("SplitSettlement.InvalidAmount", "Amount must be greater than zero."));
@@ -342,7 +378,7 @@ public class SplitService : ISplitService
 
         // 1. Authorization: the group creator can record a payment on behalf of anyone.
         // Everyone else can record one only if they are the payer OR the receiver.
-        var isAdmin = group.CreatedByUserId == userId;
+        var isAdmin = IsAdminLoaded(group, userId);
         var callerMember = FindMemberForUser(group, userId);
         var callerIsPayer = callerMember != null && callerMember.Id == dto.FromMemberId;
         var callerIsReceiver = callerMember != null && callerMember.Id == dto.ToMemberId;
@@ -492,6 +528,8 @@ public class SplitService : ISplitService
             return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the admin, the payer or the receiver can delete this payment."));
 
         var wasCompleted = settlement.Status == SettlementStatus.Completed;
+        if (wasCompleted && group.CreatedByUserId != userId)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "A confirmed payment can only be undone by the group admin."));
         var text = $"{settlement.FromMember.Name} → {settlement.ToMember.Name} (₹{settlement.Amount:N2})";
 
         settlement.IsDeleted = true;
@@ -551,9 +589,18 @@ public class SplitService : ISplitService
         return null;
     }
 
+    /// <summary>The receiver always may; the admin may only when they are not the payer (nobody confirms their own payment).</summary>
+    private static bool CanActAsReceiver(SplitSettlement settlement, string userId)
+    {
+        var group = settlement.SplitGroup;
+        var caller = FindMemberForUser(group, userId);
+        if (caller != null && caller.Id == settlement.ToMemberId) return true;
+        return group.CreatedByUserId == userId && (caller == null || caller.Id != settlement.FromMemberId);
+    }
+
     private static bool CanManageSettlement(SplitGroup group, SplitSettlement settlement, string userId)
     {
-        if (group.CreatedByUserId == userId) return true;
+        if (IsAdminLoaded(group, userId)) return true;
         var caller = FindMemberForUser(group, userId);
         return caller != null && (caller.Id == settlement.FromMemberId || caller.Id == settlement.ToMemberId);
     }
@@ -585,7 +632,7 @@ public class SplitService : ISplitService
         if (settlement.Status != SettlementStatus.Pending)
             return Result.Failure<bool>(new Error("SplitSettlement.WrongState", "This settlement has already been acted on."));
 
-        if (settlement.SplitGroup.CreatedByUserId != userId)
+        if (!await IsAdminAsync(settlement.SplitGroup, userId))
         {
             var callerMember = FindMemberForUser(settlement.SplitGroup, userId);
             if (callerMember == null || callerMember.Id != settlement.FromMemberId)
@@ -616,13 +663,11 @@ public class SplitService : ISplitService
         if (settlement.Status != SettlementStatus.AwaitingConfirmation)
             return Result.Failure<bool>(new Error("SplitSettlement.WrongState", "This settlement isn't awaiting confirmation."));
 
-        if (settlement.SplitGroup.CreatedByUserId != userId)
-        {
-            var callerMember = FindMemberForUser(settlement.SplitGroup, userId);
-            if (callerMember == null || callerMember.Id != settlement.ToMemberId)
-                return Result.Failure<bool>(new Error(
-                    "SplitGroup.Forbidden", "Only the person who was owed this payment can confirm receiving it."));
-        }
+        if (!CanActAsReceiver(settlement, userId))
+            return Result.Failure<bool>(new Error(
+                "SplitGroup.Forbidden", "Only the person who was owed this payment (or the admin, if they are not the payer) can confirm receiving it."));
+        if (settlement.SplitGroup.Status == SplitGroupStatus.Archived)
+            return Result.Failure<bool>(new Error("SplitSettlement.GroupClosed", "This group is closed — payments can't be changed."));
 
         settlement.Status = SettlementStatus.Completed;
         settlement.CompletedAt = DateTime.UtcNow;
@@ -653,13 +698,11 @@ public class SplitService : ISplitService
         // Same authorization as confirming receipt — only the person
         // who was supposed to receive the money genuinely knows
         // whether it actually arrived.
-        if (settlement.SplitGroup.CreatedByUserId != userId)
-        {
-            var callerMember = FindMemberForUser(settlement.SplitGroup, userId);
-            if (callerMember == null || callerMember.Id != settlement.ToMemberId)
-                return Result.Failure<bool>(new Error(
-                    "SplitGroup.Forbidden", "Only the person who was supposed to receive this payment can reject it."));
-        }
+        if (!CanActAsReceiver(settlement, userId))
+            return Result.Failure<bool>(new Error(
+                "SplitGroup.Forbidden", "Only the person who was supposed to receive this payment (or the admin, if they are not the payer) can reject it."));
+        if (settlement.SplitGroup.Status == SplitGroupStatus.Archived)
+            return Result.Failure<bool>(new Error("SplitSettlement.GroupClosed", "This group is closed — payments can't be changed."));
 
         settlement.Status = SettlementStatus.Pending;
         _context.SplitSettlements.Update(settlement);
@@ -694,7 +737,7 @@ public class SplitService : ISplitService
         // specifically should only go to the creator or the actual
         // person paying, not any member who happens to have access to
         // the group.
-        if (settlement.SplitGroup.CreatedByUserId != userId)
+        if (!await IsAdminAsync(settlement.SplitGroup, userId))
         {
             var callerMember = FindMemberForUser(settlement.SplitGroup, userId);
             if (callerMember == null || callerMember.Id != settlement.FromMemberId)
@@ -706,6 +749,12 @@ public class SplitService : ISplitService
             return Result.Failure<PaymentRequestDto>(new Error(
                 "SplitSettlement.NoUpiId",
                 $"{settlement.ToMember.Name} hasn't added a UPI ID yet — record this payment manually instead."));
+
+        // UPI only moves rupees: never hand out a UPI link for a group kept in another currency.
+        if (!string.Equals(settlement.SplitGroup.Currency, "INR", StringComparison.OrdinalIgnoreCase))
+            return Result.Failure<PaymentRequestDto>(new Error(
+                "SplitSettlement.UpiInrOnly",
+                $"UPI works in rupees only; this group uses {settlement.SplitGroup.Currency}. Record the payment manually instead."));
 
         var deepLink = UpiDeepLinkGenerator.Generate(
             settlement.ToMember.UpiId,
@@ -721,6 +770,21 @@ public class SplitService : ISplitService
             RecipientName = settlement.ToMember.Name,
             PaymentReference = settlement.PaymentReference
         });
+    }
+
+    public async Task<Result<string>> RegenerateShareTokenAsync(string userId, int groupId)
+    {
+        var group = await _context.SplitGroups.FirstOrDefaultAsync(g => g.Id == groupId);
+        if (group == null)
+            return Result.Failure<string>(new Error("SplitGroup.NotFound", "Group not found."));
+        if (!await IsAdminAsync(group, userId))
+            return Result.Failure<string>(new Error("SplitGroup.Forbidden", "Only a group admin can change the share link."));
+
+        group.ShareToken = GenerateShareToken(); // the old public link stops working immediately
+        _context.SplitGroups.Update(group);
+        await _context.SaveChangesAsync();
+        await RecordActivityAsync(groupId, userId, "ShareLinkReset", "reset the public share link.");
+        return Result.Success(group.ShareToken);
     }
 
     public async Task<Result<PublicGroupViewDto>> GetPublicGroupViewAsync(string shareToken)
@@ -777,8 +841,15 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<InviteCreatedDto>(new Error("SplitGroup.NotFound", "Group not found."));
 
-        if (group.CreatedByUserId != userId)
-            return Result.Failure<InviteCreatedDto>(new Error("SplitGroup.Forbidden", "Only the group creator can create invites."));
+        if (!await IsAdminAsync(group, userId))
+            return Result.Failure<InviteCreatedDto>(new Error("SplitGroup.Forbidden", "Only a group admin can create invites."));
+
+        var nowUtc = DateTime.UtcNow;
+        var expires = dto.ExpiresAt.HasValue ? EnsureUtc(dto.ExpiresAt.Value) : nowUtc.AddDays(7);
+        if (expires <= nowUtc)
+            return Result.Failure<InviteCreatedDto>(new Error("SplitInvite.InvalidExpiry", "The expiry must be in the future."));
+        if (expires > nowUtc.AddDays(30)) expires = nowUtc.AddDays(30);
+        var maxUses = dto.MaxUses is > 0 ? Math.Min(dto.MaxUses.Value, 100) : 20;
 
         var token = InviteTokenHelper.GenerateToken();
         var invite = new SplitGroupInvite
@@ -786,8 +857,8 @@ public class SplitService : ISplitService
             SplitGroupId = dto.GroupId,
             CreatedByUserId = userId,
             TokenHash = InviteTokenHelper.Hash(token),
-            ExpiresAt = dto.ExpiresAt.HasValue ? EnsureUtc(dto.ExpiresAt.Value) : null,
-            MaxUses = dto.MaxUses
+            ExpiresAt = expires,
+            MaxUses = maxUses
         };
 
         _context.SplitGroupInvites.Add(invite);
@@ -830,7 +901,21 @@ public class SplitService : ISplitService
         });
     }
 
+    /// <summary>Serialised per invite so two people can't both claim the same member or push UsedCount past MaxUses.</summary>
     public async Task<Result<JoinGroupResultDto>> JoinViaInviteAsync(string userId, JoinGroupDto dto)
+    {
+        var db = _context as DbContext;
+        if (db == null || db.Database.ProviderName?.Contains("Npgsql") != true || db.Database.CurrentTransaction != null)
+            return await JoinViaInviteCoreAsync(userId, dto);
+
+        await using var tx = await db.Database.BeginTransactionAsync();
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtext({"split-join:" + InviteTokenHelper.Hash(dto.Token)}))");
+        var result = await JoinViaInviteCoreAsync(userId, dto);
+        if (result.IsSuccess) await tx.CommitAsync(); else await tx.RollbackAsync();
+        return result;
+    }
+
+    private async Task<Result<JoinGroupResultDto>> JoinViaInviteCoreAsync(string userId, JoinGroupDto dto)
     {
         var tokenHash = InviteTokenHelper.Hash(dto.Token);
         var invite = await _context.SplitGroupInvites
@@ -910,8 +995,8 @@ public class SplitService : ISplitService
         if (invite == null)
             return Result.Failure<bool>(new Error("SplitInvite.NotFound", "Invite not found."));
 
-        if (invite.SplitGroup.CreatedByUserId != userId)
-            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can revoke invites."));
+        if (!await IsAdminAsync(invite.SplitGroup, userId))
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only a group admin can revoke invites."));
 
         invite.RevokedAt = DateTime.UtcNow;
         _context.SplitGroupInvites.Update(invite);
@@ -935,6 +1020,8 @@ public class SplitService : ISplitService
         var hasAccess = group.CreatedByUserId == userId || group.Members.Any(m => m.LinkedUserId == userId);
         if (!hasAccess)
             return Result.Failure<ExpenseDto>(new Error("SplitGroup.Forbidden", "You don't have access to this group."));
+        if (!CanChangeExpense(group, expense, userId))
+            return Result.Failure<ExpenseDto>(new Error("SplitGroup.Forbidden", "Only a group admin or the person who added this expense can change it."));
 
         if (group.Status != SplitGroupStatus.Active)
             return Result.Failure<ExpenseDto>(new Error(
@@ -943,8 +1030,14 @@ public class SplitService : ISplitService
         if (dto.Amount <= 0)
             return Result.Failure<ExpenseDto>(new Error("SplitExpense.InvalidAmount", "Amount must be greater than zero."));
 
+        if (dto.Amount > 1_000_000_000m || dto.Amount != Math.Round(dto.Amount, 2))
+            return Result.Failure<ExpenseDto>(new Error("SplitExpense.InvalidAmount", "Amount must be at most 1,000,000,000 with up to 2 decimal places."));
+        if (dto.Payers.Any(p => p.AmountPaid <= 0 || p.AmountPaid != Math.Round(p.AmountPaid, 2)) ||
+            dto.Payers.Select(p => p.MemberId).Distinct().Count() != dto.Payers.Count)
+            return Result.Failure<ExpenseDto>(new Error("SplitExpense.InvalidPayers", "Each payer must appear once with a positive amount (max 2 decimals)."));
+
         var payersSum = dto.Payers.Sum(p => p.AmountPaid);
-        if (Math.Abs(payersSum - dto.Amount) > 0.01m)
+        if (payersSum != dto.Amount) // amounts are validated to 2 decimals above, so exact equality is right
             return Result.Failure<ExpenseDto>(new Error(
                 "SplitExpense.PayersMismatch",
                 $"Payers add up to {payersSum:F2}, but the expense total is {dto.Amount:F2} — they need to match."));
@@ -1044,6 +1137,8 @@ public class SplitService : ISplitService
         var hasAccess = group.CreatedByUserId == userId || group.Members.Any(m => m.LinkedUserId == userId);
         if (!hasAccess)
             return Result.Failure<DeleteExpenseResultDto>(new Error("SplitGroup.Forbidden", "You don't have access to this group."));
+        if (!CanChangeExpense(group, expense, userId))
+            return Result.Failure<DeleteExpenseResultDto>(new Error("SplitGroup.Forbidden", "Only a group admin or the person who added this expense can delete it."));
 
         if (group.Status != SplitGroupStatus.Active)
             return Result.Failure<DeleteExpenseResultDto>(new Error(
@@ -1084,8 +1179,8 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<bool>(new Error("SplitGroup.NotFound", "Group not found."));
 
-        if (group.CreatedByUserId != userId)
-            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can lock the group."));
+        if (!await IsAdminAsync(group, userId))
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only a group admin can lock the group."));
 
         if (group.Status != SplitGroupStatus.Active)
             return Result.Failure<bool>(new Error("SplitGroup.WrongState", "Only an active group can be locked."));
@@ -1106,9 +1201,11 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<bool>(new Error("SplitGroup.NotFound", "Group not found."));
 
-        if (group.CreatedByUserId != userId)
-            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can unlock the group."));
+        if (!await IsAdminAsync(group, userId))
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only a group admin can unlock the group."));
 
+        if (group.Status != SplitGroupStatus.Locked)
+            return Result.Failure<bool>(new Error("SplitGroup.WrongState", "Only a locked group can be unlocked."));
         group.Status = SplitGroupStatus.Active;
         _context.SplitGroups.Update(group);
         await _context.SaveChangesAsync();
@@ -1125,8 +1222,8 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<bool>(new Error("SplitGroup.NotFound", "Group not found."));
 
-        if (group.CreatedByUserId != userId)
-            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can close the group."));
+        if (!await IsAdminAsync(group, userId))
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only a group admin can close the group."));
 
         group.Status = SplitGroupStatus.Archived;
         _context.SplitGroups.Update(group);
@@ -1147,8 +1244,8 @@ public class SplitService : ISplitService
         if (group == null)
             return Result.Failure<GroupDto>(new Error("SplitGroup.NotFound", "Group not found."));
 
-        if (group.CreatedByUserId != userId)
-            return Result.Failure<GroupDto>(new Error("SplitGroup.Forbidden", "Only the group creator can edit trip details."));
+        if (!await IsAdminAsync(group, userId))
+            return Result.Failure<GroupDto>(new Error("SplitGroup.Forbidden", "Only a group admin can edit trip details."));
 
         if (string.IsNullOrWhiteSpace(dto.Name))
             return Result.Failure<GroupDto>(new Error("SplitGroup.InvalidName", "Trip name cannot be empty."));
@@ -1172,9 +1269,13 @@ public class SplitService : ISplitService
         if (member == null)
             return Result.Failure<MemberDto>(new Error("SplitMember.NotFound", "Member not found."));
 
-        var isGroupCreator = member.SplitGroup.CreatedByUserId == userId;
+        var isGroupCreator = IsAdminLoaded(member.SplitGroup, userId);
         var isSelf = member.LinkedUserId == userId;
         var isUnlinked = member.LinkedUserId == null;
+        // Caller must belong to THIS group (creator or active linked member) — ids are sequential and guessable.
+        var callerInGroup = isGroupCreator || member.SplitGroup.Members.Any(m => m.LinkedUserId == userId && m.LeftAt == null);
+        if (!callerInGroup)
+            return Result.Failure<MemberDto>(new Error("SplitGroup.Forbidden", "Only group members can rename members."));
 
         if (!isGroupCreator && !isSelf && !isUnlinked)
             return Result.Failure<MemberDto>(new Error("SplitGroup.Forbidden", "You can only rename yourself or unlinked members unless you are the admin."));
@@ -1198,6 +1299,34 @@ public class SplitService : ISplitService
     /// member is fully settled up, like Splitwise. The member's row is kept so old
     /// expenses still show their name.
     /// </summary>
+    /// <summary>
+    /// Admin only: detach a signed-in account from a member WITHOUT touching the member's expenses or balance.
+    /// The row becomes a name-only member again and can be claimed by the right person. This is the recovery
+    /// path when someone claimed the wrong person from a shared invite link.
+    /// </summary>
+    public async Task<Result<bool>> UnlinkMemberAsync(string userId, int memberId)
+    {
+        var member = await _context.SplitGroupMembers
+            .Include(m => m.SplitGroup)
+            .FirstOrDefaultAsync(m => m.Id == memberId);
+        if (member == null || member.SplitGroup.CreatedByUserId != userId)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group admin can do this."));
+        if (member.LinkedUserId == null || member.LeftAt != null)
+            return Result.Failure<bool>(new Error("SplitMember.NotLinked", "This member isn't linked to an account."));
+        if (member.LinkedUserId == userId)
+            return Result.Failure<bool>(new Error("SplitMember.IsAdmin", "You can't unlink yourself."));
+
+        var detachedUserId = member.LinkedUserId;
+        member.LinkedUserId = null;
+        _context.SplitGroupMembers.Update(member);
+        await _context.SaveChangesAsync();
+
+        await _notifier.RemoveUserFromGroupAsync(member.SplitGroupId, detachedUserId);
+        await _notifier.NotifyGroupUpdatedAsync(member.SplitGroupId, $"🔗 {member.Name} was unlinked from their account.");
+        await RecordActivityAsync(member.SplitGroupId, userId, "MemberUnlinked", $"unlinked the account from {member.Name}.");
+        return Result.Success(true);
+    }
+
     public async Task<Result<bool>> RemoveMemberAsync(string userId, int memberId)
     {
         var groupId = await _context.SplitGroupMembers
@@ -1215,10 +1344,12 @@ public class SplitService : ISplitService
         if (member == null)
             return Result.Failure<bool>(new Error("SplitMember.NotFound", "Member not found."));
 
-        var isAdmin = group.CreatedByUserId == userId;
+        var isAdmin = IsAdminLoaded(group, userId);
         var isSelf = member.LinkedUserId != null && member.LinkedUserId == userId;
         if (!isAdmin && !isSelf)
-            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can remove other members."));
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only a group admin can remove other members."));
+        if (member.IsAdmin && !isSelf && group.CreatedByUserId != userId)
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can remove another admin."));
 
         if (member.LinkedUserId != null && member.LinkedUserId == group.CreatedByUserId)
             return Result.Failure<bool>(new Error("SplitMember.CreatorCannotLeave", "The group creator can't leave — delete the group instead."));
@@ -1253,11 +1384,13 @@ public class SplitService : ISplitService
             s.DeletedAt = DateTime.UtcNow;
         }
 
+        var removedUserId = member.LinkedUserId;
         member.LeftAt = DateTime.UtcNow;
         member.LinkedUserId = null; // loses access; the same person can rejoin via an invite later
         _context.SplitGroupMembers.Update(member);
         await _context.SaveChangesAsync();
 
+        if (removedUserId != null) await _notifier.RemoveUserFromGroupAsync(group.Id, removedUserId);
         await _notifier.NotifyGroupUpdatedAsync(group.Id,
             isSelf ? $"👋 {member.Name} left the group." : $"👋 {member.Name} was removed from the group.");
         await RecordActivityAsync(group.Id, userId, isSelf ? "MemberLeft" : "MemberRemoved",
@@ -1397,6 +1530,16 @@ public class SplitService : ISplitService
     /// Points an expense at a newly uploaded receipt (or clears it with null). Returns the
     /// previous file path so the caller can delete the old file from disk.
     /// </summary>
+    /// <summary>Authorization check that runs BEFORE any file is written to disk.</summary>
+    public async Task<Result<bool>> CanAttachReceiptAsync(string userId, int expenseId)
+    {
+        var ok = await _context.SplitExpenses.AnyAsync(e => e.Id == expenseId &&
+            e.SplitGroup.Status != SplitGroupStatus.Archived &&
+            (e.SplitGroup.CreatedByUserId == userId || e.SplitGroup.Members.Any(m => m.LinkedUserId == userId && m.LeftAt == null)));
+        // Same answer whether the expense doesn't exist or isn't yours: no probing of ids.
+        return ok ? Result.Success(true) : Result.Failure<bool>(new Error("SplitExpense.NotFound", "Expense not found."));
+    }
+
     public async Task<Result<ReceiptChangeDto>> SetReceiptAsync(string userId, int expenseId, string? receiptPath)
     {
         var expense = await _context.SplitExpenses
@@ -1598,8 +1741,8 @@ public class SplitService : ISplitService
             .FirstOrDefaultAsync(g => g.Id == dto.GroupId);
         if (group == null)
             return Result.Failure<GroupDto>(new Error("SplitGroup.NotFound", "Group not found."));
-        if (group.CreatedByUserId != userId)
-            return Result.Failure<GroupDto>(new Error("SplitGroup.Forbidden", "Only the group creator can change group settings."));
+        if (!await IsAdminAsync(group, userId))
+            return Result.Failure<GroupDto>(new Error("SplitGroup.Forbidden", "Only a group admin can change group settings."));
         if (group.Status == SplitGroupStatus.Archived)
             return Result.Failure<GroupDto>(new Error("SplitGroup.Closed", "This group is closed."));
 
@@ -1610,15 +1753,23 @@ public class SplitService : ISplitService
         if (dto.StartDate.HasValue && dto.EndDate.HasValue && dto.EndDate.Value.Date < dto.StartDate.Value.Date)
             return Result.Failure<GroupDto>(new Error("SplitGroup.InvalidDates", "The end date can't be before the start date."));
 
+        // Relabelling the currency doesn't convert any amount, so it's only allowed while the group has no money in it.
+        if (!string.Equals(group.Currency, currency, StringComparison.OrdinalIgnoreCase) &&
+            (group.Expenses.Any(e => !e.IsDeleted) || await _context.SplitSettlements.AnyAsync(x => x.SplitGroupId == group.Id)))
+            return Result.Failure<GroupDto>(new Error("SplitGroup.CurrencyLocked",
+                "The currency can't be changed once expenses or payments exist — amounts aren't converted. Create a new group in that currency instead."));
+
         var changes = new List<string>();
         if (group.Currency != currency) changes.Add($"currency {group.Currency} → {currency}");
         if (group.SimplifyDebts != dto.SimplifyDebts) changes.Add(dto.SimplifyDebts ? "simplify debts on" : "simplify debts off");
+        if (group.AutoRemind != dto.AutoRemind) changes.Add(dto.AutoRemind ? "weekly reminders on" : "weekly reminders off");
         var start = dto.StartDate.HasValue ? EnsureUtc(dto.StartDate.Value.Date) : (DateTime?)null;
         var end = dto.EndDate.HasValue ? EnsureUtc(dto.EndDate.Value.Date) : (DateTime?)null;
         if (group.StartDate != start || group.EndDate != end) changes.Add("trip dates");
 
         group.Currency = currency;
         group.SimplifyDebts = dto.SimplifyDebts;
+        group.AutoRemind = dto.AutoRemind;
         group.StartDate = start;
         group.EndDate = end;
         await _context.SaveChangesAsync();
@@ -1646,8 +1797,8 @@ public class SplitService : ISplitService
             return Result.Failure<bool>(new Error("SplitMember.NotFound", "Both members must be in the same group."));
 
         var group = await _context.SplitGroups.FirstAsync(g => g.Id == source.SplitGroupId);
-        if (group.CreatedByUserId != userId)
-            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only the group creator can merge members."));
+        if (!await IsAdminAsync(group, userId))
+            return Result.Failure<bool>(new Error("SplitGroup.Forbidden", "Only a group admin can merge members."));
         if (group.Status == SplitGroupStatus.Archived)
             return Result.Failure<bool>(new Error("SplitGroup.Closed", "This group is closed."));
         if (source.LinkedUserId != null)
@@ -1750,6 +1901,7 @@ public class SplitService : ISplitService
             .Include(g => g.Expenses).ThenInclude(e => e.Payers)
             .Include(g => g.Expenses).ThenInclude(e => e.Participants)
             .Include(g => g.Settlements)
+            .AsSplitQuery() // separate queries per collection instead of one huge cartesian join
             .Where(g => g.Status != SplitGroupStatus.Archived && g.Members.Any(m => m.LinkedUserId == userId && m.LeftAt == null))
             .ToListAsync();
 
@@ -1765,6 +1917,22 @@ public class SplitService : ISplitService
     /// completed straight away; recorded by the one paying it waits for the receiver to confirm.
     /// </summary>
     public async Task<Result<SettleWithPersonResultDto>> SettleWithPersonAsync(string userId, SettleWithPersonDto dto)
+    {
+        // All-or-nothing: one transaction, serialised per user, so a failure half-way (or a double tap) can't
+        // leave some groups settled and others not.
+        var db = _context as DbContext;
+        if (db != null && db.Database.ProviderName?.Contains("Npgsql") == true && db.Database.CurrentTransaction == null)
+        {
+            await using var tx = await db.Database.BeginTransactionAsync();
+            await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtext({"split-settle-person:" + userId}))");
+            var inner = await SettleWithPersonCoreAsync(userId, dto);
+            if (inner.IsSuccess) await tx.CommitAsync(); else await tx.RollbackAsync();
+            return inner;
+        }
+        return await SettleWithPersonCoreAsync(userId, dto);
+    }
+
+    private async Task<Result<SettleWithPersonResultDto>> SettleWithPersonCoreAsync(string userId, SettleWithPersonDto dto)
     {
         var groups = await LoadMyGroupsForDashboardAsync(userId);
         var debts = SplitDashboardBuilder.DebtsWith(userId, groups, dto.PersonKey, dto.Currency);
@@ -1824,6 +1992,22 @@ public class SplitService : ISplitService
     }
 
     public async Task<Result<ImportToLedgerResultDto>> ImportToLedgerAsync(string userId, ImportToLedgerDto dto)
+    {
+        // Serialised per user + group: two parallel imports (double tap, two devices) used to both see the same
+        // un-imported shares and create every transaction twice. The second now waits, then finds nothing left.
+        var db = _context as DbContext;
+        if (db != null && db.Database.ProviderName?.Contains("Npgsql") == true && db.Database.CurrentTransaction == null)
+        {
+            await using var tx = await db.Database.BeginTransactionAsync();
+            await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtext({"split-import:" + userId + ":" + dto.GroupId}))");
+            var inner = await ImportToLedgerCoreAsync(userId, dto);
+            if (inner.IsSuccess) await tx.CommitAsync(); else await tx.RollbackAsync();
+            return inner;
+        }
+        return await ImportToLedgerCoreAsync(userId, dto);
+    }
+
+    private async Task<Result<ImportToLedgerResultDto>> ImportToLedgerCoreAsync(string userId, ImportToLedgerDto dto)
     {
         var group = await _context.SplitGroups
             .Include(g => g.Members)
@@ -1915,6 +2099,94 @@ public class SplitService : ISplitService
 
     // ── Private helpers ─────────────────────────────────────────────────────────
 
+    /// <summary>The creator, or a linked member the creator promoted. Needs group.Members loaded.</summary>
+    private static bool IsAdminLoaded(SplitGroup group, string userId)
+        => group.CreatedByUserId == userId ||
+           group.Members.Any(m => m.LinkedUserId == userId && m.IsAdmin && m.LeftAt == null);
+
+    /// <summary>A linked member an admin set to view-only. Admins and the creator are never guests.</summary>
+    private static bool IsGuestLoaded(SplitGroup group, string userId)
+        => group.CreatedByUserId != userId &&
+           group.Members.Any(m => m.LinkedUserId == userId && m.LeftAt == null && m.IsGuest && !m.IsAdmin);
+
+    /// <summary>Admins can change any expense; a member only the ones they added (older expenses with no recorded author stay open to members). Guests never.</summary>
+    private static bool CanChangeExpense(SplitGroup group, SplitExpense expense, string userId)
+    {
+        if (IsAdminLoaded(group, userId)) return true;
+        if (IsGuestLoaded(group, userId)) return false;
+        return expense.AddedByUserId == null || expense.AddedByUserId == userId;
+    }
+
+    /// <summary>Admin only: make a member view-only (guest) or a full member again.</summary>
+    public async Task<Result<MemberDto>> SetMemberGuestAsync(string userId, int memberId, bool isGuest)
+    {
+        var member = await _context.SplitGroupMembers.Include(m => m.SplitGroup).ThenInclude(g => g.Members)
+            .FirstOrDefaultAsync(m => m.Id == memberId);
+        if (member == null)
+            return Result.Failure<MemberDto>(new Error("SplitMember.NotFound", "Member not found."));
+        var group = member.SplitGroup;
+        if (!IsAdminLoaded(group, userId))
+            return Result.Failure<MemberDto>(new Error("SplitGroup.Forbidden", "Only a group admin can change who is a guest."));
+        if (group.Status == SplitGroupStatus.Archived)
+            return Result.Failure<MemberDto>(new Error("SplitGroup.Closed", "This group is closed."));
+        if (member.LinkedUserId == null || member.LeftAt != null)
+            return Result.Failure<MemberDto>(new Error("SplitMember.NotLinked", "Only members with a FinPlanner account can be set as guests."));
+        if (member.LinkedUserId == group.CreatedByUserId || member.IsAdmin)
+            return Result.Failure<MemberDto>(new Error("SplitMember.Admin", "Admins can't be guests. Remove their admin role first."));
+
+        if (member.IsGuest != isGuest)
+        {
+            member.IsGuest = isGuest;
+            await _context.SaveChangesAsync();
+            await NotifyGroupUpdatedAsync(group.Id, isGuest ? $"{member.Name} is now a guest (view only)." : $"{member.Name} is a full member again.");
+            await RecordActivityAsync(group.Id, userId, "GuestChanged",
+                isGuest ? $"made {member.Name} a guest (view only)." : $"made {member.Name} a full member.");
+        }
+        return Result.Success(new MemberDto
+        {
+            Id = member.Id, Name = member.Name, LinkedUserId = member.LinkedUserId, UpiId = member.UpiId,
+            LeftAt = member.LeftAt, IsAdmin = member.IsAdmin, IsGuest = member.IsGuest
+        });
+    }
+
+    /// <summary>Same as <see cref="IsAdminLoaded"/> but works when the members aren't loaded.</summary>
+    private async Task<bool> IsAdminAsync(SplitGroup group, string userId)
+        => group.CreatedByUserId == userId ||
+           await _context.SplitGroupMembers.AnyAsync(m =>
+               m.SplitGroupId == group.Id && m.LinkedUserId == userId && m.IsAdmin && m.LeftAt == null);
+
+    /// <summary>Creator only: promote a member with a FinPlanner account to admin, or take it back.</summary>
+    public async Task<Result<MemberDto>> SetMemberAdminAsync(string userId, int memberId, bool isAdmin)
+    {
+        var member = await _context.SplitGroupMembers.Include(m => m.SplitGroup).FirstOrDefaultAsync(m => m.Id == memberId);
+        if (member == null)
+            return Result.Failure<MemberDto>(new Error("SplitMember.NotFound", "Member not found."));
+        if (member.SplitGroup.CreatedByUserId != userId)
+            return Result.Failure<MemberDto>(new Error("SplitGroup.Forbidden", "Only the group creator can change who is an admin."));
+        if (member.SplitGroup.Status == SplitGroupStatus.Archived)
+            return Result.Failure<MemberDto>(new Error("SplitGroup.Closed", "This group is closed."));
+        if (member.LinkedUserId == null || member.LeftAt != null)
+            return Result.Failure<MemberDto>(new Error("SplitMember.NotLinked", "Only members with a FinPlanner account can be admins."));
+        if (member.LinkedUserId == member.SplitGroup.CreatedByUserId)
+            return Result.Failure<MemberDto>(new Error("SplitMember.Creator", "The creator is always an admin."));
+
+        if (member.IsAdmin != isAdmin)
+        {
+            member.IsAdmin = isAdmin;
+            if (isAdmin) member.IsGuest = false;
+            await _context.SaveChangesAsync();
+            await NotifyGroupUpdatedAsync(member.SplitGroupId, isAdmin ? $"🛡️ {member.Name} is now an admin." : $"{member.Name} is no longer an admin.");
+            await RecordActivityAsync(member.SplitGroupId, userId, "AdminChanged",
+                isAdmin ? $"made {member.Name} an admin." : $"removed {member.Name} as an admin.");
+        }
+
+        return Result.Success(new MemberDto
+        {
+            Id = member.Id, Name = member.Name, LinkedUserId = member.LinkedUserId, UpiId = member.UpiId,
+            LeftAt = member.LeftAt, IsAdmin = member.IsAdmin
+        });
+    }
+
     /// <summary>
     /// Finds the group member record linked to this authenticated user,
     /// if any. Null if the user isn't linked to any member in this
@@ -1931,6 +2203,7 @@ public class SplitService : ISplitService
             .Include(g => g.Expenses).ThenInclude(e => e.Payers)
             .Include(g => g.Expenses).ThenInclude(e => e.Participants)
             .Include(g => g.Settlements)
+            .AsSplitQuery()
             .FirstOrDefaultAsync(g => g.Id == groupId);
 
         if (group == null) return null;
@@ -2184,11 +2457,12 @@ public class SplitService : ISplitService
         Currency = g.Currency,
         SimplifyDebts = g.SimplifyDebts,
         IsDirect = g.IsDirect,
+        AutoRemind = g.AutoRemind,
         StartDate = g.StartDate,
         EndDate = g.EndDate,
         Status = g.Status,
         ShareToken = g.ShareToken,
-        Members = g.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, LinkedUserId = m.LinkedUserId, UpiId = m.UpiId, LeftAt = m.LeftAt }).ToList(),
+        Members = g.Members.Select(m => new MemberDto { Id = m.Id, Name = m.Name, LinkedUserId = m.LinkedUserId, UpiId = m.UpiId, LeftAt = m.LeftAt, IsAdmin = m.IsAdmin, IsGuest = m.IsGuest }).ToList(),
         TotalSpend = g.Expenses.Sum(e => e.Amount)
     };
 

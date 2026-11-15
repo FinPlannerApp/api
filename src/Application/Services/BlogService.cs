@@ -38,6 +38,8 @@ public class BlogService
             query = query.Where(p => p.Title.ToLower().Contains(tagTerm) || p.Slug.ToLower().Contains(tagTerm));
         }
 
+        pageNumber = Math.Max(1, pageNumber);
+        pageSize = Math.Clamp(pageSize, 1, 50);
         var totalCount = await query.CountAsync();
         var items = await query
             .OrderByDescending(p => p.PublishedAt ?? p.CreatedAt)
@@ -74,7 +76,7 @@ public class BlogService
 
     public async Task<Result<BlogPostDto>> GetBySlugAsync(string slug)
     {
-        var post = await _context.BlogPosts.FirstOrDefaultAsync(p => p.Slug == slug && !p.IsDeleted);
+        var post = await _context.BlogPosts.FirstOrDefaultAsync(p => p.Slug == slug && p.IsPublished && !p.IsDeleted);
         if (post == null)
             return Result.Failure<BlogPostDto>(new Error("BlogPost.NotFound", "Post not found."));
 
@@ -92,7 +94,7 @@ public class BlogService
 
     public async Task<List<BlogCommentDto>> GetCommentsAsync(string slug)
     {
-        var post = await _context.BlogPosts.FirstOrDefaultAsync(p => p.Slug == slug);
+        var post = await _context.BlogPosts.FirstOrDefaultAsync(p => p.Slug == slug && p.IsPublished && !p.IsDeleted);
         if (post == null) return new List<BlogCommentDto>();
 
         var allComments = await _context.BlogPostComments
@@ -129,7 +131,7 @@ public class BlogService
 
     public async Task<Result<BlogCommentDto>> CreateCommentAsync(string userId, string userName, CreateBlogCommentDto dto)
     {
-        var post = await _context.BlogPosts.FirstOrDefaultAsync(p => p.Slug == dto.PostSlug);
+        var post = await _context.BlogPosts.FirstOrDefaultAsync(p => p.Slug == dto.PostSlug && p.IsPublished && !p.IsDeleted);
         if (post == null) return Result.Failure<BlogCommentDto>(new Error("BlogPost.NotFound", "Post not found."));
 
         var comment = new BlogPostComment

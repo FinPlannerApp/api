@@ -30,6 +30,14 @@ public class QueuedEmailService : IEmailService
         }
 
         _logger.LogWarning("Email queue is full. Sending directly to {To}.", mailRequest.To);
-        await _directEmailSender.SendEmailAsync(mailRequest);
+        try
+        {
+            await _directEmailSender.SendEmailAsync(mailRequest);
+        }
+        catch (Exception ex)
+        {
+            // Already logged by the sender. A mail outage must not turn a normal request into an error.
+            _logger.LogError(ex, "Direct send to {To} failed after the queue was full.", mailRequest.To);
+        }
     }
 }

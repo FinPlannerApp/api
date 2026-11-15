@@ -29,6 +29,8 @@ public class RecurringTransaction : BaseEntity
     
     public DateTime NextProcessDate { get; set; }
     public bool IsActive { get; set; } = true;
+    /// <summary>Set while the user has paused this (inactive but expected to come back). Null for cancelled/finished items.</summary>
+    public DateTime? PausedAt { get; set; }
     public DateTime? LastProcessedDate { get; set; }
 
     /// <summary>
@@ -50,6 +52,13 @@ public class RecurringTransaction : BaseEntity
     /// </summary>
     public int? LinkedLoanAccountId { get; set; }
     public Account? LinkedLoanAccount { get; set; }
+
+    /// <summary>
+    /// When set, this is a SIP / regular contribution: AccountId is the funding account and each occurrence
+    /// is a transfer into this investment account (never an expense).
+    /// </summary>
+    public int? LinkedInvestmentAccountId { get; set; }
+    public Account? LinkedInvestmentAccount { get; set; }
 
     public Subscription? Subscription { get; set; }
 }

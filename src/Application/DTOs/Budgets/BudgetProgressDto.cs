@@ -30,4 +30,26 @@ public class BudgetProgressDto
     /// doesn't have a meaningful negative answer.
     /// </summary>
     public decimal DailyAllowance { get; set; }
+
+    /// <summary>Alert level in effect for this budget: its own override, else the user's default (50–100).</summary>
+    public int AlertThresholdPercent { get; set; } = 80;
+    public bool HasThresholdOverride { get; set; }
+
+    /// <summary>Local calendar start/end of the period being measured (monthly budgets honour the user's month-start day).</summary>
+    public DateTime PeriodStart { get; set; }
+    public DateTime PeriodEnd { get; set; }
+    public int DaysTotal { get; set; }
+    public int DaysElapsed { get; set; }
+
+    /// <summary>Where a perfectly even spender would be today: DaysElapsed ÷ DaysTotal × 100.</summary>
+    public decimal ExpectedPercent => DaysTotal > 0 ? Math.Round((decimal)DaysElapsed / DaysTotal * 100, 1) : 0;
+
+    /// <summary>Spend by period end if the current daily pace continues.</summary>
+    public decimal ProjectedSpend => DaysElapsed > 0 ? Math.Round(SpentAmount / DaysElapsed * DaysTotal, 2) : SpentAmount;
+
+    /// <summary>safe, alert (≥ threshold), limit (≥ 100 %), over (&gt; 100 %).</summary>
+    public string Status => PercentageUsed > 100 ? "over"
+        : PercentageUsed >= 100 ? "limit"
+        : PercentageUsed >= AlertThresholdPercent ? "alert"
+        : "safe";
 }

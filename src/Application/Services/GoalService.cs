@@ -141,8 +141,43 @@ public class GoalService : IGoalService
             }
         }
 
+        var now = DateTime.UtcNow;
+        var achieved = g.IsAchieved || (g.TargetAmount > 0 && currentAmount >= g.TargetAmount);
+        decimal? expectedPercent = null;
+        string status;
+        if (achieved) status = "achieved";
+        else if (!g.TargetDate.HasValue) status = "no-date";
+        else if (g.TargetDate.Value < now) status = "overdue";
+        else
+        {
+            var totalDays = (g.TargetDate.Value - g.CreatedAt).TotalDays;
+            var elapsedDays = (now - g.CreatedAt).TotalDays;
+            if (totalDays > 0) expectedPercent = (decimal)Math.Clamp(elapsedDays / totalDays * 100, 0, 100);
+            status = expectedPercent is null ? "on-track"
+                   : progressPercent >= expectedPercent.Value - 5 ? "on-track"
+                   : progressPercent <= 0 ? "not-started" : "behind";
+        }
+
+        // At the pace so far, when would it finish? Needs some progress and some elapsed time.
+        DateTime? projected = null;
+        var elapsed = (now - g.CreatedAt).TotalDays;
+        if (!achieved && currentAmount > 0 && elapsed >= 1 && g.TargetAmount > 0)
+        {
+            var totalDaysNeeded = elapsed * (double)(g.TargetAmount / currentAmount);
+            if (totalDaysNeeded < 365 * 50) projected = g.CreatedAt.AddDays(totalDaysNeeded);
+        }
+
+        int[] milestones = { 25, 50, 75, 100 };
+        var reached = milestones.Count(m => progressPercent >= m);
+        int? next = achieved ? null : milestones.FirstOrDefault(m => progressPercent < m);
+
         return new GoalDto
         {
+            Status = status,
+            ExpectedPercent = expectedPercent is null ? null : Math.Round(expectedPercent.Value, 1),
+            ProjectedDate = projected,
+            NextMilestonePercent = next == 0 ? null : next,
+            MilestonesReached = reached,
             Id = g.Id,
             Name = g.Name,
             TargetAmount = g.TargetAmount,

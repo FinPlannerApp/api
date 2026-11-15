@@ -4,6 +4,7 @@ using Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using System.Security.Claims;
 
 namespace Presentation.Controllers;
@@ -11,6 +12,7 @@ namespace Presentation.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/issues/{issueId}/comments")]
+[EnableRateLimiting("api")]
 public class CommentsController : ControllerBase
 {
     private readonly CommentService _commentService;

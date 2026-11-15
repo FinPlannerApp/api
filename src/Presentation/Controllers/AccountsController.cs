@@ -76,6 +76,32 @@ public class AccountsController : BaseController
         return HandleResult(result);
     }
 
+    [HttpGet("investments-overview")]
+    public async Task<IActionResult> GetInvestmentsOverview()
+        => HandleResult(await _accountService.GetInvestmentOverviewAsync(UserId));
+
+    [HttpPost("investment-create")]
+    public async Task<IActionResult> CreateInvestment([FromBody] CreateInvestmentDto dto)
+        => HandleResult(await _accountService.CreateInvestmentAsync(UserId, dto));
+
+    [HttpPost("investments-refresh")]
+    public async Task<IActionResult> RefreshInvestmentPrices()
+        => HandleResult(await _accountService.RefreshInvestmentPricesAsync(UserId));
+
+    [HttpPost("investment-valuation")]
+    public async Task<IActionResult> SetInvestmentValuation([FromBody] SetInvestmentValuationDto dto)
+        => HandleResult(await _accountService.SetInvestmentValuationAsync(UserId, dto));
+
+    /// <summary>Savings interest that has accrued for finished periods but is not yet recorded, plus interest earned/paid totals.</summary>
+    [HttpGet("interest-overview")]
+    public async Task<IActionResult> GetInterestOverview()
+        => HandleResult(await _accountService.GetInterestOverviewAsync(UserId));
+
+    /// <summary>Records the interest the bank credited for one period (amount may be edited to match the bank).</summary>
+    [HttpPost("interest-post")]
+    public async Task<IActionResult> PostInterest([FromBody] PostInterestDto dto)
+        => HandleResult(await _accountService.PostInterestAsync(UserId, dto));
+
     [HttpPost("loan-payment")]
     public async Task<IActionResult> MakeLoanPayment([FromBody] MakeLoanPaymentDto dto)
     {

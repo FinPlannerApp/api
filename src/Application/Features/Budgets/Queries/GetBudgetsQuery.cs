@@ -55,7 +55,8 @@ public class GetBudgetsQueryHandler : IRequestHandler<GetBudgetsQuery, Result<Pa
                 Amount = b.Amount,
                 Period = b.Period,
                 StartDate = b.StartDate,
-                EndDate = b.EndDate
+                EndDate = b.EndDate,
+                AlertThresholdPercent = b.AlertThresholdPercent
             })
             .ToListAsync(cancellationToken);
 

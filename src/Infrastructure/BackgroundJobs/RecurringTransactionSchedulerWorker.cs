@@ -22,24 +22,36 @@ public class RecurringTransactionSchedulerWorker : BackgroundService
         // Frequency option is more frequent than Daily), and this
         // records something that already happened financially, not
         // something time-sensitive being triggered live.
+        // Catch-up pass shortly after every start: a deploy/restart/sleep around 01:00 UTC must not delay bills
+        // by a day. Safe to repeat — the job only touches items that are due and takes a per-item lock.
+        try { await Task.Delay(TimeSpan.FromSeconds(45), stoppingToken); }
+        catch (OperationCanceledException) { return; }
+        await RunOnceAsync();
+
         while (!stoppingToken.IsCancellationRequested)
         {
             var now = DateTime.UtcNow;
             var nextRun = now.Date.AddDays(now.Hour >= 1 ? 1 : 0).AddHours(1);
             var delay = nextRun - now;
 
-            await Task.Delay(delay, stoppingToken);
+            try { await Task.Delay(delay, stoppingToken); }
+            catch (OperationCanceledException) { return; }
 
-            try
-            {
-                using var scope = _scopeFactory.CreateScope();
-                var job = scope.ServiceProvider.GetRequiredService<RecurringTransactionJob>();
-                await job.ProcessRecurringTransactionsAsync();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Recurring transaction processing failed.");
-            }
+            await RunOnceAsync();
+        }
+    }
+
+    private async Task RunOnceAsync()
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var job = scope.ServiceProvider.GetRequiredService<RecurringTransactionJob>();
+            await job.ProcessRecurringTransactionsAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Recurring transaction processing failed.");
         }
     }
 }

@@ -3,6 +3,7 @@ using Application.Services;
 using Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
@@ -17,6 +18,7 @@ public class CreateRelationDto
 [Authorize]
 [ApiController]
 [Route("api/issues")]
+[EnableRateLimiting("api")]
 public class IssueRelationsController : ControllerBase
 {
     private readonly IssueRelationService _relationService;

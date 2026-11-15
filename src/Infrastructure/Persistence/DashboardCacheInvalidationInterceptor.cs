@@ -17,9 +17,10 @@ public sealed class DashboardCacheInvalidationInterceptor : SaveChangesIntercept
 {
     private static readonly HashSet<string> TrackedEntities = new(StringComparer.Ordinal)
     {
-        "Transaction", "Account", "CreditCardDetails", "LoanDetails",
+        "Transaction", "Account", "CreditCardDetails", "LoanDetails", "InvestmentDetails",
         "CreditCardPayment", "CreditCardBill", "RecurringTransaction",
-        "Budget", "Subscription", "PaymentAppWalletLedgerEntry"
+        "Budget", "Subscription", "PaymentAppWalletLedgerEntry",
+        "AccountCategory", "TransactionCategory", "Goal", "SavingsBucket"
     };
 
     // One pending set per DbContext instance; the interceptor itself is a singleton.
@@ -42,6 +43,18 @@ public sealed class DashboardCacheInvalidationInterceptor : SaveChangesIntercept
 
             var userId = entry.Properties
                 .FirstOrDefault(p => p.Metadata.Name == "UserId")?.CurrentValue as string;
+
+            // CreditCardDetails / LoanDetails carry no UserId of their own: use their account's owner.
+            if (string.IsNullOrEmpty(userId))
+            {
+                var accountIdProp = entry.Properties.FirstOrDefault(p => p.Metadata.Name == "AccountId");
+                if (accountIdProp?.CurrentValue is int accountId)
+                {
+                    userId = context.ChangeTracker.Entries<Domain.Entities.Account>()
+                        .FirstOrDefault(a => a.Entity.Id == accountId)?.Entity.UserId;
+                }
+            }
+
             if (!string.IsNullOrEmpty(userId))
                 users.Add(userId);
         }

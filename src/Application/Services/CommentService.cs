@@ -17,19 +17,22 @@ public class CommentService
     private readonly IEmailService _emailService;
     private readonly GamificationService _gamificationService;
     private readonly IssueActivityService _activityService;
+    private readonly IUserSettingsService _userSettings;
 
     public CommentService(
         IApplicationDbContext context,
         UserManager<ApplicationUser> userManager,
         IEmailService emailService,
         GamificationService gamificationService,
-        IssueActivityService activityService)
+        IssueActivityService activityService,
+        IUserSettingsService userSettings)
     {
         _context = context;
         _userManager = userManager;
         _emailService = emailService;
         _gamificationService = gamificationService;
         _activityService = activityService;
+        _userSettings = userSettings;
     }
 
     /// <summary>
@@ -78,10 +81,19 @@ public class CommentService
     {
         var commentType = Enum.TryParse<CommentType>(input.Type, true, out var ct) ? ct : CommentType.General;
 
+        var cleanContent = Application.Common.Helpers.HtmlSanitizer.Clean(input.Content, 5000);
+        if (string.IsNullOrWhiteSpace(System.Text.RegularExpressions.Regex.Replace(cleanContent, "<[^>]*>", "")))
+            throw new InvalidOperationException("A comment can't be empty.");
+        if (!await _context.Issues.AnyAsync(i => i.Id == issueId))
+            throw new InvalidOperationException("Issue not found.");
+        if (input.ParentCommentId.HasValue &&
+            !await _context.IssueComments.AnyAsync(c => c.Id == input.ParentCommentId && c.IssueId == issueId))
+            throw new InvalidOperationException("The comment you are replying to was not found on this issue.");
+
         var comment = new IssueComment
         {
             IssueId = issueId,
-            Content = input.Content,
+            Content = cleanContent,
             StructuredMetadata = input.StructuredMetadata,
             IsHelpful = false,
             CreatorUserId = userId,
@@ -102,7 +114,9 @@ public class CommentService
 
         // Notify issue creator about new comment
         var issue = await _context.Issues.FindAsync(issueId);
-        if (issue?.CreatorUserId != null && issue.CreatorUserId != userId)
+        // Email only if the issue's author has opted in (Settings → Notifications; off by default).
+        if (issue?.CreatorUserId != null && issue.CreatorUserId != userId
+            && (await _userSettings.GetNotificationSettingsAsync(issue.CreatorUserId)).IssueUpdateEmails)
         {
             var issueCreator = await _userManager.FindByIdAsync(issue.CreatorUserId);
             if (issueCreator != null && !string.IsNullOrEmpty(issueCreator.Email))
@@ -114,7 +128,7 @@ public class CommentService
                     {
                         To = issueCreator.Email,
                         Subject = $"[Feedback Hub] New comment on your issue #{issue.Id}",
-                        Body = $"Hello {issueCreator.Name},\n\n{commenterName} commented on your issue '{issue.Title}'.\n\nView details: /app/issues/{issue.Id}"
+                        Body = $"Hello {System.Net.WebUtility.HtmlEncode(issueCreator.Name)},<br><br>{System.Net.WebUtility.HtmlEncode(commenterName)} commented on your issue '{System.Net.WebUtility.HtmlEncode(issue.Title)}'.<br><br>View details: /app/issues/{issue.Id}"
                     });
                 }
                 catch { /* Email failures should not break comment flow */ }
@@ -151,7 +165,7 @@ public class CommentService
         if (comment.CreatorUserId != userId)
             return (false, "Only the comment author can edit this comment.", null, null);
 
-        comment.Content = content;
+        comment.Content = Application.Common.Helpers.HtmlSanitizer.Clean(content, 5000);
         await _context.SaveChangesAsync();
         return (true, "Comment updated.", comment.Content, comment.UpdatedAt);
     }
@@ -195,6 +209,7 @@ public class CommentService
     public async Task<(bool Success, string Message, int Score, int UserVote)> VoteCommentAsync(
         int commentId, int value, string userId)
     {
+        value = Math.Clamp(value, -1, 1); // never trust the client's vote weight
         var comment = await _context.IssueComments.FindAsync(commentId);
         if (comment == null)
             return (false, "Comment not found.", 0, 0);

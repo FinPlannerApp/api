@@ -40,5 +40,6 @@ public class Account : BaseEntity
     // user hasn't filled in details yet) has all three null.
     public CreditCardDetails? CreditCardDetails { get; set; }
     public LoanDetails? LoanDetails { get; set; }
+    public InvestmentDetails? InvestmentDetails { get; set; }
     public BankAccountDetails? BankAccountDetails { get; set; }
 }

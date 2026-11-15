@@ -47,10 +47,15 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<Transaction> Transactions { get; set; }
     public DbSet<CreditCardDetails> CreditCardDetails { get; set; }
     public DbSet<LoanDetails> LoanDetails { get; set; }
+    public DbSet<InvestmentDetails> InvestmentDetails { get; set; }
     public DbSet<BankAccountDetails> BankAccountDetails { get; set; }
     public DbSet<TransactionCategory> TransactionCategories { get; set; }
     public DbSet<Feedback> Feedbacks { get; set; }
     public DbSet<Budget> Budgets { get; set; }
+    public DbSet<UserModuleSetting> UserModuleSettings { get; set; }
+    public DbSet<TransactionRule> TransactionRules { get; set; }
+    public DbSet<ReminderLog> ReminderLogs { get; set; }
+    public DbSet<BudgetAlertEvent> BudgetAlertEvents { get; set; }
     public DbSet<RecurringTransaction> RecurringTransactions { get; set; }
     public DbSet<Subscription> Subscriptions { get; set; }
 
@@ -89,6 +94,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<Merchant> Merchants => Set<Merchant>();
     public DbSet<MerchantAlias> MerchantAliases => Set<MerchantAlias>();
     public DbSet<Goal> Goals => Set<Goal>();
+    public DbSet<InsurancePolicy> InsurancePolicies => Set<InsurancePolicy>();
+    public DbSet<Attachment> Attachments => Set<Attachment>();
     public DbSet<CreditCardBill> CreditCardBills => Set<CreditCardBill>();
     public DbSet<CreditCardPayment> CreditCardPayments => Set<CreditCardPayment>();
     public DbSet<CreditCardRewardPoints> CreditCardRewardPoints => Set<CreditCardRewardPoints>();
@@ -101,6 +108,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
     public DbSet<SplitSettlement> SplitSettlements => Set<SplitSettlement>();
     public DbSet<SplitGroupInvite> SplitGroupInvites => Set<SplitGroupInvite>();
     public DbSet<SplitActivity> SplitActivities => Set<SplitActivity>();
+    public DbSet<SplitRecurringExpense> SplitRecurringExpenses => Set<SplitRecurringExpense>();
     public DbSet<BlogPost> BlogPosts => Set<BlogPost>();
     public DbSet<BlogImage> BlogImages => Set<BlogImage>();
     public DbSet<BlogPostComment> BlogPostComments => Set<BlogPostComment>();
@@ -336,6 +344,18 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
                 .HasForeignKey<LoanDetails>(d => d.AccountId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
+        builder.Entity<InvestmentDetails>(e =>
+        {
+            e.ToTable("InvestmentDetails", "accounts");
+            e.HasIndex(d => d.AccountId).IsUnique();
+            e.Property(d => d.CurrentValue).HasColumnType("numeric(18,2)");
+            e.Property(d => d.Units).HasColumnType("numeric(18,4)");
+            e.Property(d => d.LastPrice).HasColumnType("numeric(18,4)");
+            e.HasOne(d => d.Account)
+                .WithOne(a => a.InvestmentDetails)
+                .HasForeignKey<InvestmentDetails>(d => d.AccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
         builder.Entity<BankAccountDetails>(e =>
         {
             e.ToTable("BankAccountDetails", "accounts");
@@ -423,6 +443,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<AccountCategory>().HasQueryFilter(c => !c.IsDeleted);
         builder.Entity<TransactionCategory>().HasQueryFilter(c => !c.IsDeleted);
         builder.Entity<Budget>().HasQueryFilter(b => !b.IsDeleted);
+        builder.Entity<UserModuleSetting>().HasQueryFilter(x => !x.IsDeleted);
+        builder.Entity<BudgetAlertEvent>().HasQueryFilter(x => !x.IsDeleted);
         builder.Entity<RecurringTransaction>().HasQueryFilter(rt => !rt.IsDeleted);
         builder.Entity<Subscription>().HasQueryFilter(s => !s.IsDeleted);
         builder.Entity<Issue>().HasQueryFilter(i => !i.IsDeleted);
@@ -433,8 +455,11 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<DecisionJournalEntry>().HasQueryFilter(d => !d.IsDeleted);
         builder.Entity<SavingsBucket>().HasQueryFilter(sb => !sb.IsDeleted);
         builder.Entity<Merchant>().HasQueryFilter(m => !m.IsDeleted);
+        builder.Entity<TransactionRule>().HasQueryFilter(r => !r.IsDeleted);
         builder.Entity<MerchantAlias>().HasQueryFilter(ma => !ma.IsDeleted);
         builder.Entity<Goal>().HasQueryFilter(g => !g.IsDeleted);
+        builder.Entity<InsurancePolicy>().HasQueryFilter(p => !p.IsDeleted);
+        builder.Entity<Attachment>().HasQueryFilter(a => !a.IsDeleted);
         builder.Entity<CreditCardBill>().HasQueryFilter(b => !b.IsDeleted);
         builder.Entity<CreditCardPayment>().HasQueryFilter(p => !p.IsDeleted);
         builder.Entity<SplitGroup>().HasQueryFilter(g => !g.IsDeleted);
@@ -445,6 +470,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<SplitSettlement>().HasQueryFilter(s => !s.IsDeleted);
         builder.Entity<SplitGroupInvite>().HasQueryFilter(i => !i.IsDeleted);
         builder.Entity<SplitActivity>().HasQueryFilter(a => !a.IsDeleted);
+        builder.Entity<SplitRecurringExpense>().HasQueryFilter(r => !r.IsDeleted);
 
         // --- SPLIT MODULE SCHEMA ---
         builder.Entity<SplitGroup>(e =>
@@ -506,6 +532,16 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
                 .HasForeignKey(a => a.SplitGroupId).OnDelete(DeleteBehavior.Cascade);
         });
 
+        builder.Entity<SplitRecurringExpense>(e =>
+        {
+            e.ToTable("SplitRecurringExpenses", "split");
+            e.Property(r => r.Amount).HasColumnType("numeric(18,2)");
+            e.HasIndex(r => new { r.IsActive, r.NextRunDate });
+            e.HasIndex(r => r.SplitGroupId);
+            e.HasOne(r => r.SplitGroup).WithMany()
+                .HasForeignKey(r => r.SplitGroupId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         builder.Entity<SplitGroupInvite>(e =>
         {
             e.ToTable("SplitGroupInvites", "split");
@@ -533,6 +569,41 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
 
         builder.Entity<Budget>()
             .HasIndex(b => new { b.UserId, b.TransactionCategoryId });
+
+        builder.Entity<ReminderLog>(e =>
+        {
+            e.ToTable("ReminderLogs");
+            e.Property(x => x.RefKey).HasMaxLength(60);
+            e.Property(x => x.DueDate).HasColumnType("date");
+            e.HasIndex(x => new { x.UserId, x.RefKey, x.DueDate }).IsUnique();
+        });
+
+        builder.Entity<TransactionRule>(e =>
+        {
+            e.ToTable("TransactionRules", "transactions");
+            e.Property(x => x.Name).HasMaxLength(80);
+            e.Property(x => x.MatchText).HasMaxLength(120);
+            e.Property(x => x.MinAmount).HasColumnType("numeric(18,2)");
+            e.Property(x => x.MaxAmount).HasColumnType("numeric(18,2)");
+            e.HasIndex(x => new { x.UserId, x.Priority });
+        });
+
+        builder.Entity<UserModuleSetting>(e =>
+        {
+            e.ToTable("UserModuleSettings");
+            e.Property(x => x.Module).HasMaxLength(40);
+            e.HasIndex(x => new { x.UserId, x.Module }).IsUnique();
+        });
+
+        builder.Entity<BudgetAlertEvent>(e =>
+        {
+            e.ToTable("BudgetAlertEvents");
+            e.Property(x => x.PercentUsed).HasColumnType("numeric(9,2)");
+            e.Property(x => x.SpentAmount).HasColumnType("numeric(18,2)");
+            e.Property(x => x.BudgetAmount).HasColumnType("numeric(18,2)");
+            e.Property(x => x.CategoryName).HasMaxLength(200);
+            e.HasIndex(x => new { x.UserId, x.CreatedAt });
+        });
         
         builder.Entity<Budget>()
             .ToTable(b => b.HasCheckConstraint("CK_Budget_Amount", "\"Amount\" > 0"));
@@ -558,6 +629,11 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
             e.HasOne(rt => rt.LinkedLoanAccount)
                 .WithMany()
                 .HasForeignKey(rt => rt.LinkedLoanAccountId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            e.HasOne(rt => rt.LinkedInvestmentAccount)
+                .WithMany()
+                .HasForeignKey(rt => rt.LinkedInvestmentAccountId)
                 .OnDelete(DeleteBehavior.SetNull);
 
             e.HasIndex(rt => new { rt.UserId, rt.NextProcessDate, rt.IsActive });
@@ -783,6 +859,27 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
                 .WithMany()
                 .HasForeignKey(g => g.SavingsBucketId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<Attachment>(e =>
+        {
+            e.ToTable("Attachments", "accounts");
+            e.HasIndex(a => new { a.EntityType, a.EntityId });
+            e.HasIndex(a => a.UserId);
+        });
+
+        builder.Entity<InsurancePolicy>(e =>
+        {
+            e.ToTable("InsurancePolicies", "accounts");
+            e.HasIndex(p => p.UserId);
+            e.HasOne<Account>().WithMany().HasForeignKey(p => p.PayFromAccountId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne<RecurringTransaction>().WithMany().HasForeignKey(p => p.RecurringTransactionId).OnDelete(DeleteBehavior.SetNull);
+            e.Property(p => p.SumAssured).HasColumnType("numeric(18,2)");
+            e.Property(p => p.Premium).HasColumnType("numeric(18,2)");
+            e.Property(p => p.StartDate).HasColumnType("date");
+            e.Property(p => p.NextDueDate).HasColumnType("date");
+            e.Property(p => p.ExpiryDate).HasColumnType("date");
+            e.Property(p => p.WaitingPeriodEnds).HasColumnType("date");
         });
 
         builder.Entity<CreditCardPayment>(e =>

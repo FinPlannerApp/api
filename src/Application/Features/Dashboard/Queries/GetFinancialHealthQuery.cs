@@ -13,10 +13,12 @@ public record GetFinancialHealthQuery(string UserId, int Month, int Year) : IReq
 public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealthQuery, Result<FinancialHealthDto>>
 {
     private readonly IApplicationDbContext _context;
+    private readonly IUserSettingsService _settings;
 
-    public GetFinancialHealthQueryHandler(IApplicationDbContext context)
+    public GetFinancialHealthQueryHandler(IApplicationDbContext context, IUserSettingsService settings)
     {
         _context = context;
+        _settings = settings;
     }
 
     public async Task<Result<FinancialHealthDto>> Handle(GetFinancialHealthQuery request, CancellationToken cancellationToken)
@@ -26,8 +28,14 @@ public class GetFinancialHealthQueryHandler : IRequestHandler<GetFinancialHealth
         // elsewhere this project, just never caught in this specific file
         // until now.
         var referenceDate = new DateTime(request.Year, request.Month, 1);
-        var (currentMonthStart, currentMonthEnd) = AppTimeZone.MonthBoundsUtc(referenceDate);
-        var (lastMonthStart, lastMonthEnd) = AppTimeZone.MonthBoundsUtc(referenceDate.AddMonths(-1));
+        // Follows the user's "month starts on day N" (1 = calendar month).
+        var startDay = (await _settings.GetGeneralAsync(request.UserId)).MonthStartDay;
+        (DateTime Start, DateTime End) Window(DateTime monthFirst) => startDay == 1
+            ? AppTimeZone.MonthBoundsUtc(monthFirst)
+            : AppTimeZone.MonthBoundsUtc(
+                new DateTime(monthFirst.Year, monthFirst.Month, startDay, 0, 0, 0, DateTimeKind.Unspecified).ToUtc(), startDay);
+        var (currentMonthStart, currentMonthEnd) = Window(referenceDate);
+        var (lastMonthStart, lastMonthEnd) = Window(referenceDate.AddMonths(-1));
 
         var accountIds = await _context.Accounts
             .Where(a => a.UserId == request.UserId)

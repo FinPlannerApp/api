@@ -15,6 +15,16 @@ public class GoalDto
     public decimal CurrentAmount { get; set; }
     public decimal ProgressPercent { get; set; }
     public decimal? RequiredMonthlySaving { get; set; } // null if no TargetDate set — there's nothing to pace against
+
+    /// <summary>achieved | no-date | overdue | on-track | behind | not-started</summary>
+    public string Status { get; set; } = "no-date";
+    /// <summary>Where straight-line progress from creation to the target date would be by today.</summary>
+    public decimal? ExpectedPercent { get; set; }
+    /// <summary>When the goal completes if the pace so far continues (null until there is progress to extrapolate).</summary>
+    public DateTime? ProjectedDate { get; set; }
+    /// <summary>Next of 25 / 50 / 75 / 100 still ahead, null once achieved.</summary>
+    public int? NextMilestonePercent { get; set; }
+    public int MilestonesReached { get; set; }
 }
 
 public class UpsertGoalDto

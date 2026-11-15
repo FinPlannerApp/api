@@ -5,6 +5,7 @@ using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Auth;
+using Application.DTOs.Budgets;
 using Application.DTOs.Transactions;
 using Domain.Entities;
 using Domain.Enums;
@@ -17,17 +18,20 @@ public class TransactionService : ITransactionService
     private readonly ICacheService _cache;
     private readonly ILogger<TransactionService> _logger;
     private readonly IEmailService _emailService;
+    private readonly IUserSettingsService _userSettings;
 
     public TransactionService(
         IApplicationDbContext context,
         ICacheService cache,
         ILogger<TransactionService> logger,
-        IEmailService emailService)
+        IEmailService emailService,
+        IUserSettingsService userSettings)
     {
         _context = context;
         _cache = cache;
         _logger = logger;
         _emailService = emailService;
+        _userSettings = userSettings;
     }
 
     public async Task<Result<PaginatedResult<TransactionDto>>> GetTransactionsAsync(string userId, int accountId, QueryParameters queryParams)
@@ -67,17 +71,52 @@ public class TransactionService : ITransactionService
             queryable = queryable.Where(t => t.Date >= utcMonthStart && t.Date <= utcMonthEnd);
         }
 
+        // Explicit date range (e.g. a credit-card statement cycle). Local calendar dates, inclusive;
+        // overrides month/year. Either end may be omitted for an open range.
+        if (queryParams.Filters.TryGetValue("from", out var fromStr) || queryParams.Filters.TryGetValue("to", out var toStr0))
+        {
+            DateTime fromLocal = default, toLocal = default;
+            var hasFrom = DateTime.TryParseExact(fromStr, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out fromLocal);
+            var hasTo = queryParams.Filters.TryGetValue("to", out var toStr) &&
+                DateTime.TryParseExact(toStr, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out toLocal);
+            if (hasFrom || hasTo)
+            {
+                // Replace the calendar-month window applied above.
+                queryable = _context.Transactions.Where(t => t.AccountId == accountId).AsQueryable();
+                if (hasFrom)
+                {
+                    var utcFrom = DateTime.SpecifyKind(fromLocal.Date, DateTimeKind.Unspecified).ToUtc();
+                    queryable = queryable.Where(t => t.Date >= utcFrom);
+                }
+                if (hasTo)
+                {
+                    var utcTo = DateTime.SpecifyKind(toLocal.Date.AddDays(1).AddTicks(-1), DateTimeKind.Unspecified).ToUtc();
+                    queryable = queryable.Where(t => t.Date <= utcTo);
+                }
+            }
+        }
+
         // Category Filter
         if (queryParams.Filters.TryGetValue("categoryName", out var categoryName) && !string.IsNullOrWhiteSpace(categoryName))
         {
             queryable = queryable.Where(t => t.TransactionCategory != null && t.TransactionCategory.Name == categoryName);
         }
 
+        if (queryParams.Filters.TryGetValue("tag", out var tagFilter) && !string.IsNullOrWhiteSpace(tagFilter))
+        {
+            var like = TransactionTags.Pattern(tagFilter);
+            queryable = queryable.Where(t => t.Tags != null && EF.Functions.Like(t.Tags, like));
+        }
+
         if (!string.IsNullOrWhiteSpace(queryParams.GlobalSearch))
         {
             var search = queryParams.GlobalSearch.Trim().ToLower();
             queryable = queryable.Where(t => t.Description.ToLower().Contains(search) ||
-                (t.TransactionCategory != null && t.TransactionCategory.Name.ToLower().Contains(search)));
+                (t.TransactionCategory != null && t.TransactionCategory.Name.ToLower().Contains(search)) ||
+                (t.Notes != null && t.Notes.ToLower().Contains(search)) ||
+                (t.Tags != null && t.Tags.Contains(search)));
         }
 
         if (queryParams.TransactionCategoryId.HasValue)
@@ -142,10 +181,24 @@ public class TransactionService : ITransactionService
             return Result.Failure<BulkInsertResponseDto>(new Error("Bulk.AlreadyProcessed",
                 "This batch was already saved. Refresh the transaction list to check before adding it again."));
 
-        using var dbTransaction = await ((DbContext)_context).Database.BeginTransactionAsync();
+        var bulkDb = (DbContext)_context;
+        using var dbTransaction = await bulkDb.Database.BeginTransactionAsync();
 
         try
         {
+            // Serialise identical submits (double click / retry / two tabs): the second one waits here, then
+            // sees the key written by the first and stops. The lock is released by commit/rollback.
+            if (bulkDb.Database.ProviderName?.Contains("Npgsql") == true && batchKey != null)
+            {
+                await bulkDb.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtext({batchKey}))");
+                if (await _cache.GetAsync<string>(batchKey) != null)
+                {
+                    await dbTransaction.RollbackAsync();
+                    return Result.Failure<BulkInsertResponseDto>(new Error("Bulk.AlreadyProcessed",
+                        "This batch was already saved. Refresh the transaction list to check before adding it again."));
+                }
+            }
+
             // Apply in date order (credits before debits on the same day) so the running-balance
             // check follows the timeline instead of the order the rows happen to be typed in.
             // Failure indexes still refer to the original row positions.
@@ -201,9 +254,12 @@ public class TransactionService : ITransactionService
             // ── FIX: only commit when EVERY row succeeded ─────────────────────
             if (response.FailedCount == 0)
             {
-                await dbTransaction.CommitAsync();
-                await _cache.InvalidateDashboardAsync(userId);
+                // Key is written BEFORE the commit while the advisory lock is still held, so a waiting duplicate
+                // can never slip between the commit and the key. Removed again if the commit itself fails.
                 if (batchKey != null) await _cache.SetAsync(batchKey, "done", TimeSpan.FromMinutes(30));
+                try { await dbTransaction.CommitAsync(); }
+                catch { if (batchKey != null) await _cache.RemoveAsync(batchKey); throw; }
+                await _cache.InvalidateDashboardAsync(userId);
             }
             else
             {
@@ -227,6 +283,23 @@ public class TransactionService : ITransactionService
         }
     }
 
+
+    /// <summary>True when an identical row was written within the user's duplicate-guard window (default 3 s) — a double click / retry.
+    /// Skipped inside explicit transactions (bulk), where identical rows are legitimate.</summary>
+    private async Task<bool> IsRapidDuplicateAsync(string userId, int accountId, decimal amount,
+        TransactionType type, DateTime date, string? description, bool transfer)
+    {
+        if (((DbContext)_context).Database.CurrentTransaction != null) return false;
+        var guardSeconds = (await _userSettings.GetTransactionSettingsAsync(userId)).DuplicateGuardSeconds; // user-tunable, default 3
+        if (guardSeconds <= 0) return false;
+        var since = DateTime.UtcNow.AddSeconds(-guardSeconds);
+        var d = date.EnsureUtc();
+        return await _context.Transactions.AnyAsync(t =>
+            t.UserId == userId && !t.IsDeleted && t.AccountId == accountId &&
+            t.Amount == amount && t.Type == type && t.Date == d &&
+            t.Description == description && t.CreatedAt >= since &&
+            (transfer ? t.TransferGroupId != null : t.TransferGroupId == null));
+    }
 
     public async Task<Result<TransactionDto>> UpsertTransactionAsync(string userId, int accountId, UpsertTransactionDto dto)
     {
@@ -267,6 +340,11 @@ public class TransactionService : ITransactionService
                     "Transaction.InvalidMerchant", "That merchant doesn't belong to you."));
         }
 
+        if (!(dto.Id.HasValue && dto.Id.Value > 0) &&
+            await IsRapidDuplicateAsync(userId, accountId, dto.Amount, dto.Type, dto.Date, dto.Description, false))
+            return Result.Failure<TransactionDto>(new Error("Transaction.DuplicateSubmit",
+                "That exact transaction was just saved. If you meant to add it twice, wait a few seconds and try again."));
+
         Transaction? transaction = null;
         decimal oldAmount = 0;
         TransactionType oldType = TransactionType.Expense;
@@ -292,10 +370,23 @@ public class TransactionService : ITransactionService
             transaction.Type = dto.Type;
             transaction.TransactionCategoryId = dto.TransactionCategoryId;
             transaction.MerchantId = dto.MerchantId;
+            transaction.Notes = TransactionTags.CleanNotes(dto.Notes);
+            transaction.Tags = TransactionTags.Pack(dto.Tags);
             _context.Transactions.Update(transaction);
         }
         else
         {
+            // Rules fill ONLY the fields left empty (category, merchant, tags) on a brand-new transaction.
+            if (!dto.TransactionCategoryId.HasValue || !dto.MerchantId.HasValue || (dto.Tags == null || dto.Tags.Count == 0))
+            {
+                var ruleHit = await TransactionRuleService.FindMatchAsync(_context, userId, dto.Description, dto.Amount, dto.Type);
+                if (ruleHit != null)
+                {
+                    if (!dto.TransactionCategoryId.HasValue) dto.TransactionCategoryId = ruleHit.TransactionCategoryId;
+                    if (!dto.MerchantId.HasValue) dto.MerchantId = ruleHit.MerchantId;
+                    if (dto.Tags == null || dto.Tags.Count == 0) dto.Tags = TransactionTags.Unpack(ruleHit.Tags);
+                }
+            }
             transaction = new Transaction
             {
                 Description = dto.Description,
@@ -304,8 +395,14 @@ public class TransactionService : ITransactionService
                 Type = dto.Type,
                 TransactionCategoryId = dto.TransactionCategoryId,
                 MerchantId = dto.MerchantId,
+                Notes = TransactionTags.CleanNotes(dto.Notes),
+                Tags = TransactionTags.Pack(dto.Tags),
                 AccountId = accountId,
-                UserId = userId
+                UserId = userId,
+                RecurringTransactionId = dto.RecurringTransactionId,
+                RecurringOccurrenceDate = dto.RecurringOccurrenceDate?.EnsureUtc(),
+                ImportRef = dto.ImportRef,
+                ReconciledAt = dto.ReconciledAt?.EnsureUtc()
             };
             _context.Transactions.Add(transaction);
         }
@@ -331,11 +428,12 @@ public class TransactionService : ITransactionService
 
         // Only check for NEW expense transactions — see design notes above
         // for why edits are deliberately out of scope for this check.
+        List<BudgetAlertDto>? budgetAlerts = null;
         if (!dto.Id.HasValue && transaction.Type == TransactionType.Expense)
         {
             try
             {
-                await CheckAndSendOverspendAlertAsync(userId, transaction);
+                budgetAlerts = await CheckBudgetAlertsAsync(userId, transaction);
             }
             catch (Exception ex)
             {
@@ -351,6 +449,7 @@ public class TransactionService : ITransactionService
             .FirstAsync(t => t.Id == transaction.Id);
 
         var resultDto = MapToDto(resultTransactionWithCategory);
+        if (budgetAlerts is { Count: > 0 }) resultDto.BudgetAlerts = budgetAlerts;
         await _cache.InvalidateDashboardAsync(userId); // invalidates summary, category, insights
 
         return Result.Success(resultDto);
@@ -408,15 +507,81 @@ public class TransactionService : ITransactionService
             .Where(t => relatedTransactionIds.Contains(t.Id) && !t.IsDeleted)
             .ToListAsync();
 
-        foreach (var tx in allTxsToDelete)
+        // 3a. Loan payment rollback: a payment is stored as a principal pair
+        // (linked by TransferGroupId) PLUS a separate LoanInterest expense on
+        // the paying account with no link. Deleting the principal pair alone
+        // used to leave the interest expense behind and the loan's next EMI
+        // date advanced. Find the matching interest row (same paying
+        // account, same instant, "Interest — <loan>") and remove it too, and
+        // step NextEmiDueDate back one month per payment removed.
+        var loanLegs = allTxsToDelete
+            .Where(t => t.Kind == TransactionKind.LoanPrincipal && t.Type == TransactionType.Income)
+            .ToList();
+        foreach (var leg in loanLegs)
         {
-            var acc = await _context.Accounts.FindAsync(tx.AccountId);
-            if (acc != null)
+            var loanAcc = await _context.Accounts
+                .Include(a => a.LoanDetails)
+                .FirstOrDefaultAsync(a => a.Id == leg.AccountId);
+            var payerLeg = allTxsToDelete.FirstOrDefault(t =>
+                t.TransferGroupId == leg.TransferGroupId && t.Id != leg.Id);
+            if (loanAcc == null || payerLeg == null) continue;
+
+            var interestDesc = $"Interest — {loanAcc.Name}";
+            // Payments made since V60 carry a PaymentGroupId, so the interest row is found exactly.
+            // Older payments have none: fall back to matching on account + instant + description.
+            var interestTx = leg.PaymentGroupId.HasValue
+                ? await _context.Transactions.FirstOrDefaultAsync(t =>
+                    t.UserId == userId && !t.IsDeleted &&
+                    t.Kind == TransactionKind.LoanInterest &&
+                    t.PaymentGroupId == leg.PaymentGroupId &&
+                    !relatedTransactionIds.Contains(t.Id))
+                : await _context.Transactions.FirstOrDefaultAsync(t =>
+                    t.UserId == userId && !t.IsDeleted &&
+                    t.Kind == TransactionKind.LoanInterest &&
+                    t.AccountId == payerLeg.AccountId &&
+                    t.Date == leg.Date &&
+                    t.Description == interestDesc &&
+                    !relatedTransactionIds.Contains(t.Id));
+            if (interestTx != null)
             {
-                acc.Balance += (tx.Type == TransactionType.Income ? -tx.Amount : tx.Amount);
-                _context.Accounts.Update(acc);
+                relatedTransactionIds.Add(interestTx.Id);
+                allTxsToDelete.Add(interestTx);
             }
 
+            if (loanAcc.LoanDetails?.NextEmiDueDate != null)
+                loanAcc.LoanDetails.NextEmiDueDate = loanAcc.LoanDetails.NextEmiDueDate.Value.AddMonths(-1);
+        }
+
+        // 3b. Work out the balance effect of every deletion per account FIRST
+        // and refuse if it would push a normal (non-liability) account below
+        // zero — deleting an income used to be able to do exactly that.
+        var deltas = new Dictionary<int, decimal>();
+        foreach (var tx in allTxsToDelete)
+        {
+            var d = tx.Type == TransactionType.Income ? -tx.Amount : tx.Amount;
+            deltas[tx.AccountId] = deltas.GetValueOrDefault(tx.AccountId) + d;
+        }
+        var touchedIds = deltas.Keys.ToList();
+        var touched = await _context.Accounts
+            .Include(a => a.AccountCategory)
+            .Where(a => touchedIds.Contains(a.Id) && a.UserId == userId)
+            .ToListAsync();
+        foreach (var acc in touched)
+        {
+            var after = acc.Balance + deltas[acc.Id];
+            bool liability = acc.AccountCategory?.IsLiability ?? false;
+            if (!liability && after < 0)
+                return Result.Failure<bool>(new Error(
+                    "Transaction.DeleteWouldOverdraw",
+                    $"Deleting this would take {acc.Name} to a negative balance (₹{after:F2}). Delete or adjust the later expenses first."));
+        }
+        foreach (var acc in touched)
+        {
+            acc.Balance += deltas[acc.Id];
+            _context.Accounts.Update(acc);
+        }
+        foreach (var tx in allTxsToDelete)
+        {
             tx.IsDeleted = true;
             tx.DeletedAt = DateTime.UtcNow;
             _context.Transactions.Update(tx);
@@ -444,6 +609,61 @@ public class TransactionService : ITransactionService
 
         await _cache.InvalidateDashboardAsync(userId);
 
+        return Result.Success(true);
+    }
+
+    public async Task<Result<List<TagCountDto>>> GetTagsAsync(string userId)
+    {
+        var packed = await _context.Transactions.AsNoTracking()
+            .Where(t => t.UserId == userId && !t.IsDeleted && t.Tags != null)
+            .Select(t => t.Tags!)
+            .ToListAsync();
+        var counts = new Dictionary<string, int>();
+        foreach (var p in packed)
+            foreach (var tag in TransactionTags.Unpack(p))
+                counts[tag] = counts.GetValueOrDefault(tag) + 1;
+        return Result.Success(counts
+            .OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key)
+            .Select(kv => new TagCountDto { Tag = kv.Key, Count = kv.Value }).ToList());
+    }
+
+    public async Task<Result<bool>> RestoreTransactionAsync(string userId, int accountId, int transactionId)
+    {
+        var tx = await _context.Transactions.IgnoreQueryFilters()
+            .Include(t => t.Account).ThenInclude(a => a.AccountCategory)
+            .FirstOrDefaultAsync(t => t.Id == transactionId && t.AccountId == accountId && t.UserId == userId);
+        if (tx == null || !tx.IsDeleted)
+            return Result.Failure<bool>(new Error("Transaction.NotFound", "Nothing to restore."));
+
+        if (tx.DeletedAt is null || tx.DeletedAt < DateTime.UtcNow - UndoRules.Window)
+            return Result.Failure<bool>(new Error("Transaction.UndoExpired", "Undo is only available for a few minutes after deleting."));
+
+        if (tx.TransferGroupId != null || tx.Kind != TransactionKind.Normal)
+            return Result.Failure<bool>(new Error("Transaction.UndoNotSupported", "Transfers, payments and system entries can't be undone."));
+
+        var linkedToPayment = await _context.CreditCardPayments.IgnoreQueryFilters().AnyAsync(p =>
+            p.CashbackTransactionId == tx.Id || p.InterestTransactionId == tx.Id ||
+            p.PrincipalIncomeTransactionId == tx.Id || p.PrincipalExpenseTransactionId == tx.Id);
+        if (linkedToPayment)
+            return Result.Failure<bool>(new Error("Transaction.UndoNotSupported", "This entry belongs to a card payment and can't be undone on its own."));
+
+        var acc = tx.Account;
+        var delta = tx.Type == TransactionType.Income ? tx.Amount : -tx.Amount;
+        var liability = acc.AccountCategory?.IsLiability ?? false;
+        if (!liability && acc.Balance + delta < 0)
+            return Result.Failure<bool>(new Error("Transaction.RestoreWouldOverdraw",
+                $"Restoring this would take {acc.Name} to a negative balance."));
+
+        acc.Balance += delta;
+        tx.IsDeleted = false;
+        tx.DeletedAt = null;
+        _context.Accounts.Update(acc);
+        _context.Transactions.Update(tx);
+
+        var save = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
+        if (save.IsFailure) return Result.Failure<bool>(save.Error);
+
+        await _cache.InvalidateDashboardAsync(userId);
         return Result.Success(true);
     }
 
@@ -491,6 +711,11 @@ public class TransactionService : ITransactionService
                 "Transfer.InsufficientFunds",
                 $"Insufficient balance. Available: {sourceAccount.Balance:F2}, Requested: {dto.Amount:F2}."));
         }
+
+        if (await IsRapidDuplicateAsync(userId, sourceAccountId, dto.Amount, TransactionType.Expense, dto.Date,
+                $"Transfer to {destinationAccount.Name}", true))
+            return Result.Failure<bool>(new Error("Transfer.DuplicateSubmit",
+                "That exact transfer was just saved. If you meant to do it twice, wait a few seconds and try again."));
 
         // ── Create the two transaction legs, linked by a shared TransferGroupId ──
         var transferGroupId = Guid.NewGuid();
@@ -685,6 +910,12 @@ public class TransactionService : ITransactionService
                 t.TransactionCategory != null && t.TransactionCategory.Name == categoryName);
         }
 
+        if (queryParams.Filters.TryGetValue("tag", out var tagFilter2) && !string.IsNullOrWhiteSpace(tagFilter2))
+        {
+            var like2 = TransactionTags.Pattern(tagFilter2);
+            monthlyQuery = monthlyQuery.Where(t => t.Tags != null && EF.Functions.Like(t.Tags, like2));
+        }
+
         var totalIncome = await monthlyQuery
             .Where(t => t.Type == TransactionType.Income && t.TransferGroupId == null)
             .SumAsync(t => t.Amount);
@@ -703,6 +934,8 @@ public class TransactionService : ITransactionService
             filteredQuery = filteredQuery.Where(t =>
                 t.Description.ToLower().Contains(search) ||
                 (t.TransactionCategory != null && t.TransactionCategory.Name.ToLower().Contains(search)) ||
+                (t.Notes != null && t.Notes.ToLower().Contains(search)) ||
+                (t.Tags != null && t.Tags.Contains(search)) ||
                 t.Account.Name.ToLower().Contains(search));
         }
 
@@ -781,6 +1014,8 @@ public class TransactionService : ITransactionService
             CategoryName = categoryName,
             MerchantId = t.MerchantId,
             MerchantName = t.Merchant?.Name,
+            Notes = t.Notes,
+            Tags = TransactionTags.Unpack(t.Tags),
             TransferGroupId = t.TransferGroupId
         };
     }
@@ -791,10 +1026,16 @@ public class TransactionService : ITransactionService
         return System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(input.ToLower());
     }
 
-    private async Task CheckAndSendOverspendAlertAsync(string userId, Transaction transaction)
+    /// <summary>
+    /// After a NEW expense is saved: finds budgets it has just pushed past their alert level (user default or
+    /// per-budget override) or past 100 %, logs a BudgetAlertEvent for each (feeds behaviour reports), emails only
+    /// if the user opted in under Budget settings, and returns the alerts so the UI can toast immediately.
+    /// </summary>
+    private async Task<List<BudgetAlertDto>> CheckBudgetAlertsAsync(string userId, Transaction transaction)
     {
+        var alerts = new List<BudgetAlertDto>();
         if (transaction.TransactionCategoryId is null)
-            return; // no category, nothing to match against a category budget
+            return alerts; // no category, nothing to match against a category budget
 
         var rollupMap = await CategoryRollup.BuildRollupMapAsync(_context, userId);
 
@@ -809,14 +1050,18 @@ public class TransactionService : ITransactionService
             .ToList();
 
         if (!matchingBudgets.Any())
-            return;
+            return alerts;
+
+        var general = await _userSettings.GetGeneralAsync(userId);
+        var budgetSettings = await _userSettings.GetBudgetSettingsAsync(userId);
 
         var accountIds = await _context.Accounts
             .Where(a => a.UserId == userId && !a.IsDeleted)
             .Select(a => a.Id)
             .ToListAsync();
 
-        string? userEmail = null; // looked up lazily, only if we actually need to send something
+        string? userEmail = null;
+        var emailLookedUp = false;
 
         foreach (var budget in matchingBudgets)
         {
@@ -824,7 +1069,7 @@ public class TransactionService : ITransactionService
             {
                 Domain.Enums.BudgetPeriod.Weekly => AppTimeZone.WeekBoundsUtc(transaction.Date),
                 Domain.Enums.BudgetPeriod.Yearly => AppTimeZone.YearBoundsUtc(transaction.Date),
-                _ => AppTimeZone.MonthBoundsUtc(transaction.Date) // Monthly, and the default
+                _ => AppTimeZone.MonthBoundsUtc(transaction.Date, general.MonthStartDay) // Monthly, and the default
             };
 
             var budgetCategoryIds = budget.TransactionCategoryId.HasValue
@@ -835,6 +1080,7 @@ public class TransactionService : ITransactionService
             var spentAfter = await _context.Transactions
                 .Where(t => accountIds.Contains(t.AccountId) && !t.IsDeleted &&
                             t.Type == TransactionType.Expense &&
+                            t.TransferGroupId == null &&
                             t.Date >= periodStart && t.Date <= periodEnd &&
                             (budget.TransactionCategoryId == null ||
                              (t.TransactionCategoryId.HasValue && budgetCategoryIds.Contains(t.TransactionCategoryId.Value))))
@@ -844,35 +1090,81 @@ public class TransactionService : ITransactionService
             // was just committed via SaveChangesAsync before this method runs.
             var spentBefore = spentAfter - transaction.Amount;
 
-            bool justCrossedThreshold = spentBefore < budget.Amount && spentAfter >= budget.Amount;
-            if (!justCrossedThreshold)
-                continue; // either already over before this transaction, or still under — no alert either way
-
-            var userPrefs = await _context.Users
-                .Where(u => u.Id == userId)
-                .Select(u => new { u.Email, u.OverspendAlertsEnabled })
-                .FirstOrDefaultAsync();
-
-            if (userPrefs == null || string.IsNullOrEmpty(userPrefs.Email) || !userPrefs.OverspendAlertsEnabled)
-                continue;
-
-            userEmail = userPrefs.Email;
+            var threshold = budget.AlertThresholdPercent ?? budgetSettings.DefaultAlertPercent;
+            var warnAt = budget.Amount * threshold / 100m;
+            bool justCrossedLimit = spentBefore < budget.Amount && spentAfter >= budget.Amount;
+            // Only the transaction that takes spend over the alert level fires it; a jump straight past 100 % fires the limit alert only.
+            bool justCrossedWarning = !justCrossedLimit && budget.Amount > 0 && spentBefore < warnAt && spentAfter >= warnAt && spentAfter < budget.Amount;
+            if (!justCrossedLimit && !justCrossedWarning)
+                continue; // already past the line before this transaction, or still under — no alert either way
 
             var categoryName = budget.TransactionCategoryId.HasValue
                 ? (await _context.TransactionCategories.FindAsync(budget.TransactionCategoryId.Value))?.Name ?? "this category"
                 : "your overall budget";
+            var percentUsed = budget.Amount > 0 ? Math.Round(spentAfter / budget.Amount * 100, 2) : 0m;
+            var level = justCrossedLimit ? 2 : 1;
 
-            await _emailService.SendEmailAsync(new MailRequest
+            _context.BudgetAlertEvents.Add(new BudgetAlertEvent
             {
-                To = userEmail,
-                Subject = $"Budget Alert: {categoryName} limit reached",
-                Body = $"<p>You've just crossed your {budget.Period} budget of ₹{budget.Amount:F2} for <strong>{categoryName}</strong>.</p>" +
-                       $"<p>Total spent this period: ₹{spentAfter:F2}</p>"
+                UserId = userId,
+                BudgetId = budget.Id,
+                TransactionId = transaction.Id,
+                Level = level,
+                ThresholdPercent = threshold,
+                PercentUsed = percentUsed,
+                SpentAmount = spentAfter,
+                BudgetAmount = budget.Amount,
+                CategoryName = categoryName
             });
 
+            if (budgetSettings.ToastAlerts)
+            {
+                alerts.Add(new BudgetAlertDto
+                {
+                    BudgetId = budget.Id,
+                    CategoryName = categoryName,
+                    Level = level,
+                    ThresholdPercent = threshold,
+                    PercentUsed = percentUsed,
+                    SpentAmount = spentAfter,
+                    BudgetAmount = budget.Amount
+                });
+            }
+
+            if (!budgetSettings.EmailAlerts)
+                continue; // email is opt-in (off by default)
+
+            if (!emailLookedUp)
+            {
+                userEmail = await _context.Users.Where(u => u.Id == userId).Select(u => u.Email).FirstOrDefaultAsync();
+                emailLookedUp = true;
+            }
+            if (string.IsNullOrEmpty(userEmail))
+                continue;
+
+            var safeName = System.Net.WebUtility.HtmlEncode(categoryName);
+            await _emailService.SendEmailAsync(justCrossedLimit
+                ? new MailRequest
+                {
+                    To = userEmail,
+                    Subject = $"Budget Alert: {categoryName} limit reached",
+                    Body = $"<p>You've just crossed your {budget.Period} budget of ₹{budget.Amount:F2} for <strong>{safeName}</strong>.</p>" +
+                           $"<p>Total spent this period: ₹{spentAfter:F2}</p>"
+                }
+                : new MailRequest
+                {
+                    To = userEmail,
+                    Subject = $"Budget heads-up: {categoryName} is at {threshold}%",
+                    Body = $"<p>You've used {percentUsed:0}% of your {budget.Period} budget of ₹{budget.Amount:F2} for <strong>{safeName}</strong> (your alert level is {threshold}%).</p>" +
+                           $"<p>Spent so far: ₹{spentAfter:F2} · left: ₹{(budget.Amount - spentAfter):F2}</p>"
+                });
+
             _logger.LogInformation(
-                "Overspend alert sent to {UserId} for category {CategoryId} — budget {BudgetAmount}, spent {SpentAmount}.",
+                "Budget alert emailed to {UserId} for category {CategoryId} — budget {BudgetAmount}, spent {SpentAmount}.",
                 userId, budget.TransactionCategoryId, budget.Amount, spentAfter);
         }
+
+        await _context.SaveChangesAsync(); // persists the alert events
+        return alerts;
     }
 }

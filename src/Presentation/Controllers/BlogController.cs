@@ -61,7 +61,9 @@ public class BlogController : BaseController
     [Authorize]
     public async Task<IActionResult> CreateComment([FromBody] CreateBlogCommentDto dto)
     {
-        var userName = User.Identity?.Name ?? User.FindFirstValue(System.Security.Claims.ClaimTypes.Email) ?? "Member User";
+        // Never publish the email: it is shown to anonymous readers. Use only the part before "@".
+        var email = User.FindFirstValue(System.Security.Claims.ClaimTypes.Email);
+        var userName = User.Identity?.Name ?? (string.IsNullOrWhiteSpace(email) ? null : email.Split('@')[0]) ?? "Member User";
         return HandleResult(await _blogService.CreateCommentAsync(UserId, userName, dto));
     }
 

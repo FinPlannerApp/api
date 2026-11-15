@@ -5,6 +5,7 @@ using Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
@@ -66,6 +67,7 @@ public class ReactionDto
 [Authorize]
 [ApiController]
 [Route("api/[controller]")]
+[EnableRateLimiting("api")]
 public class IssuesController : ControllerBase
 {
     private readonly IApplicationDbContext _context;
@@ -140,7 +142,7 @@ public class IssuesController : ControllerBase
             query = query.Where(i => i.Type == issueType);
 
         if (!string.IsNullOrEmpty(search))
-            query = query.Where(i => EF.Functions.ILike(i.Title, $"%{search}%") || EF.Functions.ILike(i.Description, $"%{search}%"));
+            query = query.Where(i => EF.Functions.ILike(i.Title, $"%{EscapeLike(search)}%") || EF.Functions.ILike(i.Description, $"%{EscapeLike(search)}%"));
 
         if (categoryId.HasValue)
             query = query.Where(i => i.CategoryId == categoryId.Value);
@@ -157,6 +159,8 @@ public class IssuesController : ControllerBase
         };
 
         var totalItems = await query.CountAsync();
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 100);
         var issues = await query.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync();
 
         // Get comment counts
@@ -327,7 +331,7 @@ public class IssuesController : ControllerBase
         var issue = new Domain.Entities.Issue
         {
             Title = input.Title,
-            Description = input.Description,
+            Description = Application.Common.Helpers.HtmlSanitizer.Clean(input.Description),
             Priority = Enum.TryParse<IssuePriority>(input.Priority, true, out var pri) ? pri : IssuePriority.Medium,
             Type = issueType,
             CategoryId = input.CategoryId,
@@ -390,7 +394,7 @@ public class IssuesController : ControllerBase
             return Ok(new { success = false, message = "Only administrators can edit active roadmap items." });
 
         if (input.Title != null) issue.Title = input.Title;
-        if (input.Description != null) issue.Description = input.Description;
+        if (input.Description != null) issue.Description = Application.Common.Helpers.HtmlSanitizer.Clean(input.Description);
         if (input.Type != null && Enum.TryParse<IssueType>(input.Type, true, out var t)) issue.Type = t;
         if (input.CategoryId.HasValue) issue.CategoryId = input.CategoryId;
         if (input.SubcategoryId.HasValue) issue.SubcategoryId = input.SubcategoryId;
@@ -408,6 +412,8 @@ public class IssuesController : ControllerBase
         return Ok(new { success = true, message = "Issue updated successfully." });
     }
 
+    private static string EscapeLike(string s) => s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+
     [HttpPut("{id}/status")]
     [Authorize]
     public async Task<ActionResult> UpdateStatus(int id, [FromBody] UpdateStatusDto input)
@@ -420,6 +426,7 @@ public class IssuesController : ControllerBase
 
         var isAdmin = User.IsInRole("Admin");
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "System";
+        if (!isAdmin && issue.CreatorUserId != userId) return Forbid();
 
         var (success, message) = await _workflowService.TransitionAsync(issue, newStatus, userId, isAdmin);
 
@@ -443,6 +450,7 @@ public class IssuesController : ControllerBase
         if (issue == null) return NotFound();
 
         var isAdmin = User.IsInRole("Admin");
+        if (!isAdmin && issue.CreatorUserId != userId) return Forbid();
         var (success, message) = await _workflowService.CloseAsync(issue, userId, isAdmin);
 
         if (!success)
@@ -464,6 +472,7 @@ public class IssuesController : ControllerBase
 
         var isAdmin = User.IsInRole("Admin");
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "System";
+        if (!isAdmin && issue.CreatorUserId != userId) return Forbid();
         var (success, message) = await _workflowService.ReopenAsync(issue, userId, isAdmin);
 
         if (!success)
@@ -506,9 +515,11 @@ public class IssuesController : ControllerBase
     // ==================== ASSIGNEES ====================
 
     [HttpPost("{id}/assignees")]
-    [Authorize]
+    [Authorize(Roles = "Admin")]
     public async Task<ActionResult> AddAssignee(int id, [FromBody] AssigneeDto input)
     {
+        if (!await _context.Issues.AnyAsync(i => i.Id == id)) return NotFound();
+        if (await _userManager.FindByIdAsync(input.UserId) == null) return BadRequest(new { message = "User not found." });
         var exists = await _context.IssueAssignees.AnyAsync(a => a.IssueId == id && a.UserId == input.UserId);
         if (exists) return Ok(new { success = true, message = "Already assigned." });
         _context.IssueAssignees.Add(new IssueAssignee { IssueId = id, UserId = input.UserId });
@@ -522,7 +533,7 @@ public class IssuesController : ControllerBase
     }
 
     [HttpDelete("{id}/assignees/{assigneeUserId}")]
-    [Authorize]
+    [Authorize(Roles = "Admin")]
     public async Task<ActionResult> RemoveAssignee(int id, string assigneeUserId)
     {
         var a = await _context.IssueAssignees.FirstOrDefaultAsync(a => a.IssueId == id && a.UserId == assigneeUserId);
@@ -553,7 +564,7 @@ public class IssuesController : ControllerBase
     }
 
     [HttpPost("milestones")]
-    [Authorize]
+    [Authorize(Roles = "Admin")]
     public async Task<ActionResult> CreateMilestone([FromBody] CreateMilestoneDto input)
     {
         var milestone = new IssueMilestone { Title = input.Title, Description = input.Description, DueDate = input.DueDate };
@@ -576,6 +587,7 @@ public class IssuesController : ControllerBase
     }
 
     [HttpPost("taxonomy")]
+    [Authorize(Roles = "Admin")]
     public async Task<ActionResult<IssueTaxonomy>> CreateTaxonomy([FromBody] IssueTaxonomy input)
     {
         var taxonomy = new IssueTaxonomy
@@ -590,6 +602,7 @@ public class IssuesController : ControllerBase
     }
 
     [HttpPost("seed")]
+    [Authorize(Roles = "Admin")]
     public async Task<ActionResult> SeedTaxonomy([FromServices] TaxonomySeederService seeder)
     {
         await seeder.SeedAsync();

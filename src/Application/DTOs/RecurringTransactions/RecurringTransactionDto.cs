@@ -21,4 +21,5 @@ public class RecurringTransactionDto
     public DateTime? LastProcessedDate { get; set; }
     public bool IsObligation { get; set; }
     public int? LinkedLoanAccountId { get; set; }
+    public int? LinkedInvestmentAccountId { get; set; }
 }

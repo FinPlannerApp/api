@@ -58,7 +58,7 @@ public static class SplitShareCalculator
 
                 var shares = participants.Select(p => (p.MemberId, Share: p.ExactAmount!.Value)).ToList();
                 var sum = shares.Sum(s => s.Share);
-                if (Math.Abs(sum - totalAmount) > 0.01m)
+                if (Math.Round(sum, 2) != Math.Round(totalAmount, 2))
                     throw new InvalidOperationException(
                         $"Exact amounts sum to {sum:F2}, but the expense total is {totalAmount:F2} — they need to match exactly.");
                 return shares;

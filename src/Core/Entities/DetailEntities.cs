@@ -57,6 +57,28 @@ public class LoanDetails : BaseEntity
     public int? DesignatedPayingAccountId { get; set; }
 }
 
+public class InvestmentDetails : BaseEntity
+{
+    public int AccountId { get; set; }
+    public Account Account { get; set; } = null!;
+
+    public Domain.Enums.InvestmentKind Kind { get; set; } = Domain.Enums.InvestmentKind.MutualFund;
+    /// <summary>What the holding is worth now, entered by the user (manual valuation).</summary>
+    public decimal? CurrentValue { get; set; }
+    public DateTime? ValuedOn { get; set; }
+    /// <summary>Optional scheme code / ticker, reserved for automatic valuation later.</summary>
+    public string? Symbol { get; set; }
+    public string? Notes { get; set; }
+
+    /// <summary>Units (mutual fund) or shares held. Needed for automatic valuation: value = units × latest price.</summary>
+    public decimal? Units { get; set; }
+    /// <summary>When true, the background job keeps CurrentValue up to date (Mutual fund via AMFI NAV, Stock/ETF via market price).</summary>
+    public bool AutoValuation { get; set; }
+    public decimal? LastPrice { get; set; }
+    public DateTime? LastPriceDate { get; set; }
+    public string? LastPriceError { get; set; }
+}
+
 public class BankAccountDetails : BaseEntity
 {
     public int AccountId { get; set; }
@@ -64,6 +86,11 @@ public class BankAccountDetails : BaseEntity
 
     public decimal? InterestRate { get; set; }
     public Domain.Enums.InterestFrequency? InterestFrequency { get; set; }
+
+    /// <summary>Day of month (1-31, clamped to the month's length) the bank credits interest. Null = last day of the period.</summary>
+    public int? InterestCreditDay { get; set; }
+    /// <summary>When true, a daily job records the ESTIMATED interest on the credit date (editable afterwards).</summary>
+    public bool AutoPostInterest { get; set; }
 
     /// <summary>Minimum balance the bank requires — informational, no
     /// automatic penalty tracking, just surfaced so it's visible.</summary>

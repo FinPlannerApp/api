@@ -62,7 +62,7 @@ public class RecurrenceCalculatorTests
     }
 
     [Fact]
-    public void Monthly_FromMonthEndDate_ClampsCorrectlyThroughShorterMonths()
+    public void Monthly_FromMonthEndDate_DoesNotDriftThroughShorterMonths()
     {
         // Jan 31 → AddMonths(1) → Feb 28 (2026 is not a leap year, so
         // .NET clamps to the last valid day of February rather than
@@ -78,7 +78,32 @@ public class RecurrenceCalculatorTests
         var result = RecurrenceCalculator.CalculateNextOccurrenceOnOrAfter(
             start, RecurrenceFrequency.Monthly, null, reference);
 
-        result.Should().Be(new DateTime(2026, 3, 28));
+        // Counted from the original start (Jan 31 + 2 months), so the 31st never drifts to the 28th.
+        result.Should().Be(new DateTime(2026, 3, 31));
+    }
+
+    [Fact]
+    public void NextMonthlyAfter_FromMonthEnd_ReturnsThe31stAgain()
+    {
+        var start = new DateTime(2026, 1, 31, 0, 0, 0, DateTimeKind.Utc);
+        var current = new DateTime(2026, 2, 28, 0, 0, 0, DateTimeKind.Utc); // the clamped February occurrence
+
+        RecurrenceCalculator.NextMonthlyOrYearlyAfter(start, current, yearly: false)
+            .Should().Be(new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public void NextMonthlyAfter_IstMidnightOnThe1st_StaysOnThe1stInIst()
+    {
+        // 1 Feb 00:00 IST == 31 Jan 18:30 UTC. Must keep landing on the 1st IST (never the 29th/last day).
+        var start = new DateTime(2026, 1, 31, 18, 30, 0, DateTimeKind.Utc);
+        var current = start.AddMonths(0);
+
+        var next = RecurrenceCalculator.NextMonthlyOrYearlyAfter(start, current, yearly: false);
+        next.Should().Be(new DateTime(2026, 2, 28, 18, 30, 0, DateTimeKind.Utc)); // 1 Mar 00:00 IST
+
+        var afterThat = RecurrenceCalculator.NextMonthlyOrYearlyAfter(start, next, yearly: false);
+        afterThat.Should().Be(new DateTime(2026, 3, 31, 18, 30, 0, DateTimeKind.Utc)); // 1 Apr 00:00 IST
     }
 
     [Fact]

@@ -41,7 +41,9 @@ public class AuthService : IAuthService
     // purposes. Comparison is constant-time.
     private string HashOtp(string purpose, string email, string otp)
     {
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(_jwtSettings.Key));
+        // Derived sub-key: the OTP MAC never uses the raw JWT signing key.
+        var otpKey = SHA256.HashData(Encoding.UTF8.GetBytes("finplanner-otp-v1|" + _jwtSettings.Key));
+        using var hmac = new HMACSHA256(otpKey);
         var payload = $"{purpose}|{email.Trim().ToLowerInvariant()}|{otp}";
         return Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload)));
     }
@@ -61,12 +63,50 @@ public class AuthService : IAuthService
         if (existingUsername != null)
             return Result.Failure<string>(new Error("Auth.UsernameTaken", "This username is already taken."));
 
+        // The FluentValidation rules for this DTO never run (registration is not a MediatR request),
+        // so the basics are enforced here: bounded lengths and a sane username.
+        if (string.IsNullOrWhiteSpace(dto.Name) || dto.Name.Length > 100)
+            return Result.Failure<string>(new Error("Auth.InvalidName", "Name is required (100 characters at most)."));
+        if (dto.Email.Length > 254)
+            return Result.Failure<string>(new Error("Auth.InvalidEmail", "Email is too long."));
+        if (dto.UserName.Length < 3 || dto.UserName.Length > 50 ||
+            !System.Text.RegularExpressions.Regex.IsMatch(dto.UserName, "^[A-Za-z0-9._@-]+$"))
+            return Result.Failure<string>(new Error("Auth.InvalidUserName", "Username must be 3-50 characters: letters, numbers, . _ - @ only."));
+        if (dto.DateOfBirth.Year < 1900 || dto.DateOfBirth > DateTime.UtcNow)
+            return Result.Failure<string>(new Error("Auth.InvalidDob", "Please enter a valid date of birth."));
+
+        // Check the password against the Identity rules NOW, so a weak password is rejected before an
+        // email is sent (it used to fail only after the user had entered the code).
+        var probeUser = new ApplicationUser { Name = dto.Name, UserName = dto.UserName, Email = dto.Email };
+        foreach (var validator in _userManager.PasswordValidators)
+        {
+            var check = await validator.ValidateAsync(_userManager, probeUser, dto.Password);
+            if (!check.Succeeded)
+                return Result.Failure<string>(new Error("Auth.WeakPassword", string.Join(" ", check.Errors.Select(e => e.Description))));
+        }
+
+        var db = _redis.Value.GetDatabase();
+
+        // One verification email per address per 45 s: stops the endpoint being used to mail-bomb
+        // a stranger (the email carries a name the requester chose).
+        var coolKey = $"reg-cool:{dto.Email.Trim().ToLowerInvariant()}";
+        if (!await db.StringSetAsync(coolKey, "1", TimeSpan.FromSeconds(45), When.NotExists))
+            return Result.Failure<string>(new Error("Auth.TooSoon", "A code was just sent. Please wait a moment before asking for another."));
+
         // Generate OTP
         var otp = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
 
-        // Store pending registration data + OTP in Redis (10 min TTL)
-        var db = _redis.Value.GetDatabase();
-        var registrationData = System.Text.Json.JsonSerializer.Serialize(dto);
+        // Store pending registration data + OTP in Redis (10 min TTL). The password is stored only as
+        // a hash, never in plaintext, so a Redis dump or log cannot reveal it.
+        var pending = new RegisterUserDto
+        {
+            Name = dto.Name,
+            DateOfBirth = dto.DateOfBirth,
+            Email = dto.Email,
+            UserName = dto.UserName,
+            Password = "hash:" + _userManager.PasswordHasher.HashPassword(probeUser, dto.Password)
+        };
+        var registrationData = System.Text.Json.JsonSerializer.Serialize(pending);
         await db.StringSetAsync($"reg:{dto.Email}", registrationData, TimeSpan.FromMinutes(10));
         await db.StringSetAsync($"reg-otp:{dto.Email}", HashOtp("reg", dto.Email, otp), TimeSpan.FromMinutes(10));
 
@@ -105,7 +145,7 @@ public class AuthService : IAuthService
             </div>
             <div class='card'>
                 <p style='font-size: 18px; color: #f4f4f5; font-weight: 600; margin-bottom: 8px;'>Verify Your Email</p>
-                <p>Hello <strong>{dto.Name}</strong>, welcome to Financial Planner! Enter the code below to complete your registration.</p>
+                <p>Hello <strong>{System.Net.WebUtility.HtmlEncode(dto.Name)}</strong>, welcome to Financial Planner! Enter the code below to complete your registration.</p>
                 <div class='otp-container'>
                     <div class='otp-box'>{otp}</div>
                 </div>
@@ -144,8 +184,10 @@ public class AuthService : IAuthService
         var regOtpKey = $"reg-otp:{dto.Email}";
         var regAttemptsKey = $"reg-otp-attempts:{dto.Email}";
 
-        var regAttempts = (int)(await db.StringGetAsync(regAttemptsKey));
-        if (regAttempts >= 5)
+        // Reserve the attempt BEFORE checking the code (atomic INCR) so parallel guesses can't exceed the cap.
+        var regAttempts = (int)await db.StringIncrementAsync(regAttemptsKey);
+        if (regAttempts == 1) await db.KeyExpireAsync(regAttemptsKey, TimeSpan.FromMinutes(10));
+        if (regAttempts > 5)
         {
             await db.KeyDeleteAsync(regOtpKey); // force a fresh code
             return Result.Failure<string>(new Error("Auth.TooManyAttempts", "Too many incorrect attempts. Please register again to get a new code."));
@@ -154,9 +196,6 @@ public class AuthService : IAuthService
         var storedOtp = await db.StringGetAsync(regOtpKey);
         if (storedOtp.IsNullOrEmpty || !HashesEqual(storedOtp.ToString(), HashOtp("reg", dto.Email, dto.Otp ?? string.Empty)))
         {
-            var regTtl = await db.KeyTimeToLiveAsync(regOtpKey);
-            await db.StringIncrementAsync(regAttemptsKey);
-            await db.KeyExpireAsync(regAttemptsKey, regTtl ?? TimeSpan.FromMinutes(10));
             return Result.Failure<string>(new Error("Auth.InvalidOtp", "Invalid or expired verification code."));
         }
         await db.KeyDeleteAsync(regAttemptsKey);
@@ -180,7 +219,10 @@ public class AuthService : IAuthService
             EmailConfirmed = true // Email is now verified via OTP
         };
 
-        var result = await _userManager.CreateAsync(user, registrationDto.Password);
+        // New registrations carry a password hash; "hash:"-less entries are ones queued before this change.
+        var result = registrationDto.Password.StartsWith("hash:", StringComparison.Ordinal)
+            ? await CreateWithHashAsync(user, registrationDto.Password["hash:".Length..])
+            : await _userManager.CreateAsync(user, registrationDto.Password);
 
         if (!result.Succeeded)
         {
@@ -195,6 +237,12 @@ public class AuthService : IAuthService
 
         _logger.LogInformation("User registered successfully via OTP: {Email}", dto.Email);
         return Result.Success("Account created successfully! You can now log in.");
+    }
+
+    private Task<IdentityResult> CreateWithHashAsync(ApplicationUser user, string passwordHash)
+    {
+        user.PasswordHash = passwordHash;
+        return _userManager.CreateAsync(user);
     }
 
     public async Task<Result<bool>> CheckEmailAsync(string email)
@@ -334,7 +382,7 @@ public class AuthService : IAuthService
         user.LastKnownUserAgent = cappedUserAgent;
 
         var accessToken = await GenerateJwtToken(user, sessionId);
-        var refreshToken = GenerateRefreshToken(ipAddress, sessionId, now, deviceId, cappedUserAgent);
+        var (refreshToken, rawRefreshToken) = GenerateRefreshToken(ipAddress, sessionId, now, deviceId, cappedUserAgent);
         user.RefreshTokens.Add(refreshToken);
 
         var updateResult = await UpdateUserWithConcurrencyRetryAsync(user);
@@ -354,16 +402,17 @@ public class AuthService : IAuthService
         return Result.Success(new LoginResponseDto
         {
             AccessToken = accessToken,
-            RefreshToken = refreshToken.Token,
+            RefreshToken = rawRefreshToken,
             UserName = user.UserName!
         });
     }
 
     public async Task<Result<LoginResponseDto>> RefreshTokenAsync(string token, string ipAddress, string deviceId)
     {
+        var (hashedToken, legacyToken) = TokenLookup(token);
         var user = await _userManager.Users
             .Include(u => u.RefreshTokens)
-            .SingleOrDefaultAsync(u => u.RefreshTokens.Any(t => t.Token == token));
+            .SingleOrDefaultAsync(u => u.RefreshTokens.Any(t => t.Token == hashedToken || t.Token == legacyToken));
 
         if (user == null)
         {
@@ -371,7 +420,23 @@ public class AuthService : IAuthService
             return Result.Failure<LoginResponseDto>(new Error("Auth.InvalidToken", "Invalid token."));
         }
 
-        var refreshToken = user.RefreshTokens.Single(x => x.Token == token);
+        var refreshToken = user.RefreshTokens.Single(x => x.Token == hashedToken || x.Token == legacyToken);
+
+        // Two tabs refreshing at the same moment: the second one arrives holding a token the first one
+        // just rotated. Inside the grace window, and only from the same device, treat it as that
+        // race and rotate the session's current token instead of failing (a failure here used to
+        // sign the user out everywhere).
+        if (refreshToken.RevokedUtc != null && refreshToken.SessionId != null &&
+            DateTime.UtcNow - refreshToken.RevokedUtc.Value <= TimeSpan.FromSeconds(Math.Max(0, _sessionSettings.RefreshReuseGraceSeconds)) &&
+            string.Equals(refreshToken.DeviceId, deviceId, StringComparison.Ordinal))
+        {
+            var successor = user.RefreshTokens
+                .Where(t => t.SessionId == refreshToken.SessionId && t.IsActive)
+                .OrderByDescending(t => t.CreatedUtc)
+                .FirstOrDefault();
+            if (successor != null)
+                refreshToken = successor;
+        }
 
         if (refreshToken.RevokedUtc != null)
         {
@@ -421,7 +486,7 @@ public class AuthService : IAuthService
 
         // Generate new tokens, in the same session on the same device
         var newAccessToken = await GenerateJwtToken(user, sessionId);
-        var newRefreshToken = GenerateRefreshToken(ipAddress, sessionId,
+        var (newRefreshToken, newRawRefreshToken) = GenerateRefreshToken(ipAddress, sessionId,
             refreshToken.SessionStartedUtc ?? refreshToken.CreatedUtc, deviceId, refreshToken.UserAgent);
 
         PruneTokens(user);
@@ -441,7 +506,7 @@ public class AuthService : IAuthService
         return Result.Success(new LoginResponseDto
         {
             AccessToken = newAccessToken,
-            RefreshToken = newRefreshToken.Token,
+            RefreshToken = newRawRefreshToken,
             UserName = user.UserName!
         });
     }
@@ -449,13 +514,14 @@ public class AuthService : IAuthService
     public async Task<Result<bool>> LogoutAsync(string token, string ipAddress)
     {
         // Find the user who owns this token
+        var (hashedToken, legacyToken) = TokenLookup(token);
         var user = await _userManager.Users
             .Include(u => u.RefreshTokens)
-            .SingleOrDefaultAsync(u => u.RefreshTokens.Any(t => t.Token == token));
+            .SingleOrDefaultAsync(u => u.RefreshTokens.Any(t => t.Token == hashedToken || t.Token == legacyToken));
 
         if (user == null) return Result.Success(true); // Already logged out effectively
 
-        var refreshToken = user.RefreshTokens.SingleOrDefault(x => x.Token == token);
+        var refreshToken = user.RefreshTokens.SingleOrDefault(x => x.Token == hashedToken || x.Token == legacyToken);
         if (refreshToken != null && refreshToken.IsActive)
         {
             // Sign out this device only (every token of its session); other devices stay signed in.
@@ -575,8 +641,9 @@ public class AuthService : IAuthService
                 "We emailed a verification code to confirm this new device. Enter it to continue."));
         }
 
-        var attempts = (int)(await db.StringGetAsync(attemptsKey));
-        if (attempts >= 5)
+        var attempts = (int)await db.StringIncrementAsync(attemptsKey);
+        if (attempts == 1) await db.KeyExpireAsync(attemptsKey, TimeSpan.FromMinutes(10));
+        if (attempts > 5)
         {
             await db.KeyDeleteAsync(key); // force a fresh code
             return Result.Failure<bool>(new Error("Auth.TooManyAttempts", "Too many incorrect attempts. Sign in again to get a new code."));
@@ -585,9 +652,6 @@ public class AuthService : IAuthService
         var stored = await db.StringGetAsync(key);
         if (stored.IsNullOrEmpty || !HashesEqual(stored.ToString(), HashOtp(purpose, user.Email!, code.Trim())))
         {
-            var ttl = await db.KeyTimeToLiveAsync(key);
-            await db.StringIncrementAsync(attemptsKey);
-            await db.KeyExpireAsync(attemptsKey, ttl ?? TimeSpan.FromMinutes(10));
             return Result.Failure<bool>(new Error("Auth.InvalidOtp", "Invalid or expired verification code."));
         }
 
@@ -676,6 +740,11 @@ public class AuthService : IAuthService
         }
 
         var db = _redis.Value.GetDatabase();
+
+        // One reset email per address per 45 s (same reply as always, so nothing is revealed).
+        if (!await db.StringSetAsync($"reset-cool:{user.Email!.ToLowerInvariant()}", "1", TimeSpan.FromSeconds(45), When.NotExists))
+            return Result.Success("If an account exists, a password reset email has been sent.");
+
         var redisKey = $"otp-set:{user.Email!.ToLowerInvariant()}";
 
         // Every resend creates a NEW code and the earlier ones stay valid until the window ends
@@ -767,9 +836,10 @@ public class AuthService : IAuthService
         var attemptsKey = $"otp-attempts:{emailKey}";
         var otpKey = $"otp-set:{emailKey}";
 
-        var attempts = (int)(await db.StringGetAsync(attemptsKey));
+        var attempts = (int)await db.StringIncrementAsync(attemptsKey);
+        if (attempts == 1) await db.KeyExpireAsync(attemptsKey, TimeSpan.FromMinutes(10));
 
-        if (attempts >= maxAttempts)
+        if (attempts > maxAttempts)
         {
             return Result.Failure<bool>(new Error(
                 "Auth.TooManyAttempts", "Too many incorrect attempts. Request a new code."));
@@ -779,10 +849,6 @@ public class AuthService : IAuthService
 
         if (!await db.SetContainsAsync(otpKey, providedHash))
         {
-            var otpTtl = await db.KeyTimeToLiveAsync(otpKey);
-            await db.StringIncrementAsync(attemptsKey);
-            await db.KeyExpireAsync(attemptsKey, otpTtl ?? TimeSpan.FromMinutes(10));
-
             return Result.Failure<bool>(new Error("Auth.InvalidToken", "Invalid or expired OTP."));
         }
 
@@ -841,15 +907,27 @@ public class AuthService : IAuthService
         return Result.Success(true);
     }
 
+    public async Task<Result<UserProfileDto>> GetProfileAsync(string userId)
+    {
+        var user = await _userManager.FindByIdAsync(userId);
+        if (user == null)
+            return Result.Failure<UserProfileDto>(new Error("User.NotFound", "User not found."));
+        return Result.Success(new UserProfileDto { Name = user.Name ?? string.Empty, Email = user.Email ?? string.Empty, OverspendAlertsEnabled = user.OverspendAlertsEnabled });
+    }
+
     public async Task<Result<UserProfileDto>> UpdateProfileAsync(string userId, UpdateProfileDto dto)
     {
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null)
             return Result.Failure<UserProfileDto>(new Error("User.NotFound", "User not found."));
 
-        user.Name = dto.Name;
-        user.OverspendAlertsEnabled = dto.OverspendAlertsEnabled;
+        var cleanName = dto.Name?.Trim() ?? string.Empty;
+        if (cleanName.Length is < 1 or > 100 || cleanName.IndexOfAny(new[] { '<', '>' }) >= 0)
+            return Result.Failure<UserProfileDto>(new Error("Profile.InvalidName", "Name must be 1-100 characters and cannot contain < or >."));
+        user.Name = cleanName;
+        if (dto.OverspendAlertsEnabled.HasValue) user.OverspendAlertsEnabled = dto.OverspendAlertsEnabled.Value;
 
+        var emailChanged = false;
         var wantsEmailChange = !string.IsNullOrWhiteSpace(dto.NewEmail) &&
                                 !dto.NewEmail.Equals(user.Email, StringComparison.OrdinalIgnoreCase);
 
@@ -867,9 +945,47 @@ public class AuthService : IAuthService
             if (existingUserWithEmail != null && existingUserWithEmail.Id != userId)
                 return Result.Failure<UserProfileDto>(new Error("Auth.EmailInUse", "This email is already in use."));
 
-            user.Email = dto.NewEmail;
-            user.UserName = dto.NewEmail;
-            user.EmailConfirmed = false;
+            // The new address must prove it is reachable and owned: a code is emailed to it first.
+            var newEmail = dto.NewEmail!.Trim();
+            var db = _redis.Value.GetDatabase();
+            var codeKey = $"email-change:{userId}:{newEmail.ToLowerInvariant()}";
+            var attemptsKey = $"email-change-attempts:{userId}";
+
+            if (string.IsNullOrWhiteSpace(dto.EmailCode))
+            {
+                var coolKey = $"email-change-cool:{userId}";
+                if (!await db.StringSetAsync(coolKey, "1", TimeSpan.FromSeconds(45), StackExchange.Redis.When.NotExists))
+                    return Result.Failure<UserProfileDto>(new Error("Auth.Cooldown", "Please wait a moment before requesting another code."));
+                var otp = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
+                await db.StringSetAsync(codeKey, HashOtp("email-change", newEmail, otp), TimeSpan.FromMinutes(10));
+                await db.KeyDeleteAsync(attemptsKey);
+                await _emailService.SendEmailAsync(new MailRequest
+                {
+                    To = newEmail,
+                    Subject = "Confirm your new email — Financial Planner",
+                    Body = SecurityEmailShell("Confirm your new email",
+                        $"<p style='color:#a1a1aa;font-size:15px;line-height:1.7;margin:0 0 16px;'>Enter this code to confirm this address for your account:</p><p style='text-align:center;margin:24px 0;'><span style='font-size:34px;font-weight:700;color:#10b981;letter-spacing:8px;'>{otp}</span></p><p style='color:#a1a1aa;font-size:13px;margin:0;'>Valid for 10 minutes. If you did not request this, ignore this email.</p>")
+                });
+                return Result.Failure<UserProfileDto>(new Error("Auth.EmailVerificationRequired",
+                    "We sent a code to the new email address. Enter it to confirm the change."));
+            }
+
+            var tries = (int)await db.StringIncrementAsync(attemptsKey);
+            if (tries == 1) await db.KeyExpireAsync(attemptsKey, TimeSpan.FromMinutes(10));
+            var storedCode = await db.StringGetAsync(codeKey);
+            if (tries > 5 || storedCode.IsNullOrEmpty ||
+                !HashesEqual(storedCode.ToString(), HashOtp("email-change", newEmail, dto.EmailCode.Trim())))
+            {
+                if (tries > 5) await db.KeyDeleteAsync(codeKey);
+                return Result.Failure<UserProfileDto>(new Error("Auth.InvalidOtp", "Invalid or expired verification code."));
+            }
+            await db.KeyDeleteAsync(codeKey);
+            await db.KeyDeleteAsync(attemptsKey);
+
+            user.Email = newEmail;
+            user.UserName = newEmail;
+            user.EmailConfirmed = true; // proven by the code above
+            emailChanged = true;
         }
 
         var updateResult = await UpdateUserWithConcurrencyRetryAsync(user);
@@ -877,6 +993,16 @@ public class AuthService : IAuthService
         {
             var errors = string.Join(", ", updateResult.Errors.Select(e => e.Description));
             return Result.Failure<UserProfileDto>(new Error("Profile.UpdateFailed", errors));
+        }
+
+        if (emailChanged)
+        {
+            // An email change signs every device out: whoever held a stolen session loses it.
+            var withTokens = await _userManager.Users.Include(u => u.RefreshTokens).FirstAsync(u => u.Id == userId);
+            foreach (var t in withTokens.RefreshTokens.Where(t => t.RevokedUtc == null))
+                t.RevokedUtc = DateTime.UtcNow;
+            withTokens.CurrentSessionId = null;
+            await UpdateUserWithConcurrencyRetryAsync(withTokens);
         }
 
         return Result.Success(new UserProfileDto
@@ -918,15 +1044,29 @@ public class AuthService : IAuthService
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
-    private RefreshToken GenerateRefreshToken(string ipAddress, string sessionId, DateTime sessionStartedUtc, string deviceId, string? userAgent)
+    // Refresh tokens are stored as "h1:" + SHA-256 of the value in the cookie, so a database leak or
+    // backup cannot be replayed as a login. Tokens issued before this change are still plaintext in
+    // the table; they are matched as before and replaced by a hashed one the first time they rotate.
+    private const string TokenHashPrefix = "h1:";
+
+    private static string HashRefreshToken(string raw)
+        => TokenHashPrefix + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
+
+    /// <summary>The raw value to look a presented token up with: hash, plus the legacy plaintext form
+    /// (never accepted when it already looks like a stored hash, so a leaked hash cannot be presented).</summary>
+    private static (string Hashed, string Legacy) TokenLookup(string presented)
+        => (HashRefreshToken(presented), presented.StartsWith(TokenHashPrefix, StringComparison.Ordinal) ? "-" : presented);
+
+    private (RefreshToken Entity, string Raw) GenerateRefreshToken(string ipAddress, string sessionId, DateTime sessionStartedUtc, string deviceId, string? userAgent)
     {
         var randomNumber = new byte[32];
         using var rng = RandomNumberGenerator.Create();
         rng.GetBytes(randomNumber);
+        var raw = Convert.ToBase64String(randomNumber);
 
-        return new RefreshToken
+        return (new RefreshToken
         {
-            Token = Convert.ToBase64String(randomNumber),
+            Token = HashRefreshToken(raw),
             ExpiresUtc = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenTTL), // Long life
             CreatedUtc = DateTime.UtcNow,
             CreatedByIp = ipAddress,
@@ -934,7 +1074,7 @@ public class AuthService : IAuthService
             SessionStartedUtc = sessionStartedUtc,
             DeviceId = deviceId,
             UserAgent = userAgent
-        };
+        }, raw);
     }
 
     private async Task<IdentityResult> UpdateUserWithConcurrencyRetryAsync(ApplicationUser user)
@@ -958,4 +1098,4 @@ public class AuthService : IAuthService
         }
         return updateResult;
     }
-}
+}

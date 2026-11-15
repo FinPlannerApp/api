@@ -67,17 +67,20 @@ public class IssueWorkflowService
     };
 
     private readonly IssueActivityService _activityService;
+    private readonly IUserSettingsService _userSettings;
 
     public IssueWorkflowService(
         IApplicationDbContext context,
         UserManager<ApplicationUser> userManager,
         IEmailService emailService,
-        IssueActivityService activityService)
+        IssueActivityService activityService,
+        IUserSettingsService userSettings)
     {
         _context = context;
         _userManager = userManager;
         _emailService = emailService;
         _activityService = activityService;
+        _userSettings = userSettings;
     }
 
     /// <summary>
@@ -263,6 +266,8 @@ public class IssueWorkflowService
         if (issue.CreatorUserId == null) return;
         var creator = await _userManager.FindByIdAsync(issue.CreatorUserId);
         if (creator == null || string.IsNullOrEmpty(creator.Email)) return;
+        // Opt-in only (Settings → Notifications); off by default.
+        if (!(await _userSettings.GetNotificationSettingsAsync(creator.Id)).IssueUpdateEmails) return;
 
         try
         {
@@ -270,7 +275,7 @@ public class IssueWorkflowService
             {
                 To = creator.Email,
                 Subject = $"[Feedback Hub] Issue #{issue.Id} Status Updated",
-                Body = $"Hello {creator.Name},\n\nThe status of your issue '{issue.Title}' has been updated from {oldStatus} to {newStatus}.\n\nView details: /app/issues/{issue.Id}"
+                Body = $"Hello {System.Net.WebUtility.HtmlEncode(creator.Name)},<br><br>The status of your issue '{System.Net.WebUtility.HtmlEncode(issue.Title)}' has been updated from {oldStatus} to {newStatus}.<br><br>View details: /app/issues/{issue.Id}"
             });
         }
         catch

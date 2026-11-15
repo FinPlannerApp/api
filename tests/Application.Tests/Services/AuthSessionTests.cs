@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.EntityFrameworkCore;
 using StackExchange.Redis;
 using Xunit;
 
@@ -232,11 +233,66 @@ public class AuthSessionTests
         var login = await rig.Auth.LoginAsync(Creds(), "1.1.1.1", ChromeWin, laptop);
         var rotated = await rig.Auth.RefreshTokenAsync(login.Value.RefreshToken!, "1.1.1.1", laptop);
 
+        // The second tab still holds the token the first tab just rotated: it must get a working session, not a logout.
         var second = await rig.Auth.RefreshTokenAsync(login.Value.RefreshToken!, "1.1.1.1", laptop);
 
-        second.IsSuccess.Should().BeFalse();
-        (await rig.Auth.RefreshTokenAsync(rotated.Value.RefreshToken!, "1.1.1.1", laptop)).IsSuccess
-            .Should().BeTrue("the newer token must survive a simple race");
+        second.IsSuccess.Should().BeTrue("the same device racing itself is not theft");
+        (await rig.Auth.GetSessionsAsync(rig.UserId, null)).Value.Should().HaveCount(1);
+        (await rig.Auth.RefreshTokenAsync(second.Value.RefreshToken!, "1.1.1.1", laptop)).IsSuccess.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Replaying_inside_the_grace_window_from_another_device_is_rejected()
+    {
+        var rig = await CreateRigAsync(new SessionSecuritySettings { RefreshReuseGraceSeconds = 60 });
+        var laptop = Device();
+        var login = await rig.Auth.LoginAsync(Creds(), "1.1.1.1", ChromeWin, laptop);
+        await rig.Auth.RefreshTokenAsync(login.Value.RefreshToken!, "1.1.1.1", laptop);
+
+        var thief = await rig.Auth.RefreshTokenAsync(login.Value.RefreshToken!, "6.6.6.6", Device());
+
+        thief.IsSuccess.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Refresh_tokens_are_not_stored_in_plaintext()
+    {
+        var rig = await CreateRigAsync();
+        var login = await rig.Auth.LoginAsync(Creds(), "1.1.1.1", ChromeWin, Device());
+        var raw = login.Value.RefreshToken!;
+
+        var stored = rig.Context.Users.Include(u => u.RefreshTokens).Single().RefreshTokens.Select(t => t.Token).ToList();
+
+        stored.Should().NotContain(raw);
+        stored.Should().OnlyContain(t => t.StartsWith("h1:"));
+    }
+
+    [Fact]
+    public async Task A_stored_token_hash_cannot_be_presented_as_a_token()
+    {
+        var rig = await CreateRigAsync();
+        var laptop = Device();
+        await rig.Auth.LoginAsync(Creds(), "1.1.1.1", ChromeWin, laptop);
+        var hash = rig.Context.Users.Include(u => u.RefreshTokens).Single().RefreshTokens.Single().Token;
+
+        (await rig.Auth.RefreshTokenAsync(hash, "1.1.1.1", laptop)).IsSuccess.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_legacy_plaintext_token_still_works_once_and_is_then_replaced_by_a_hashed_one()
+    {
+        var rig = await CreateRigAsync();
+        var laptop = Device();
+        var login = await rig.Auth.LoginAsync(Creds(), "1.1.1.1", ChromeWin, laptop);
+        var user = rig.Context.Users.Include(u => u.RefreshTokens).Single();
+        user.RefreshTokens.Single().Token = "legacy-plain-token";
+        await rig.Context.SaveChangesAsync();
+
+        var refreshed = await rig.Auth.RefreshTokenAsync("legacy-plain-token", "1.1.1.1", laptop);
+
+        refreshed.IsSuccess.Should().BeTrue();
+        rig.Context.Users.Include(u => u.RefreshTokens).Single().RefreshTokens
+            .Single(t => t.RevokedUtc == null).Token.Should().StartWith("h1:");
     }
 
     // ── New-device email ──────────────────────────────────────────────────────────

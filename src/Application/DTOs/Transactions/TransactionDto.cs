@@ -15,6 +15,8 @@ public class TransactionDto
     public string? CategoryName { get; set; }
     public int? MerchantId { get; set; }
     public string? MerchantName { get; set; }
+    public string? Notes { get; set; }
+    public List<string> Tags { get; set; } = new();
 
     /// <summary>
     /// Null for every ordinary transaction. Non-null (shared with its
@@ -24,4 +26,7 @@ public class TransactionDto
     /// it's available.
     /// </summary>
     public Guid? TransferGroupId { get; set; }
+
+    /// <summary>Set only on the response to a newly saved expense that pushed a budget past its alert level or limit.</summary>
+    public List<Application.DTOs.Budgets.BudgetAlertDto>? BudgetAlerts { get; set; }
 }

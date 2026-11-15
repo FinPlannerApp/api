@@ -121,17 +121,27 @@ public static class InfrastructureServiceExtensions
         services.AddHostedService<EmailQueueWorker>();
         services.AddHostedService<InfrastructureMonitorWorker>();
 
+        services.AddHttpClient("market", c =>
+        {
+            c.Timeout = TimeSpan.FromSeconds(40);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (compatible; FinPlanner/1.0)");
+        });
+        services.AddScoped<IMarketPriceService, MarketPriceService>();
+        services.AddHostedService<InvestmentValuationWorker>();
         services.AddScoped<RecurringTransactionJob>();
         services.AddScoped<UpdatePainVelocityJob>();
         services.AddScoped<RefreshTokenCleanupJob>();
         services.AddScoped<RewardPointsExpiryJob>();
         services.AddScoped<AccountChargeAdvanceJob>();
+        services.AddScoped<PaymentReminderJob>();
 
         services.AddHostedService<RecurringTransactionSchedulerWorker>();
         services.AddHostedService<PainVelocitySchedulerWorker>();
         services.AddHostedService<RefreshTokenCleanupSchedulerWorker>();
         services.AddHostedService<RewardPointsExpirySchedulerWorker>();
         services.AddHostedService<AccountChargeAdvanceSchedulerWorker>();
+        services.AddHostedService<SplitAutomationWorker>();
+        services.AddHostedService<PaymentReminderSchedulerWorker>();
 
         // 3. Register Identity with STRONG password requirements (dev AND production)
         services.AddIdentityCore<ApplicationUser>(options =>

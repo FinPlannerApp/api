@@ -176,14 +176,20 @@ public class CreateSubscriptionCommandHandler : IRequestHandler<CreateSubscripti
         var today = DateTime.UtcNow;
         var safetyLimit = 10000; // defends against a degenerate input looping indefinitely, never realistically hit
 
+        // Count monthly/yearly from the original start date so the day of month never drifts.
+        if (frequency is RecurrenceFrequency.Monthly or RecurrenceFrequency.Yearly)
+        {
+            for (var k = 0; k < 5000 && next < today; k++)
+                next = frequency == RecurrenceFrequency.Monthly ? startDate.AddMonths(k) : startDate.AddYears(k);
+            return next;
+        }
+
         while (next < today && safetyLimit-- > 0)
         {
             next = frequency switch
             {
                 RecurrenceFrequency.Daily => next.AddDays(1),
                 RecurrenceFrequency.Weekly => next.AddDays(7),
-                RecurrenceFrequency.Monthly => next.AddMonths(1),
-                RecurrenceFrequency.Yearly => next.AddYears(1),
                 _ => today // Custom/OneTime frequencies aren't really
                            // meaningful for a subscription — fall back to
                            // today rather than looping on a case this

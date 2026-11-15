@@ -48,6 +48,17 @@ public partial class AccountService
                 $"Insufficient balance. Available: {payingAccount.Balance:F2}, Requested: {dto.Amount:F2}."));
         }
 
+        // Double-click / retry guard: another payment toward this loan from this account in the last 3 s.
+        var recentSince = DateTime.UtcNow.AddSeconds(-3);
+        var recentLoanTxName = $"Loan principal payment — {loanAccount.Name}";
+        var recentInterestName = $"Interest — {loanAccount.Name}";
+        if (((Microsoft.EntityFrameworkCore.DbContext)_context).Database.CurrentTransaction == null &&
+            await _context.Transactions.AnyAsync(t => t.UserId == userId && !t.IsDeleted &&
+                t.AccountId == dto.PayingAccountId && t.CreatedAt >= recentSince &&
+                (t.Description == recentLoanTxName || t.Description == recentInterestName)))
+            return Result.Failure<LoanPaymentResultDto>(new Error("LoanPayment.DuplicateSubmit",
+                "A payment to this loan was just recorded. Refresh before paying again."));
+
         // Loan balances are stored negative (debt) — same convention as
         // every liability account in this app.
         var outstandingBalance = Math.Abs(loanAccount.Balance);
@@ -72,6 +83,8 @@ public partial class AccountService
         var (interestPortion, principalPortion) = LoanAmortization.CalculateSplit(
             outstandingBalance, loanAccount.LoanDetails.InterestRate ?? 0, dto.Amount);
 
+        var paymentGroupId = Guid.NewGuid();
+
         // ── Interest portion: a real expense, full stop ──────────────────────
         if (interestPortion > 0)
         {
@@ -83,7 +96,8 @@ public partial class AccountService
                 Type = TransactionType.Expense,
                 AccountId = dto.PayingAccountId,
                 UserId = userId,
-                Kind = TransactionKind.LoanInterest
+                Kind = TransactionKind.LoanInterest,
+                PaymentGroupId = paymentGroupId
                 // Deliberately not TransferGroupId-linked — this portion
                 // genuinely IS an expense, the whole point of this method
                 // is making sure only THIS part counts as one.
@@ -107,6 +121,7 @@ public partial class AccountService
                 AccountId = dto.PayingAccountId,
                 UserId = userId,
                 TransferGroupId = transferGroupId,
+                PaymentGroupId = paymentGroupId,
                 Kind = TransactionKind.LoanPrincipal
             };
             payingAccount.Balance -= principalPortion;
@@ -120,6 +135,7 @@ public partial class AccountService
                 AccountId = dto.LoanAccountId,
                 UserId = userId,
                 TransferGroupId = transferGroupId,
+                PaymentGroupId = paymentGroupId,
                 Kind = TransactionKind.LoanPrincipal
             };
             // Balance is negative (debt); an "Income" leg here correctly

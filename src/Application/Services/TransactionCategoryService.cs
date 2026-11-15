@@ -157,6 +157,13 @@ public class TransactionCategoryService : ICategoryService<TransactionCategoryDt
         if (category == null || category.UserId != userId)
             return Result.Failure<bool>(new Error("Category.NotFound", "Category not found."));
 
+        // A parent with live sub-categories can't just vanish — they'd be left pointing at a deleted parent.
+        var hasChildren = await _context.TransactionCategories
+            .AnyAsync(c => c.ParentCategoryId == id && c.UserId == userId && !c.IsDeleted);
+        if (hasChildren)
+            return Result.Failure<bool>(new Error("Category.HasSubCategories",
+                "This category still has sub-categories. Move or delete them first."));
+
         category.IsDeleted = true;
         category.DeletedAt = DateTime.UtcNow;
         _context.TransactionCategories.Update(category);

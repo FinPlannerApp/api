@@ -28,11 +28,9 @@ public static class CreditCardExposure
         foreach (var card in cards)
         {
             var tracked = Math.Max(0m, -card.Balance);
-            var bill = await context.CreditCardBills
-                .Where(b => b.AccountId == card.Id)
-                .OrderByDescending(b => b.StatementDate)
-                .FirstOrDefaultAsync(ct);
-            var remaining = bill == null ? 0m : await CreditCardBillMath.RemainingAsync(context, bill, ct);
+            // All unpaid statements count, not just the latest one (PH1-07).
+            var unpaid = await CreditCardBillMath.UnpaidBillsAsync(context, card.Id, ct);
+            var remaining = unpaid.Sum(u => u.Remaining);
             result.Add(new CardOwed(card, tracked, Math.Max(tracked, remaining)));
         }
         return result;

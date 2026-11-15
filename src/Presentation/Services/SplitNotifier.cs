@@ -14,6 +14,12 @@ public class SplitNotifier : ISplitNotifier
         _hubContext = hubContext;
     }
 
+    public async Task RemoveUserFromGroupAsync(int groupId, string userId)
+    {
+        foreach (var connectionId in SplitHub.ConnectionsOf(userId))
+            await _hubContext.Groups.RemoveFromGroupAsync(connectionId, SplitHub.GetGroupName(groupId));
+    }
+
     public async Task NotifyExpenseAddedAsync(int groupId, string activityMessage, object expense, object balances)
     {
         await BroadcastAsync(groupId, new

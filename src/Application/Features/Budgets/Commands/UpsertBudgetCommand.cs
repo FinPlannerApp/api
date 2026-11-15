@@ -54,11 +54,19 @@ public class UpsertBudgetCommandHandler : IRequestHandler<UpsertBudgetCommand, R
             _context.Budgets.Add(budget);
         }
 
+        // A category id from another user (or a deleted one) is never accepted.
+        if (request.Dto.TransactionCategoryId.HasValue &&
+            !await _context.TransactionCategories.AnyAsync(c => c.Id == request.Dto.TransactionCategoryId.Value &&
+                (c.UserId == request.UserId || c.UserId == null) && !c.IsDeleted, cancellationToken))
+        {
+            return Result.Failure<BudgetDto>(new Error("Category.NotFound", "The selected category was not found."));
+        }
         budget.TransactionCategoryId = request.Dto.TransactionCategoryId;
         budget.Amount = request.Dto.Amount;
         budget.Period = request.Dto.Period;
         budget.StartDate = request.Dto.StartDate;
         budget.EndDate = request.Dto.EndDate;
+        budget.AlertThresholdPercent = request.Dto.AlertThresholdPercent;
 
         await _context.SaveChangesAsync(cancellationToken);
 
@@ -66,7 +74,7 @@ public class UpsertBudgetCommandHandler : IRequestHandler<UpsertBudgetCommand, R
         if (budget.TransactionCategoryId.HasValue)
         {
             categoryName = await _context.TransactionCategories
-                .Where(c => c.Id == budget.TransactionCategoryId.Value)
+                .Where(c => c.Id == budget.TransactionCategoryId.Value && (c.UserId == request.UserId || c.UserId == null))
                 .Select(c => c.Name)
                 .FirstOrDefaultAsync(cancellationToken);
         }
@@ -79,7 +87,8 @@ public class UpsertBudgetCommandHandler : IRequestHandler<UpsertBudgetCommand, R
             Amount = budget.Amount,
             Period = budget.Period,
             StartDate = budget.StartDate,
-            EndDate = budget.EndDate
+            EndDate = budget.EndDate,
+            AlertThresholdPercent = budget.AlertThresholdPercent
         };
 
         return Result<BudgetDto>.Success(dto);

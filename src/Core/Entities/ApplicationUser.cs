@@ -21,7 +21,8 @@ public class ApplicationUser : IdentityUser, IAuditable
     /// controls whether overspend alert emails send. Defaults true so
     /// existing users keep getting alerts unless they explicitly opt out.
     /// </summary>
-    public bool OverspendAlertsEnabled { get; set; } = true;
+    /// <summary>Legacy. No longer read — budget emails are controlled by Budget settings (opt-in, off by default).</summary>
+    public bool OverspendAlertsEnabled { get; set; } = false;
 
     public List<RefreshToken> RefreshTokens { get; set; } = new();
     public List<UserDevice> Devices { get; set; } = new();

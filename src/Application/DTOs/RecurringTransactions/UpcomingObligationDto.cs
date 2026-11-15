@@ -51,4 +51,10 @@ public class UpcomingObligationDto
     /// automatically on its due date. If it is still overdue, the auto-debit has failed.
     /// </summary>
     public bool IsAutoPay { get; set; }
+
+    /// <summary>
+    /// What this obligation will actually take out of Real Available Cash, when that differs from Amount
+    /// (e.g. a subscription paid from a wallet only costs the part the wallet cannot cover). Null = use Amount.
+    /// </summary>
+    public decimal? CashImpactAmount { get; set; }
 }

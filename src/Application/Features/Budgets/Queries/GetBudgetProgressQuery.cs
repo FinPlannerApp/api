@@ -2,6 +2,7 @@ using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Budgets;
+using Domain.Enums;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 
@@ -41,25 +42,28 @@ public class GetBudgetProgressQueryHandler
     : IRequestHandler<GetBudgetProgressQuery, Result<List<BudgetProgressDto>>>
 {
     private readonly IApplicationDbContext _context;
+    private readonly IUserSettingsService _settings;
 
-    public GetBudgetProgressQueryHandler(IApplicationDbContext context)
-        => _context = context;
+    public GetBudgetProgressQueryHandler(IApplicationDbContext context, IUserSettingsService settings)
+    {
+        _context = context;
+        _settings = settings;
+    }
 
     public async Task<Result<List<BudgetProgressDto>>> Handle(
         GetBudgetProgressQuery request,
         CancellationToken cancellationToken)
     {
-        var (monthStart, monthEnd) = AppTimeZone.MonthBoundsUtc(request.RequestDate);
+        // The user's "month" may start on a day other than the 1st (salary day). Monthly budgets follow it.
+        var general = await _settings.GetGeneralAsync(request.UserId, cancellationToken);
+        var budgetSettings = await _settings.GetBudgetSettingsAsync(request.UserId, cancellationToken);
+        var (monthStart, monthEnd) = AppTimeZone.MonthBoundsUtc(request.RequestDate, general.MonthStartDay);
         var (yearStart, yearEnd)   = AppTimeZone.YearBoundsUtc(request.RequestDate);
         var (weekStart, weekEnd)   = AppTimeZone.WeekBoundsUtc(request.RequestDate);
 
         var todayLocal = (request.RequestDate.Kind == DateTimeKind.Utc
             ? request.RequestDate.ToLocal()
             : request.RequestDate).Date;
-
-        var requestLocalMonth = (request.RequestDate.Kind == DateTimeKind.Utc
-            ? request.RequestDate.ToLocal()
-            : request.RequestDate).Month;
 
         // ── 1. Load active budgets ────────────────────────────────────────────
         var activeBudgets = await _context.Budgets
@@ -110,6 +114,22 @@ public class GetBudgetProgressQueryHandler
             })
             .ToList();
 
+        // ── 3a. Monthly spending in the user's month window (may not be a calendar month) ──
+        bool hasMonthlyBudgets = activeBudgets.Any(b => b.Period == BudgetPeriod.Monthly);
+        List<CategorySpend> spendingByCategoryMonthly = hasMonthlyBudgets
+            ? await _context.Transactions
+                .AsNoTracking()
+                .Where(t => accountIds.Contains(t.AccountId)
+                         && !t.IsDeleted
+                         && t.Type == Domain.Enums.TransactionType.Expense
+                         && t.TransferGroupId == null
+                         && t.Date >= monthStart
+                         && t.Date <= monthEnd)
+                .GroupBy(t => t.TransactionCategoryId)
+                .Select(g => new CategorySpend(g.Key, g.Sum(t => t.Amount)))
+                .ToListAsync(cancellationToken)
+            : new List<CategorySpend>();
+
         // ── 3b. Weekly spending — separate targeted query, only if needed ─────
         bool hasWeeklyBudgets = activeBudgets.Any(b => b.Period == Domain.Enums.BudgetPeriod.Weekly);
 
@@ -151,14 +171,11 @@ public class GetBudgetProgressQueryHandler
                     break;
 
                 case Domain.Enums.BudgetPeriod.Monthly:
-                    var relevantRows = spendingByCategory
-                        .Where(s => s.Month == requestLocalMonth);
-
                     spentAmount = budget.TransactionCategoryId.HasValue
-                        ? relevantRows
+                        ? spendingByCategoryMonthly
                             .Where(s => CategoryRollup.Matches(rollupMap, budget.TransactionCategoryId, s.CategoryId))
                             .Sum(s => s.Total)
-                        : relevantRows.Sum(s => s.Total);
+                        : spendingByCategoryMonthly.Sum(s => s.Total);
                     break;
 
                 default: // Yearly
@@ -188,6 +205,15 @@ public class GetBudgetProgressQueryHandler
             // the period has technically already ended.
             var daysRemaining = Math.Max(1, (periodEndLocal - todayLocal).Days + 1);
 
+            var periodStartLocal = budget.Period switch
+            {
+                Domain.Enums.BudgetPeriod.Weekly => weekStart.ToLocal().Date,
+                Domain.Enums.BudgetPeriod.Yearly => yearStart.ToLocal().Date,
+                _ => monthStart.ToLocal().Date
+            };
+            var daysTotal = Math.Max(1, (periodEndLocal - periodStartLocal).Days + 1);
+            var daysElapsed = Math.Clamp((todayLocal - periodStartLocal).Days + 1, 1, daysTotal);
+
             var remaining = budget.Amount - spentAmount;
             var dailyAllowance = remaining > 0 ? remaining / daysRemaining : 0m;
 
@@ -202,7 +228,13 @@ public class GetBudgetProgressQueryHandler
                 StartDate             = budget.StartDate,
                 EndDate               = budget.EndDate,
                 DaysRemainingInPeriod = daysRemaining,
-                DailyAllowance        = dailyAllowance
+                DailyAllowance        = dailyAllowance,
+                AlertThresholdPercent = budget.AlertThresholdPercent ?? budgetSettings.DefaultAlertPercent,
+                HasThresholdOverride  = budget.AlertThresholdPercent.HasValue,
+                PeriodStart           = periodStartLocal,
+                PeriodEnd             = periodEndLocal,
+                DaysTotal             = daysTotal,
+                DaysElapsed           = daysElapsed
             });
         }
 

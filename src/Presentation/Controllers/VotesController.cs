@@ -3,6 +3,7 @@ using Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 using Application.Contracts;
@@ -12,6 +13,7 @@ namespace Presentation.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/issues")]
+[EnableRateLimiting("api")]
 public class VotesController : ControllerBase
 {
     private readonly VoteService _voteService;

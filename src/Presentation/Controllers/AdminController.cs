@@ -298,16 +298,8 @@ public class AdminController : ControllerBase
             }
 
             // 2. Re-apply migrations
-            var pendingMigrations = (await db.Database.GetPendingMigrationsAsync()).ToList();
-            if (pendingMigrations.Count > 0)
-            {
-                await db.Database.MigrateAsync();
-                results.Add($"Successfully applied {pendingMigrations.Count} pending migration(s): {string.Join(", ", pendingMigrations)}");
-            }
-            else
-            {
-                results.Add("No pending migrations found after cleanup.");
-            }
+            // Schema changes are applied by Flyway (db/migrations), never by the app.
+            results.Add("Schema is managed by Flyway; no application-side migration was run.");
 
             // 3. Seed database
             await seeder.SeedAsync();
@@ -345,23 +337,8 @@ public class AdminController : ControllerBase
         try
         {
             // 1. Apply pending migrations (unless explicitly bypassed)
-            if (input.BypassMigration != true)
-            {
-                var pendingMigrations = (await db.Database.GetPendingMigrationsAsync()).ToList();
-                if (pendingMigrations.Count > 0)
-                {
-                    await db.Database.MigrateAsync();
-                    results.Add($"Applied {pendingMigrations.Count} migration(s): {string.Join(", ", pendingMigrations)}");
-                }
-                else
-                {
-                    results.Add("No pending migrations.");
-                }
-            }
-            else
-            {
-                results.Add("Bypassed EF Core DDL migration because bypassMigration was set to true.");
-            }
+            // Schema is owned by Flyway; the app never runs EF migrations.
+            results.Add("Schema is managed by Flyway; no application-side migration was run.");
 
             // 2. Seed taxonomy categories and roadmap items
             await seeder.SeedAsync();

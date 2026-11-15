@@ -12,6 +12,12 @@ public interface IAccountService
     Task<Result<bool>> MergeAccountsAsync(string userId, MergeAccountsDto dto);
     Task<Result<bool>> SetArchivedStatusAsync(string userId, int accountId, bool isArchived);
     Task<Result<LoanPaymentResultDto>> MakeLoanPaymentAsync(string userId, MakeLoanPaymentDto dto);
+    Task<Result<InvestmentOverviewDto>> GetInvestmentOverviewAsync(string userId);
+    Task<Result<string>> RefreshInvestmentPricesAsync(string userId);
+    Task<Result<bool>> SetInvestmentValuationAsync(string userId, SetInvestmentValuationDto dto);
+    Task<Result<int>> CreateInvestmentAsync(string userId, CreateInvestmentDto dto);
+    Task<Result<InterestOverviewDto>> GetInterestOverviewAsync(string userId);
+    Task<Result<bool>> PostInterestAsync(string userId, PostInterestDto dto);
     Task<Result<DateTime>> AdvanceLoanDueDateAsync(string userId, int loanAccountId, int months);
     Task<Result<AmortizationScheduleDto>> GetAmortizationScheduleAsync(string userId, int loanAccountId);
     Task<Result<CreditCardBreakdownDto>> GetCreditCardBreakdownAsync(string userId, int accountId);

@@ -24,6 +24,7 @@ public class VoteService
     public async Task<(bool Success, string Message, int Votes, double PainScore, int UserVote)> ToggleVoteAsync(
         int issueId, int value, string userId)
     {
+        value = Math.Clamp(value, -1, 1); // never trust the client's vote weight
         var issue = await _context.Issues.FindAsync(issueId);
         if (issue == null)
             return (false, "Issue not found.", 0, 0, 0);

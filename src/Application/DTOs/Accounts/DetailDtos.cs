@@ -36,4 +36,6 @@ public class BankAccountDetailsDto
     public decimal? InterestRate { get; set; }
     public InterestFrequency? InterestFrequency { get; set; }
     public decimal? MinimumBalance { get; set; }
+    public int? InterestCreditDay { get; set; }
+    public bool AutoPostInterest { get; set; }
 }

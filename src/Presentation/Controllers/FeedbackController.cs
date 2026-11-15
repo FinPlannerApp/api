@@ -17,6 +17,8 @@ public class FeedbackController : BaseController
 
     [HttpPost("upsert")] // Use the standard upsert endpoint
     [AllowAnonymous]   // Allow anyone to submit feedback
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("anon-post")]
+    [RequestSizeLimit(20_000)]
     public async Task<IActionResult> Upsert([FromBody] CreateFeedbackDto dto)
     {
         var result = await _feedbackService.CreateFeedbackAsync(dto);

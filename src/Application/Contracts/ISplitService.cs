@@ -24,6 +24,7 @@ public interface ISplitService
     Task<Result<bool>> RejectPaymentAsync(string userId, int settlementId);
     Task<Result<PaymentRequestDto>> GetPaymentRequestAsync(string userId, int settlementId);
     Task<Result<PublicGroupViewDto>> GetPublicGroupViewAsync(string shareToken);
+    Task<Result<string>> RegenerateShareTokenAsync(string userId, int groupId);
     Task<Result<InviteCreatedDto>> CreateInviteAsync(string userId, CreateInviteDto dto);
     Task<Result<InvitePreviewDto>> PreviewInviteAsync(string token);
     Task<Result<JoinGroupResultDto>> JoinViaInviteAsync(string userId, JoinGroupDto dto);
@@ -36,16 +37,20 @@ public interface ISplitService
     Task<Result<ImportToLedgerResultDto>> ImportToLedgerAsync(string userId, ImportToLedgerDto dto);
     Task<Result<List<SettlementDto>>> GetSettlementHistoryAsync(string userId, int groupId);
     Task<Result<bool>> RemoveMemberAsync(string userId, int memberId);
+    Task<Result<bool>> UnlinkMemberAsync(string userId, int memberId);
     Task<Result<bool>> DeleteGroupAsync(string userId, int groupId);
     Task<Result<ActivityPageDto>> GetActivityAsync(string userId, int groupId, string? cursor, int? limit);
     Task<Result<List<ExpenseDto>>> GetDeletedExpensesAsync(string userId, int groupId);
     Task<Result<ExpenseDto>> RestoreExpenseAsync(string userId, int expenseId);
+    Task<Result<bool>> CanAttachReceiptAsync(string userId, int expenseId);
     Task<Result<ReceiptChangeDto>> SetReceiptAsync(string userId, int expenseId, string? receiptPath);
     Task<Result<List<GlobalExpenseHitDto>>> SearchExpensesAcrossGroupsAsync(string userId, string query, int? limit);
     Task<Result<SettlementDto>> UpdateSettlementAsync(string userId, int settlementId, UpdateSettlementDto dto);
     Task<Result<bool>> DeleteSettlementAsync(string userId, int settlementId);
     Task<Result<GroupDto>> UpdateGroupSettingsAsync(string userId, UpdateGroupSettingsDto dto);
     Task<Result<bool>> MergeMembersAsync(string userId, int sourceMemberId, int targetMemberId);
+    Task<Result<MemberDto>> SetMemberAdminAsync(string userId, int memberId, bool isAdmin);
+    Task<Result<MemberDto>> SetMemberGuestAsync(string userId, int memberId, bool isGuest);
     Task<Result<GroupDto>> CreateFriendAsync(string userId, CreateFriendDto dto);
     Task<Result<SplitDashboardDto>> GetDashboardAsync(string userId);
     Task<Result<SettleWithPersonResultDto>> SettleWithPersonAsync(string userId, SettleWithPersonDto dto);

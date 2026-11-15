@@ -29,8 +29,18 @@ public class Transaction : BaseEntity
     /// </summary>
     public Guid? TransferGroupId { get; set; }
 
+    /// <summary>Ties together the rows created by ONE loan payment (principal legs and the interest expense), so
+    /// deleting the payment removes exactly those rows. Null on older rows and every non-loan transaction.</summary>
+    public Guid? PaymentGroupId { get; set; }
+
     public int? MerchantId { get; set; }
     public Merchant? Merchant { get; set; }
+
+    /// <summary>Free-text note (up to 500 characters).</summary>
+    public string? Notes { get; set; }
+
+    /// <summary>Tags stored lower-case and pipe-delimited with both ends delimited, e.g. "|trip|work|", so a tag can be matched exactly with LIKE '%|trip|%'. Use TransactionTags to read and write.</summary>
+    public string? Tags { get; set; }
 
     /// <summary>
     /// True for a correction created by AdjustBalanceAsync, never set by
@@ -57,4 +67,15 @@ public class Transaction : BaseEntity
     /// TransferGroupId for exclusion purposes (BalanceAdjustment).
     /// </summary>
     public TransactionKind Kind { get; set; } = TransactionKind.Normal;
+
+    /// <summary>Set only by the recurring job: which recurring item (and which scheduled occurrence)
+    /// produced this row. A partial unique index makes posting the same occurrence twice impossible.</summary>
+    public int? RecurringTransactionId { get; set; }
+    public DateTime? RecurringOccurrenceDate { get; set; }
+
+    /// <summary>Hash of the bank's reference number for a row that came from an imported statement.
+    /// Unique per account, so re-importing the same statement can never add the row twice.</summary>
+    public string? ImportRef { get; set; }
+    /// <summary>When this entry was matched against (or created from) a bank statement.</summary>
+    public DateTime? ReconciledAt { get; set; }
 }

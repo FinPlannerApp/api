@@ -24,9 +24,12 @@ public static class NetWorthCalculator
     /// </summary>
     public static async Task<NetWorthResult> CalculateAsync(IApplicationDbContext context, string userId, CancellationToken cancellationToken = default)
     {
+        // Investment accounts count at their latest manual valuation when there is one (otherwise at recorded cost).
         var totalAssets = await context.Accounts
             .Where(a => a.UserId == userId && !a.AccountCategory.IsLiability && a.CashRole != Domain.Enums.CashRole.HeldForOthers)
-            .SumAsync(a => a.Balance, cancellationToken);
+            .SumAsync(a => a.AccountCategory.AccountType == Domain.Enums.AccountType.Investment && a.InvestmentDetails != null && a.InvestmentDetails.CurrentValue != null
+                ? a.InvestmentDetails.CurrentValue.Value
+                : a.Balance, cancellationToken);
 
         var totalLiabilitiesRaw = await context.Accounts
             .Where(a => a.UserId == userId && a.AccountCategory.IsLiability)

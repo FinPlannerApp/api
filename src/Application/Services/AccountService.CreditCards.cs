@@ -84,9 +84,10 @@ public partial class AccountService
             // linked payments, not read from a stored running total,
             // so this can't fall out of sync with what a real payment
             // would actually be validated against.
+            var bNextStmt = await CreditCardBillMath.NextStatementAsync(_context, b);
             var paid = await _context.CreditCardPayments
                 .Where(p => p.CreditCardAccountId == accountId && !p.IsDeleted &&
-                            (p.CreditCardBillId == b.Id || (p.CreditCardBillId == null && p.Date >= b.StatementDate)))
+                            (p.CreditCardBillId == b.Id || (p.CreditCardBillId == null && p.Date >= b.StatementDate && (bNextStmt == null || p.Date < bNextStmt))))
                 .SumAsync(p => (decimal?)p.Amount) ?? 0;
 
             if (paid < b.BillAmount)
@@ -316,9 +317,10 @@ public partial class AccountService
 
             foreach (var b in bills)
             {
+                var bNextStmt = await CreditCardBillMath.NextStatementAsync(_context, b);
                 var paid = await _context.CreditCardPayments
                     .Where(p => p.CreditCardAccountId == dto.CreditCardAccountId && !p.IsDeleted &&
-                                (p.CreditCardBillId == b.Id || (p.CreditCardBillId == null && p.Date >= b.StatementDate)))
+                                (p.CreditCardBillId == b.Id || (p.CreditCardBillId == null && p.Date >= b.StatementDate && (bNextStmt == null || p.Date < bNextStmt))))
                     .SumAsync(p => (decimal?)p.Amount) ?? 0;
 
                 if (paid < b.BillAmount)
@@ -337,9 +339,10 @@ public partial class AccountService
         decimal remainingBillPayable = 0;
         if (targetBill != null)
         {
+            var targetBillNextStmt = await CreditCardBillMath.NextStatementAsync(_context, targetBill);
             var paidForBill = await _context.CreditCardPayments
                 .Where(p => p.CreditCardAccountId == dto.CreditCardAccountId && !p.IsDeleted &&
-                            (p.CreditCardBillId == targetBill.Id || (p.CreditCardBillId == null && p.Date >= targetBill.StatementDate)))
+                            (p.CreditCardBillId == targetBill.Id || (p.CreditCardBillId == null && p.Date >= targetBill.StatementDate && (targetBillNextStmt == null || p.Date < targetBillNextStmt))))
                 .SumAsync(p => (decimal?)p.Amount) ?? 0;
 
             remainingBillPayable = Math.Max(0, targetBill.BillAmount - paidForBill);
@@ -497,9 +500,10 @@ public partial class AccountService
         var gapIsDeclaredInterest = false;
         if (targetBill != null)
         {
+            var targetBillNextStmt = await CreditCardBillMath.NextStatementAsync(_context, targetBill);
             var interestAlreadyPaid = await _context.CreditCardPayments
                 .Where(p => p.CreditCardAccountId == dto.CreditCardAccountId && !p.IsDeleted &&
-                            (p.CreditCardBillId == targetBill.Id || (p.CreditCardBillId == null && p.Date >= targetBill.StatementDate)))
+                            (p.CreditCardBillId == targetBill.Id || (p.CreditCardBillId == null && p.Date >= targetBill.StatementDate && (targetBillNextStmt == null || p.Date < targetBillNextStmt))))
                 .SumAsync(p => (decimal?)p.InterestPortion) ?? 0;
 
             var totalBillInterest = Math.Max(0, targetBill.BillAmount - computedBreakdown.StatementOutstanding);
@@ -710,9 +714,10 @@ public partial class AccountService
         bool billMarkedPaid = false;
         if (targetBill != null)
         {
+            var targetBillNextStmt = await CreditCardBillMath.NextStatementAsync(_context, targetBill);
             var existingPaidForBill = await _context.CreditCardPayments
                 .Where(p => p.CreditCardAccountId == dto.CreditCardAccountId && !p.IsDeleted &&
-                            (p.CreditCardBillId == targetBill.Id || (p.CreditCardBillId == null && p.Date >= targetBill.StatementDate)))
+                            (p.CreditCardBillId == targetBill.Id || (p.CreditCardBillId == null && p.Date >= targetBill.StatementDate && (targetBillNextStmt == null || p.Date < targetBillNextStmt))))
                 .SumAsync(p => (decimal?)p.Amount) ?? 0;
 
             var newPaidForBill = dto.Payments

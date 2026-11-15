@@ -22,7 +22,12 @@ public static class ApplicationServiceExtensions
         services.AddScoped<IAccountService, AccountService>();
         services.AddScoped<ISavingsBucketService, SavingsBucketService>();
         services.AddScoped<IMerchantService, MerchantService>();
+        services.AddScoped<ITransactionRuleService, TransactionRuleService>();
         services.AddScoped<IGoalService, GoalService>();
+        services.AddScoped<IInsuranceService, InsuranceService>();
+        services.AddScoped<IFlowService, FlowService>();
+        services.AddScoped<IForecastService, ForecastService>();
+        services.AddScoped<IAttachmentService, AttachmentService>();
         services.AddScoped<ITransactionService, TransactionService>();
         services.AddScoped<IAuthService, AuthService>();
 
@@ -32,6 +37,8 @@ public static class ApplicationServiceExtensions
 
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IReportService, ReportService>();
+        services.AddScoped<IPeriodReportService, PeriodReportService>();
+        services.AddScoped<IUserSettingsService, UserSettingsService>();
         services.AddScoped<Application.Features.Insights.IFinancialInsightsEngine, Application.Features.Insights.FinancialInsightsEngine>();
         services.AddScoped<Domain.Rules.IFinancialRule, Application.Features.Insights.Rules.HighSubscriptionSpendRule>();
         services.AddScoped<Domain.Rules.IFinancialRule, Application.Features.Insights.Rules.LifestyleInflationRule>();
@@ -52,6 +59,7 @@ public static class ApplicationServiceExtensions
         services.AddScoped<IssueRelationService>();
         services.AddScoped<IDecisionJournalService, DecisionJournalService>();
         services.AddScoped<ISplitService, SplitService>();
+        services.AddScoped<ISplitAutomationService, SplitAutomationService>();
 
         // Blog Image Storage & Services
         services.AddScoped<IBlogImageStorage, DatabaseBlogImageStorage>();

@@ -12,7 +12,7 @@ public class IssueWorkflowServiceTests
     public IssueWorkflowServiceTests()
     {
         // IssueWorkflowService CanTransition and GetAllowedTransitions don't use injected dependencies
-        _workflowService = new IssueWorkflowService(null!, null!, null!, null!);
+        _workflowService = new IssueWorkflowService(null!, null!, null!, null!, null!);
     }
 
     [Fact]

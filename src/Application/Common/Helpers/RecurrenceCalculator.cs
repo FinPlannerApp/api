@@ -19,21 +19,67 @@ public static class RecurrenceCalculator
             return CalculateNextCustomOnOrAfter(startDate, customDays, referenceDate);
 
         var next = startDate;
-        var safetyLimit = 10000;
 
+        // Monthly / yearly: always count from the ORIGINAL start date (start + k months). Stepping
+        // "previous + 1 month" would drift permanently: Jan 31 -> Feb 28 -> Mar 28 -> ...
+        if (frequency is RecurrenceFrequency.Monthly or RecurrenceFrequency.Yearly or RecurrenceFrequency.Quarterly or RecurrenceFrequency.HalfYearly)
+        {
+            var step = MonthsPerPeriod(frequency);
+            for (var k = 0; k < 5000 && next < referenceDate; k++)
+                next = startDate.AddMonths(k * step);
+            return next;
+        }
+
+        var safetyLimit = 10000;
         while (next < referenceDate && safetyLimit-- > 0)
         {
             next = frequency switch
             {
                 RecurrenceFrequency.Daily => next.AddDays(1),
                 RecurrenceFrequency.Weekly => next.AddDays(7),
-                RecurrenceFrequency.Monthly => next.AddMonths(1),
-                RecurrenceFrequency.Yearly => next.AddYears(1),
                 _ => referenceDate // OneTime and any other non-recurring case
             };
         }
 
         return next;
+    }
+
+    /// <summary>
+    /// The occurrence after <paramref name="currentUtc"/> for a monthly/yearly schedule that began at
+    /// <paramref name="startUtc"/>. Counted from the start date on the IST calendar, so the day of month
+    /// (31st, 1st ...) never drifts and a bill on the 1st never slides to the 29th.
+    /// </summary>
+    public static int MonthsPerPeriod(RecurrenceFrequency f) => f switch
+    {
+        RecurrenceFrequency.Quarterly => 3,
+        RecurrenceFrequency.HalfYearly => 6,
+        RecurrenceFrequency.Yearly => 12,
+        _ => 1,
+    };
+
+    /// <summary>Same as <see cref="NextMonthlyOrYearlyAfter"/> for any whole-month step (quarterly, half-yearly...).</summary>
+    public static DateTime NextEveryMonthsAfter(DateTime startUtc, DateTime currentUtc, int months)
+    {
+        var start = startUtc.ToLocal();
+        var cur = currentUtc.ToLocal();
+        for (var k = 1; k < 5000; k++)
+        {
+            var candidate = start.AddMonths(k * months);
+            if (candidate > cur) return candidate.ToUtc();
+        }
+        return cur.AddMonths(months).ToUtc();
+    }
+
+    public static DateTime NextMonthlyOrYearlyAfter(DateTime startUtc, DateTime currentUtc, bool yearly)
+    {
+        var start = startUtc.ToLocal();
+        var cur = currentUtc.ToLocal();
+        for (var k = 1; k < 5000; k++)
+        {
+            var candidate = yearly ? start.AddYears(k) : start.AddMonths(k);
+            if (candidate > cur) return candidate.ToUtc();
+        }
+        return (yearly ? cur.AddYears(1) : cur.AddMonths(1)).ToUtc();
     }
 
     private static DateTime CalculateNextCustomOnOrAfter(

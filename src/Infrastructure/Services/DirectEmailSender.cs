@@ -22,7 +22,7 @@ public class DirectEmailSender : IDirectEmailSender
     {
         _configuration = configuration;
         _logger = logger;
-        _httpClient = new HttpClient();
+        _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
     }
 
     public async Task SendEmailAsync(MailRequest mailRequest)
@@ -30,8 +30,8 @@ public class DirectEmailSender : IDirectEmailSender
         try
         {
             // 1. Always log for development
-            _logger.LogInformation("[DirectEmail] To {To}: {Subject}\n--- BODY ---\n{Body}\n--- END BODY ---", 
-                mailRequest.To, mailRequest.Subject, mailRequest.Body);
+            _logger.LogInformation("[DirectEmail] To {To}: {Subject} (body not logged - may contain OTP)",
+                mailRequest.To, mailRequest.Subject);
             
             // 2. Try to use Brevo API
             var apiKey = _configuration["Brevo:ApiKey"];
@@ -66,6 +66,8 @@ public class DirectEmailSender : IDirectEmailSender
                 {
                     var errorResponse = await response.Content.ReadAsStringAsync();
                     _logger.LogError("[DirectEmail] Brevo API failed. Status: {StatusCode}, Error: {Error}", response.StatusCode, errorResponse);
+                    // Surface the failure: the queue worker retries on exceptions (it never could before).
+                    throw new HttpRequestException($"Brevo rejected the email with status {(int)response.StatusCode}.");
                 }
             }
             else
@@ -76,6 +78,7 @@ public class DirectEmailSender : IDirectEmailSender
         catch (Exception ex)
         {
             _logger.LogError(ex, "[DirectEmail] Failed to send email to {To}.", mailRequest.To);
+            throw;
         }
     }
 }

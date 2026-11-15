@@ -1,4 +1,4 @@
-using Application.Contracts;
+﻿using Application.Contracts;
 using Microsoft.AspNetCore.Mvc;
 
 namespace API.Controllers;
@@ -13,10 +13,37 @@ namespace API.Controllers;
 public class ReportsController : BaseController
 {
     private readonly IReportService _reportService;
+    private readonly IPeriodReportService _periodReports;
 
-    public ReportsController(IReportService reportService)
+    public ReportsController(IReportService reportService, IPeriodReportService periodReports)
     {
         _reportService = reportService;
+        _periodReports = periodReports;
+    }
+
+    /// <summary>On-screen report for one month (month 1-12) or a whole year (omit month). Nothing is generated or stored.</summary>
+    [HttpGet("period")]
+    public async Task<IActionResult> Period([FromQuery] int year, [FromQuery] int? month)
+        => HandleResult(await _periodReports.GetAsync(UserId, year, month));
+
+    /// <summary>Excel file of the same report, built only when the user asks for it.</summary>
+    [HttpGet("period/excel")]
+    public async Task<IActionResult> PeriodExcel([FromQuery] int year, [FromQuery] int? month)
+    {
+        var result = await _periodReports.ExportExcelAsync(UserId, year, month);
+        if (!result.IsSuccess) return HandleResult(result);
+        var name = month.HasValue ? $"report-{year}-{month:D2}.xlsx" : $"report-{year}.xlsx";
+        return File(result.Value!, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", name);
+    }
+
+    /// <summary>PDF of the same report, built only when the user asks for it.</summary>
+    [HttpGet("period/pdf")]
+    public async Task<IActionResult> PeriodPdf([FromQuery] int year, [FromQuery] int? month)
+    {
+        var result = await _periodReports.ExportPdfAsync(UserId, year, month);
+        if (!result.IsSuccess) return HandleResult(result);
+        var name = month.HasValue ? $"report-{year}-{month:D2}.pdf" : $"report-{year}.pdf";
+        return File(result.Value!, "application/pdf", name);
     }
 
     [HttpGet("monthly-summary")]

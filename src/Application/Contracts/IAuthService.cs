@@ -16,6 +16,7 @@ public interface IAuthService
     Task<Result<bool>> ResetPasswordAsync(ResetPasswordDto dto);
     Task<Result<bool>> CheckEmailAsync(string email);
     Task<Result<bool>> CheckUserNameAsync(string username);
+    Task<Result<UserProfileDto>> GetProfileAsync(string userId);
     Task<Result<UserProfileDto>> UpdateProfileAsync(string userId, UpdateProfileDto dto);
 
     Task<Result<List<SessionDto>>> GetSessionsAsync(string userId, string? currentSessionId);

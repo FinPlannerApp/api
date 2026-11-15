@@ -69,6 +69,13 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 var app = builder.Build();
 
+if (!app.Environment.IsDevelopment() &&
+    !(builder.Configuration.GetSection("ForwardedHeaders:KnownProxies").GetChildren().Any() ||
+      builder.Configuration.GetSection("ForwardedHeaders:KnownNetworks").GetChildren().Any()))
+{
+    app.Logger.LogWarning("ForwardedHeaders:KnownProxies/KnownNetworks are not configured: X-Forwarded-For is trusted from any hop, so client IPs (and per-IP rate limits) can be spoofed. Set them to your proxy/Cloudflare ranges.");
+}
+
 app.UseSerilogRequestLogging();
 
 // --- Middleware Pipeline ---
@@ -97,21 +104,7 @@ app.MapGet("/health/db", async (ApplicationDbContext db) =>
     return await db.Database.CanConnectAsync()
         ? Results.Ok("db-ok")
         : Results.Problem("db-fail", statusCode: 503);
-});
-
-// CSRF Token Endpoint (for Angular to retrieve anti-forgery token)
-app.MapGet("/api/antiforgery/token", (HttpContext context) =>
-{
-    var antiforgery = context.RequestServices.GetRequiredService<Microsoft.AspNetCore.Antiforgery.IAntiforgery>();
-    var tokens = antiforgery.GetAndStoreTokens(context);
-    context.Response.Cookies.Append("XSRF-TOKEN", tokens.RequestToken!, new CookieOptions 
-    { 
-        HttpOnly = false, // Angular needs to read this
-        Secure = context.Request.IsHttps,
-        SameSite = SameSiteMode.Strict
-    });
-    return Results.Ok(new { token = tokens.RequestToken });
-}).RequireCors("AllowSpecificOrigins");
+}).RequireRateLimiting("api");
 
 // 4. Swagger
 if (app.Environment.IsDevelopment())
@@ -130,14 +123,21 @@ if (!app.Environment.IsDevelopment())
 }
 
 // Serve static files from wwwroot (e.g. uploaded issue attachments)
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    // Uploaded files are user content: never let a browser sniff or execute them.
+    OnPrepareResponse = ctx =>
+    {
+        ctx.Context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        ctx.Context.Response.Headers["Content-Security-Policy"] = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox";
+        ctx.Context.Response.Headers["Content-Disposition"] = "inline";
+    }
+});
 
 app.UseCookiePolicy(new CookiePolicyOptions
 {
     MinimumSameSitePolicy = SameSiteMode.Unspecified
 });
-
-app.UseRateLimiter();
 
 // 5. CORS
 using (var scope = app.Services.CreateScope())
@@ -241,6 +241,15 @@ app.Use(async (context, next) =>
     // supplied.
     var devConnectSrc = app.Environment.IsDevelopment() ? " http:" : "";
 
+    if (!app.Environment.IsDevelopment())
+    {
+        // The API serves JSON and images only: no scripts, frames or connections are ever needed.
+        context.Response.Headers.Append("Content-Security-Policy",
+            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+        await next();
+        return;
+    }
+
     context.Response.Headers.Append("Content-Security-Policy", 
         $"default-src 'self' https://finplanner.ska97homelab.uk; " +
         $"script-src 'self' 'unsafe-eval' https://www.googletagmanager.com https://static.cloudflareinsights.com https://finplanner.ska97homelab.uk; " +
@@ -255,10 +264,12 @@ app.Use(async (context, next) =>
 
 app.UseAuthentication();
 app.UseAuthorization();
+// After authentication so the "api"/"bulk" policies can partition by the signed-in user (not just IP).
+app.UseRateLimiter();
 app.UseMiddleware<SessionValidationMiddleware>();
 app.UseMiddleware<UpdateLastSeenMiddleware>();
 
 app.MapControllers();
 app.MapHub<API.Hubs.SplitHub>("/hubs/split");
 
-app.Run();
+app.Run();

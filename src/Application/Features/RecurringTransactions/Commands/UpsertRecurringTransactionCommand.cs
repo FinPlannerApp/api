@@ -66,6 +66,12 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
 
         // entity is guaranteed non-null here
         entity.AccountId = request.Dto.AccountId;
+        if (request.Dto.TransactionCategoryId.HasValue &&
+            !await _context.TransactionCategories.AnyAsync(c => c.Id == request.Dto.TransactionCategoryId.Value &&
+                (c.UserId == request.UserId || c.UserId == null) && !c.IsDeleted, cancellationToken))
+        {
+            return Result.Failure<RecurringTransactionDto>(new Error("Category.NotFound", "The selected category was not found."));
+        }
         entity.TransactionCategoryId = request.Dto.TransactionCategoryId;
         entity.Description = request.Dto.Description;
         entity.Amount = request.Dto.Amount;
@@ -88,6 +94,25 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
         }
 
         entity.LinkedLoanAccountId = request.Dto.LinkedLoanAccountId;
+
+        if (request.Dto.LinkedInvestmentAccountId.HasValue)
+        {
+            if (request.Dto.LinkedLoanAccountId.HasValue)
+                return Result.Failure<RecurringTransactionDto>(new Error(
+                    "RecurringTransaction.LoanAndInvestment", "A recurring item can't be both a loan EMI and an investment contribution."));
+            if (request.Dto.Type != TransactionType.Expense)
+                return Result.Failure<RecurringTransactionDto>(new Error(
+                    "RecurringTransaction.InvestmentNeedsExpense", "An investment contribution leaves the funding account, so it must be an expense-type recurring item."));
+            if (request.Dto.LinkedInvestmentAccountId.Value == request.Dto.AccountId)
+                return Result.Failure<RecurringTransactionDto>(new Error(
+                    "RecurringTransaction.SameAccount", "Funding account and investment can't be the same account."));
+            var invOk = await _context.Accounts.AnyAsync(a => a.Id == request.Dto.LinkedInvestmentAccountId.Value
+                && a.UserId == request.UserId && a.AccountCategory.AccountType == AccountType.Investment, cancellationToken);
+            if (!invOk)
+                return Result.Failure<RecurringTransactionDto>(new Error(
+                    "RecurringTransaction.InvalidInvestmentAccount", "Choose one of your investment accounts."));
+        }
+        entity.LinkedInvestmentAccountId = request.Dto.LinkedInvestmentAccountId;
 
         if (isNew)
         {
@@ -130,7 +155,7 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
         if (entity.TransactionCategoryId.HasValue)
         {
             categoryName = await _context.TransactionCategories
-                .Where(tc => tc.Id == entity.TransactionCategoryId)
+                .Where(tc => tc.Id == entity.TransactionCategoryId && (tc.UserId == request.UserId || tc.UserId == null))
                 .Select(tc => tc.Name)
                 .FirstOrDefaultAsync(cancellationToken);
         }
@@ -153,7 +178,8 @@ public class UpsertRecurringTransactionCommandHandler : IRequestHandler<UpsertRe
             IsActive = entity.IsActive,
             LastProcessedDate = entity.LastProcessedDate,
             IsObligation = entity.IsObligation,
-            LinkedLoanAccountId = entity.LinkedLoanAccountId
+            LinkedLoanAccountId = entity.LinkedLoanAccountId,
+            LinkedInvestmentAccountId = entity.LinkedInvestmentAccountId
         };
 
         return Result.Success(resultDto);

@@ -13,4 +13,6 @@ public interface ISplitNotifier
     Task NotifyGroupStatusChangedAsync(int groupId, string activityMessage, SplitGroupStatus status);
     Task NotifyGroupUpdatedAsync(int groupId, string activityMessage);
     Task NotifyGroupDeletedAsync(int groupId, string activityMessage);
+    /// <summary>Drops every live socket of this user from the group's SignalR room (member removed / left).</summary>
+    Task RemoveUserFromGroupAsync(int groupId, string userId);
 }

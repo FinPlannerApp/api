@@ -17,7 +17,7 @@ public class RewardPointsExpiryJob
         var now = DateTime.UtcNow;
 
         var expiring = await _context.CreditCardRewardPoints
-            .Where(r => r.ExpiryDate.HasValue && r.ExpiryDate.Value <= now)
+            .Where(r => r.ExpiryDate.HasValue && r.ExpiryDate.Value <= now && (r.PointsEarned - r.PointsRedeemed - r.PointsExpired) > 0)
             .ToListAsync();
 
         foreach (var r in expiring)

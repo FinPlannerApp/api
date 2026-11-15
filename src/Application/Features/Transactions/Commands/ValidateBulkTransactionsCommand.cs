@@ -58,6 +58,19 @@ public class ValidateBulkTransactionsCommandHandler
 
         // Running-balance replay, chronological, credits before debits on the same day.
         var running = accounts.ToDictionary(a => a.Key, a => a.Value.Balance);
+        // Existing entries per account, to work out the balance as it stood ON a back-dated row's date.
+        var earliest = valid.Count == 0 ? DateTime.UtcNow.Date : valid.Min(i => rows[i].Transaction.Date.Date);
+        var accIdsAll = accounts.Keys.ToList();
+        var laterTx = (await _context.Transactions.AsNoTracking()
+            .Where(t => accIdsAll.Contains(t.AccountId) && t.Date >= earliest)
+            .Select(t => new { t.AccountId, t.Date, t.Amount, t.Type })
+            .ToListAsync(ct))
+            .GroupBy(t => t.AccountId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+        decimal NetAfter(int acc, DateTime day) =>
+            laterTx.TryGetValue(acc, out var l)
+                ? l.Where(t => t.Date.Date > day).Sum(t => t.Type == TransactionType.Income ? t.Amount : -t.Amount)
+                : 0m;
         bool IsLiab(int id) => accounts[id].AccountCategory?.IsLiability ?? false;
         foreach (var i in valid.OrderBy(i => rows[i].Transaction.Date.Date)
                                 .ThenBy(i => (rows[i].DestinationAccountId.HasValue || rows[i].Transaction.Type == TransactionType.Expense) ? 1 : 0)
@@ -69,6 +82,12 @@ public class ValidateBulkTransactionsCommandHandler
             running[r.AccountId] += isDebit ? -amount : amount;
             if (r.DestinationAccountId.HasValue) running[r.DestinationAccountId.Value] += amount;
 
+            if (isDebit && !IsLiab(r.AccountId) && running[r.AccountId] >= 0)
+            {
+                var asOf = running[r.AccountId] - NetAfter(r.AccountId, r.Transaction.Date.Date);
+                if (asOf < 0)
+                    Add(i, "warning", $"On {r.Transaction.Date:dd MMM} {accounts[r.AccountId].Name} would only have had about ₹{asOf + amount:F2}, less than this ₹{amount:F2}. It saves because later credits cover it — check the date.");
+            }
             if (isDebit && !IsLiab(r.AccountId) && running[r.AccountId] < 0)
                 Add(i, "error", $"Not enough balance in {accounts[r.AccountId].Name}: after the rows dated before or on this one it would be ₹{running[r.AccountId]:F2}. Add the missing credit, fix the date, or correct the amount.");
         }

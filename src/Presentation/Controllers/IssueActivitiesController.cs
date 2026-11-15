@@ -3,6 +3,7 @@ using Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using System.Security.Claims;
 
 namespace Presentation.Controllers;
@@ -10,6 +11,7 @@ namespace Presentation.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/issues")]
+[EnableRateLimiting("api")]
 public class IssueActivitiesController : ControllerBase
 {
     private readonly IssueActivityService _activityService;

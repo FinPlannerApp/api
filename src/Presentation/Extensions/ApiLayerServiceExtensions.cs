@@ -40,6 +40,17 @@ public static class ApiLayerServiceExtensions
                     QueueLimit = 0
                 }));
 
+            // Anonymous write endpoints (feedback, ...): strict, per IP.
+            options.AddPolicy("anon-post", context => RateLimitPartition.GetFixedWindowLimiter(
+                partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                factory: _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 5,
+                    Window = TimeSpan.FromMinutes(10),
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 0
+                }));
+
             options.AddPolicy("bulk", context => RateLimitPartition.GetFixedWindowLimiter(
                 partitionKey: context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                 factory: _ => new FixedWindowRateLimiterOptions
@@ -138,4 +149,4 @@ public static class ApiLayerServiceExtensions
 
         return services;
     }
-}
+}

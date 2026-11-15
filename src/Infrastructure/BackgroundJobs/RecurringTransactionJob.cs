@@ -106,6 +106,26 @@ public class RecurringTransactionJob
                         _logger.LogError(ex, "Failed to process loan-linked recurring transaction {Id}", rt.Id);
                     }
                 }
+                else if (rt.LinkedInvestmentAccountId.HasValue)
+                {
+                    // SIP / regular contribution: money moves from the funding account into the investment
+                    // as a transfer, so it never counts as spending and net worth is unchanged at purchase.
+                    var sipResult = await _transactionService.CreateTransferAsync(rt.UserId, rt.AccountId, new CreateTransferDto
+                    {
+                        Description = string.IsNullOrWhiteSpace(rt.Description) ? "Investment contribution" : rt.Description!,
+                        Amount = rt.Amount,
+                        Date = rt.NextProcessDate,
+                        DestinationAccountId = rt.LinkedInvestmentAccountId.Value
+                    });
+                    success = sipResult.IsSuccess;
+                    if (!success)
+                    {
+                        var ex = new InvalidOperationException(
+                            $"Investment contribution failed for recurring tx {rt.Id}: {sipResult.Error.Description}");
+                        failures.Add((rt.Id, rt.Description ?? "", ex));
+                        _logger.LogError(ex, "Failed to process investment-linked recurring transaction {Id}", rt.Id);
+                    }
+                }
                 else
                 {
                     var upsertDto = new UpsertTransactionDto
@@ -114,7 +134,9 @@ public class RecurringTransactionJob
                         Amount                = rt.Amount,
                         Type                  = rt.Type,
                         Date                  = rt.NextProcessDate,
-                        TransactionCategoryId = rt.TransactionCategoryId
+                        TransactionCategoryId = rt.TransactionCategoryId,
+                        RecurringTransactionId = rt.Id,
+                        RecurringOccurrenceDate = rt.NextProcessDate
                     };
 
                     var result = await _transactionService.UpsertTransactionAsync(rt.UserId, rt.AccountId, upsertDto);
@@ -142,7 +164,7 @@ public class RecurringTransactionJob
                     }
                     else
                     {
-                        rt.NextProcessDate = CalculateNextDate(rt.NextProcessDate, rt.Frequency, rt.CustomDays);
+                        rt.NextProcessDate = CalculateNextDate(rt.NextProcessDate, rt.Frequency, rt.CustomDays, rt.StartDate);
 
                         if (rt.EndDate.HasValue && rt.NextProcessDate > rt.EndDate.Value)
                         {
@@ -231,13 +253,15 @@ public class RecurringTransactionJob
         }
     }
 
-    private static DateTime CalculateNextDate(DateTime current, RecurrenceFrequency frequency, RecurrenceDayOfWeek? customDays)
+    private static DateTime CalculateNextDate(DateTime current, RecurrenceFrequency frequency, RecurrenceDayOfWeek? customDays, DateTime startDate)
         => frequency switch
         {
             RecurrenceFrequency.Daily   => current.AddDays(1),
             RecurrenceFrequency.Weekly  => current.AddDays(7),
-            RecurrenceFrequency.Monthly => current.AddMonths(1),
-            RecurrenceFrequency.Yearly  => current.AddYears(1),
+            RecurrenceFrequency.Monthly => Application.Common.Helpers.RecurrenceCalculator.NextMonthlyOrYearlyAfter(startDate, current, yearly: false),
+            RecurrenceFrequency.Yearly  => Application.Common.Helpers.RecurrenceCalculator.NextMonthlyOrYearlyAfter(startDate, current, yearly: true),
+            RecurrenceFrequency.Quarterly => Application.Common.Helpers.RecurrenceCalculator.NextEveryMonthsAfter(startDate, current, 3),
+            RecurrenceFrequency.HalfYearly => Application.Common.Helpers.RecurrenceCalculator.NextEveryMonthsAfter(startDate, current, 6),
             RecurrenceFrequency.Custom  => CalculateNextCustomDate(current, customDays),
             _ => throw new ArgumentOutOfRangeException(nameof(frequency), frequency, null)
         };

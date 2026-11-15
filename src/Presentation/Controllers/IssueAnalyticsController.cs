@@ -1,6 +1,7 @@
 using Application.Contracts;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
 namespace Presentation.Controllers;
@@ -8,6 +9,7 @@ namespace Presentation.Controllers;
 [Authorize(Roles = "Admin")]
 [ApiController]
 [Route("api/issues/analytics")]
+[EnableRateLimiting("api")]
 public class IssueAnalyticsController : ControllerBase
 {
     private readonly IApplicationDbContext _context;

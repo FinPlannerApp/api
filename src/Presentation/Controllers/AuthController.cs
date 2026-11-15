@@ -183,6 +183,7 @@ public class AuthController : BaseController
 
     [HttpPost("check-email")]
     [AllowAnonymous]
+    [EnableRateLimiting("login")]
     public async Task<IActionResult> CheckEmail([FromBody] CheckEmailDto dto)
     {
         if (string.IsNullOrWhiteSpace(dto.Email)) return BadRequest("Email is required.");
@@ -192,6 +193,7 @@ public class AuthController : BaseController
 
     [HttpPost("check-username")]
     [AllowAnonymous]
+    [EnableRateLimiting("login")]
     public async Task<IActionResult> CheckUserName([FromBody] CheckUsernameDto dto)
     {
         if (string.IsNullOrWhiteSpace(dto.Username)) return BadRequest("Username is required.");
@@ -225,6 +227,11 @@ public class AuthController : BaseController
         return HandleResult(result);
     }
 
+    [HttpGet("profile")]
+    [Authorize]
+    public async Task<IActionResult> GetProfile()
+        => HandleResult(await _authService.GetProfileAsync(UserId!));
+
     [HttpPost("update-profile")]
     [Authorize]
     public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileDto dto)
@@ -232,4 +239,4 @@ public class AuthController : BaseController
         var result = await _authService.UpdateProfileAsync(UserId!, dto);
         return HandleResult(result);
     }
-}
+}

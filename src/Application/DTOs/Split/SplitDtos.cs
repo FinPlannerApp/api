@@ -16,6 +16,7 @@ public class GroupDto
     public string Currency { get; set; } = "INR";
     public bool SimplifyDebts { get; set; } = true;
     public bool IsDirect { get; set; }
+    public bool AutoRemind { get; set; }
     public DateTime? StartDate { get; set; }
     public DateTime? EndDate { get; set; }
     public SplitGroupStatus Status { get; set; }
@@ -32,6 +33,12 @@ public class MemberDto
     public string? UpiId { get; set; }
     /// <summary>Set when the member has left / been removed (hidden from pickers and balances).</summary>
     public DateTime? LeftAt { get; set; }
+
+    /// <summary>Co-admin promoted by the creator (the creator is always an admin).</summary>
+    public bool IsAdmin { get; set; }
+
+    /// <summary>View-only member (set by an admin).</summary>
+    public bool IsGuest { get; set; }
 }
 
 public class AddMemberDto
@@ -60,6 +67,8 @@ public class UpdateGroupSettingsDto
     /// <summary>ISO currency code, e.g. INR, USD, EUR. A display label — amounts are not converted.</summary>
     public required string Currency { get; set; }
     public bool SimplifyDebts { get; set; } = true;
+    /// <summary>Email a weekly reminder to members who still owe money.</summary>
+    public bool AutoRemind { get; set; }
     public DateTime? StartDate { get; set; }
     public DateTime? EndDate { get; set; }
 }

@@ -10,10 +10,12 @@ namespace API.Controllers;
 public class SplitController : BaseController
 {
     private readonly ISplitService _service;
+    private readonly ISplitAutomationService _automation;
 
-    public SplitController(ISplitService service)
+    public SplitController(ISplitService service, ISplitAutomationService automation)
     {
         _service = service;
+        _automation = automation;
     }
 
     [HttpPost("groups")]
@@ -106,6 +108,10 @@ public class SplitController : BaseController
     string shareToken, [FromQuery] string? cursor, [FromQuery] int? limit)
     => HandleResult(await _service.GetPublicExpensesAsync(shareToken, cursor, limit));
 
+    [HttpPost("groups/{groupId}/share-token/reset")]
+    public async Task<IActionResult> ResetShareToken(int groupId)
+        => HandleResult(await _service.RegenerateShareTokenAsync(UserId, groupId));
+
     [HttpPost("invites")]
     public async Task<IActionResult> CreateInvite([FromBody] CreateInviteDto dto)
         => HandleResult(await _service.CreateInviteAsync(UserId, dto));
@@ -150,6 +156,38 @@ public class SplitController : BaseController
         return HandleResult(await _service.UpdateGroupSettingsAsync(UserId, dto));
     }
 
+    /// <summary>Creator only: make a member a co-admin, or take it away.</summary>
+    [HttpPut("members/{memberId}/admin")]
+    public async Task<IActionResult> SetMemberAdmin(int memberId, [FromBody] SetAdminDto dto)
+        => HandleResult(await _service.SetMemberAdminAsync(UserId, memberId, dto.IsAdmin));
+
+    /// <summary>Admin only: make a member view-only (guest), or a full member again.</summary>
+    [HttpPut("members/{memberId}/guest")]
+    public async Task<IActionResult> SetMemberGuest(int memberId, [FromBody] SetGuestDto dto)
+        => HandleResult(await _service.SetMemberGuestAsync(UserId, memberId, dto.IsGuest));
+
+    /// <summary>Recurring expenses of a group.</summary>
+    [HttpGet("groups/{groupId}/recurring")]
+    public async Task<IActionResult> GetRecurring(int groupId)
+        => HandleResult(await _automation.GetRecurringAsync(UserId, groupId));
+
+    [HttpPost("recurring")]
+    public async Task<IActionResult> CreateRecurring([FromBody] CreateRecurringExpenseDto dto)
+        => HandleResult(await _automation.CreateRecurringAsync(UserId, dto));
+
+    [HttpPut("recurring/{id}/active")]
+    public async Task<IActionResult> SetRecurringActive(int id, [FromBody] SetActiveDto dto)
+        => HandleResult(await _automation.SetRecurringActiveAsync(UserId, id, dto.Active));
+
+    [HttpDelete("recurring/{id}")]
+    public async Task<IActionResult> DeleteRecurring(int id)
+        => HandleResult(await _automation.DeleteRecurringAsync(UserId, id));
+
+    /// <summary>Email a member who owes money a reminder (once per day per person).</summary>
+    [HttpPost("reminders")]
+    public async Task<IActionResult> SendReminder([FromBody] SendReminderDto dto)
+        => HandleResult(await _automation.SendReminderAsync(UserId, dto));
+
     /// <summary>Merge a name-only member into another one (creator only): all their expenses and payments move over.</summary>
     [HttpPost("members/{sourceId}/merge-into/{targetId}")]
     public async Task<IActionResult> MergeMembers(int sourceId, int targetId)
@@ -187,6 +225,11 @@ public class SplitController : BaseController
     [HttpDelete("members/{memberId}")]
     public async Task<IActionResult> RemoveMember(int memberId)
         => HandleResult(await _service.RemoveMemberAsync(UserId, memberId));
+
+    /// <summary>Admin: detach the account from a member (wrong person claimed them). Keeps expenses and balance.</summary>
+    [HttpPost("members/{memberId}/unlink")]
+    public async Task<IActionResult> UnlinkMember(int memberId)
+        => HandleResult(await _service.UnlinkMemberAsync(UserId, memberId));
 
     [HttpDelete("groups/{groupId}")]
     public async Task<IActionResult> DeleteGroup(int groupId)
@@ -245,6 +288,19 @@ public class SplitController : BaseController
             !string.Equals(file.ContentType, expectedType, StringComparison.OrdinalIgnoreCase))
             return ReceiptError("Only JPG, PNG or WebP images are allowed.");
 
+        // Authorise first: nothing touches the disk for someone who can't attach to this expense.
+        var allowed = await _service.CanAttachReceiptAsync(UserId, id);
+        if (!allowed.IsSuccess) return HandleResult(Result.Failure<ReceiptChangeDto>(allowed.Error));
+
+        // The bytes must really be the image type claimed (extension + content-type alone are client-supplied).
+        var head = new byte[12];
+        await using (var probe = file.OpenReadStream())
+        {
+            var read = await probe.ReadAsync(head.AsMemory(0, 12));
+            if (read < 12 || !LooksLikeImage(head, extension.ToLowerInvariant()))
+                return ReceiptError("That file isn't a valid JPG, PNG or WebP image.");
+        }
+
         // Random server-side name: the caller's file name is never used on disk.
         var folder = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads", "split-receipts", id.ToString());
         Directory.CreateDirectory(folder);
@@ -274,6 +330,14 @@ public class SplitController : BaseController
         if (result.IsSuccess) DeleteReceiptFile(result.Value.PreviousPath);
         return HandleResult(result);
     }
+
+    private static bool LooksLikeImage(byte[] h, string ext) => ext switch
+    {
+        ".jpg" or ".jpeg" => h[0] == 0xFF && h[1] == 0xD8 && h[2] == 0xFF,
+        ".png" => h[0] == 0x89 && h[1] == 0x50 && h[2] == 0x4E && h[3] == 0x47,
+        ".webp" => h[0] == 'R' && h[1] == 'I' && h[2] == 'F' && h[3] == 'F' && h[8] == 'W' && h[9] == 'E' && h[10] == 'B' && h[11] == 'P',
+        _ => false
+    };
 
     private IActionResult ReceiptError(string message)
         => HandleResult(Result.Failure<ReceiptChangeDto>(new Error("SplitReceipt.Invalid", message)));

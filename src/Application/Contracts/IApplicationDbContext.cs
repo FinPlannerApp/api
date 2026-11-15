@@ -11,10 +11,15 @@ public interface IApplicationDbContext
     DbSet<AccountCategory> AccountCategories { get; }
     DbSet<CreditCardDetails> CreditCardDetails { get; }
     DbSet<LoanDetails> LoanDetails { get; }
+    DbSet<InvestmentDetails> InvestmentDetails { get; }
     DbSet<BankAccountDetails> BankAccountDetails { get; }
     DbSet<TransactionCategory> TransactionCategories { get; }
     DbSet<Feedback> Feedbacks { get; }
     DbSet<Budget> Budgets { get; }
+    DbSet<UserModuleSetting> UserModuleSettings { get; }
+    DbSet<TransactionRule> TransactionRules { get; }
+    DbSet<ReminderLog> ReminderLogs { get; }
+    DbSet<BudgetAlertEvent> BudgetAlertEvents { get; }
     DbSet<RecurringTransaction> RecurringTransactions { get; }
     DbSet<Subscription> Subscriptions { get; }
 
@@ -47,6 +52,8 @@ public interface IApplicationDbContext
     DbSet<Merchant> Merchants { get; }
     DbSet<MerchantAlias> MerchantAliases { get; }
     DbSet<Goal> Goals { get; }
+    DbSet<InsurancePolicy> InsurancePolicies { get; }
+    DbSet<Attachment> Attachments { get; }
     DbSet<CreditCardBill> CreditCardBills { get; }
     DbSet<CreditCardPayment> CreditCardPayments { get; }
     DbSet<CreditCardRewardPoints> CreditCardRewardPoints { get; }
@@ -59,6 +66,7 @@ public interface IApplicationDbContext
     DbSet<SplitSettlement> SplitSettlements { get; }
     DbSet<SplitGroupInvite> SplitGroupInvites { get; }
     DbSet<SplitActivity> SplitActivities { get; }
+    DbSet<SplitRecurringExpense> SplitRecurringExpenses { get; }
     DbSet<BlogPost> BlogPosts { get; }
     DbSet<BlogImage> BlogImages { get; }
     DbSet<BlogPostComment> BlogPostComments { get; }

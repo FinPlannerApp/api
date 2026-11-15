@@ -17,4 +17,7 @@ public class Budget : BaseEntity
     public DateTime StartDate { get; set; }
     // Null EndDate means it's a recurring/ongoing budget constraint
     public DateTime? EndDate { get; set; }
+
+    /// <summary>Alert at this % of the budget (50–100). Null = use the user's default from Budget settings.</summary>
+    public int? AlertThresholdPercent { get; set; }
 }

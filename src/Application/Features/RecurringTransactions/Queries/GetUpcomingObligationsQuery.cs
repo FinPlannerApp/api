@@ -25,8 +25,8 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
         var results = new List<UpcomingObligationDto>();
 
         // ── Source 1: recurring transactions explicitly flagged as obligations ──
-        var recurringObligations = await _context.RecurringTransactions
-            .Include(rt => rt.Account)
+        var recurringRows = await _context.RecurringTransactions
+            .Include(rt => rt.Account).ThenInclude(a => a.AccountCategory)
             .Where(rt => rt.UserId == request.UserId &&
                          rt.IsActive &&
                          rt.IsObligation &&
@@ -34,7 +34,16 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                          // own EMI row below represents it. Listing both would count the EMI twice.
                          rt.LinkedLoanAccountId == null &&
                          rt.NextProcessDate <= cutoff)
-            .Select(rt => new UpcomingObligationDto
+            .ToListAsync(cancellationToken);
+
+        var recurringObligations = recurringRows.Select(rt =>
+        {
+            var type = rt.Account.AccountCategory.AccountType;
+            var hitsCash =
+                type == AccountType.CreditCard ||
+                rt.Account.CashRole == CashRole.Spendable ||
+                (rt.Account.CashRole == CashRole.Auto && (type == AccountType.Bank || type == AccountType.Cash));
+            var dto = new UpcomingObligationDto
             {
                 Description = rt.Description,
                 AccountName = rt.Account.Name,
@@ -42,16 +51,24 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                 MinimumDueAmount = null,
                 DueDate = rt.NextProcessDate,
                 Source = "Recurring",
-                // Paid from a bank/cash account or put on a card; an item on some other
-                // account type (e.g. a closed-loop wallet) does not touch liquid cash.
-                ReducesAvailableCash =
-                    rt.Account.AccountCategory.AccountType == AccountType.CreditCard ||
-                    rt.Account.CashRole == CashRole.Spendable ||
-                    (rt.Account.CashRole == CashRole.Auto &&
-                     (rt.Account.AccountCategory.AccountType == AccountType.Bank ||
-                      rt.Account.AccountCategory.AccountType == AccountType.Cash))
-            })
-            .ToListAsync(cancellationToken);
+                ReducesAvailableCash = hitsCash
+            };
+            // Paid from a closed-loop wallet / non-liquid account: the wallet's own balance pays first, and only
+            // the part it cannot cover has to be topped up from real cash. Without this a wallet-paid
+            // subscription was either ignored entirely or counted in full.
+            if (!hitsCash && rt.Type == TransactionType.Expense &&
+                type != AccountType.Loan && !(rt.Account.AccountCategory.IsLiability))
+            {
+                var shortfall = Math.Max(0m, rt.Amount - Math.Max(0m, rt.Account.Balance));
+                if (shortfall > 0)
+                {
+                    dto.ReducesAvailableCash = true;
+                    dto.CashImpactAmount = shortfall;
+                    dto.IsShortfallRisk = true;
+                }
+            }
+            return dto;
+        }).ToList();
 
         results.AddRange(recurringObligations);
         var todayForFlags = AppTimeZone.TodayLocal();
@@ -76,27 +93,33 @@ public class GetUpcomingObligationsQueryHandler : IRequestHandler<GetUpcomingObl
                 .OrderByDescending(b => b.StatementDate)
                 .FirstOrDefaultAsync(cancellationToken);
 
-            // A bill that is already paid, or fully covered by payments, is not an obligation.
-            var remaining = recentBill == null ? 0m : await CreditCardBillMath.RemainingAsync(_context, recentBill, cancellationToken);
-
-            if (recentBill != null && remaining > 0 && recentBill.DueDate.HasValue &&
-                recentBill.DueDate.Value <= cutoff)
+            // Every statement that is still unpaid (not just the latest) is an obligation of its own;
+            // a bill that is paid, or fully covered by payments, is not.
+            var unpaid = await CreditCardBillMath.UnpaidBillsAsync(_context, account.Id, cancellationToken);
+            var listed = false;
+            foreach (var (bill, remaining) in unpaid)
             {
+                if (!bill.DueDate.HasValue || bill.DueDate.Value > cutoff) continue;
+                listed = true;
                 // Overdue (due date already past) stays in the list on purpose — it is the
                 // most urgent item, so it must not silently disappear.
                 results.Add(new UpcomingObligationDto
                 {
-                    Description = $"{account.Name} bill due",
+                    Description = unpaid.Count > 1
+                        ? $"{account.Name} bill due ({bill.StatementDate:d MMM} statement)"
+                        : $"{account.Name} bill due",
                     AccountName = account.Name,
                     Amount = remaining, // what is still unpaid, not the original statement amount
-                    MinimumDueAmount = recentBill.MinimumDue,
-                    DueDate = recentBill.DueDate.Value,
+                    MinimumDueAmount = bill.MinimumDue,
+                    DueDate = bill.DueDate.Value,
                     Source = "CreditCard",
-                    IsOverdue = recentBill.DueDate.Value.Date < today.Date,
+                    IsOverdue = bill.DueDate.Value.Date < today.Date,
                     ReducesAvailableCash = false // already inside Real Available Cash via the card's balance
                 });
             }
-            else if ((recentBill == null || recentBill.DueDate == null) &&
+
+            if (listed) continue;
+            if ((recentBill == null || recentBill.DueDate == null) &&
                      account.CreditCardDetails?.DueDate is { } staticDueDate &&
                      staticDueDate >= today && staticDueDate <= cutoff)
             {

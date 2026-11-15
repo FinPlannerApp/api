@@ -24,8 +24,30 @@ public class UpsertTransactionDtoValidator : AbstractValidator<UpsertTransaction
     public UpsertTransactionDtoValidator()
     {
         RuleFor(x => x.Description).NotEmpty().MaximumLength(200);
-        RuleFor(x => x.Amount).GreaterThan(0);
+        RuleFor(x => x.Amount).GreaterThan(0).LessThan(1_000_000_000_000m)
+            .PrecisionScale(18, 2, true).WithMessage("Amount can have at most 2 decimal places.");
         RuleFor(x => x.Date).NotEmpty();
         RuleFor(x => x.Type).IsInEnum();
+    }
+}
+
+/// <summary>
+/// MediatR only runs validators written for the command itself, so the DTO rules above were never
+/// executed. This wires them into the pipeline for the single-add command.
+/// </summary>
+public class UpsertTransactionCommandValidator : AbstractValidator<Application.Features.Transactions.Commands.UpsertTransactionCommand>
+{
+    public UpsertTransactionCommandValidator()
+    {
+        RuleFor(x => x.Transaction).NotNull().SetValidator(new UpsertTransactionDtoValidator());
+    }
+}
+
+public class BulkUpsertTransactionsCommandValidator : AbstractValidator<Application.Features.Transactions.Commands.BulkUpsertTransactionsCommand>
+{
+    public BulkUpsertTransactionsCommandValidator()
+    {
+        RuleFor(x => x.Payload.Transactions).NotEmpty().Must(t => t.Count <= 500)
+            .WithMessage("At most 500 rows can be saved at once.");
     }
 }

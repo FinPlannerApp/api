@@ -71,7 +71,8 @@ public class GetRecurringTransactionsQueryHandler : IRequestHandler<GetRecurring
                 IsActive = rt.IsActive,
                 LastProcessedDate = rt.LastProcessedDate,
                 IsObligation = rt.IsObligation,
-                LinkedLoanAccountId = rt.LinkedLoanAccountId
+                LinkedLoanAccountId = rt.LinkedLoanAccountId,
+                LinkedInvestmentAccountId = rt.LinkedInvestmentAccountId
             })
             .ToListAsync(cancellationToken);
 

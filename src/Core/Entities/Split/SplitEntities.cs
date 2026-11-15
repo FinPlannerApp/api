@@ -3,6 +3,7 @@ namespace Domain.Entities.Split;
 public enum SplitGroupStatus { Active = 0, Locked = 1, Settled = 2, Archived = 3 }
 public enum SplitType { Equal = 0, Exact = 1, Percentage = 2, Shares = 3 }
 public enum SettlementMethod { Upi = 0, Cash = 1, BankTransfer = 2, Other = 3 }
+public enum SplitRecurrenceFrequency { Daily = 0, Weekly = 1, Monthly = 2 }
 public enum SettlementStatus { Pending = 0, AwaitingConfirmation = 1, Completed = 2 }
 
 public class SplitGroup : BaseEntity
@@ -22,6 +23,10 @@ public class SplitGroup : BaseEntity
     /// group machinery but never shows in the groups list.
     /// </summary>
     public bool IsDirect { get; set; }
+
+    /// <summary>Email a weekly reminder to members who still owe money (they need a FinPlanner account).</summary>
+    public bool AutoRemind { get; set; }
+    public DateTime? LastAutoRemindAt { get; set; }
 
     /// <summary>Optional trip dates (shown in the header; informational).</summary>
     public DateTime? StartDate { get; set; }
@@ -59,6 +64,12 @@ public class SplitGroupMember : BaseEntity
 
     public string? UpiId { get; set; }
 
+    /// <summary>A co-admin promoted by the creator (needs LinkedUserId). The creator is always an admin regardless.</summary>
+    public bool IsAdmin { get; set; }
+
+    /// <summary>View-only member: can see everything but not add expenses or record payments. Set by an admin.</summary>
+    public bool IsGuest { get; set; }
+
     /// <summary>
     /// Set when the member left (or was removed from) the group. The row is
     /// kept so past expenses still show their name, but they no longer have
@@ -84,6 +95,9 @@ public class SplitExpense : BaseEntity
 
     /// <summary>Free-text note ("paid the guide in cash", "includes 10% tip" ...).</summary>
     public string? Notes { get; set; }
+
+    /// <summary>Who added it. Null for expenses created before this was recorded.</summary>
+    public string? AddedByUserId { get; set; }
 
     /// <summary>Relative URL of an uploaded receipt photo, e.g. /uploads/split-receipts/12/abc.jpg.</summary>
     public string? ReceiptPath { get; set; }
@@ -185,4 +199,47 @@ public class SplitActivity : BaseEntity
     public required string Message { get; set; }
 
     public int? SplitExpenseId { get; set; }
+}
+
+/// <summary>
+/// A repeating expense (rent, subscriptions, a weekly cook ...). The background worker adds a
+/// normal expense on each due date using the stored payers and participants, then moves on.
+/// </summary>
+public class SplitRecurringExpense : BaseEntity
+{
+    public int SplitGroupId { get; set; }
+    public SplitGroup SplitGroup { get; set; } = null!;
+
+    /// <summary>Whose account the generated expenses are added as.</summary>
+    public required string CreatedByUserId { get; set; }
+
+    public required string Description { get; set; }
+    public decimal Amount { get; set; }
+    public string? Category { get; set; }
+    public SplitType SplitType { get; set; }
+    public string? Notes { get; set; }
+
+    /// <summary>JSON list of { MemberId, AmountPaid }.</summary>
+    public required string PayersJson { get; set; }
+
+    /// <summary>JSON list of { MemberId, ExactAmount, Percentage, Shares }.</summary>
+    public required string ParticipantsJson { get; set; }
+
+    public SplitRecurrenceFrequency Frequency { get; set; }
+
+    /// <summary>First occurrence. Later ones are Start + n periods, so a monthly expense on the 31st stays on month-ends.</summary>
+    public DateTime StartDate { get; set; }
+
+    /// <summary>The next date to add an expense (UTC date).</summary>
+    public DateTime NextRunDate { get; set; }
+    public DateTime? EndDate { get; set; }
+
+    /// <summary>How many occurrences have been added so far.</summary>
+    public int RunCount { get; set; }
+
+    public bool IsActive { get; set; } = true;
+    public DateTime? LastRunAt { get; set; }
+
+    /// <summary>Why it was paused automatically, e.g. a member left the group.</summary>
+    public string? LastError { get; set; }
 }

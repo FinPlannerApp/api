@@ -34,6 +34,16 @@ public class SessionValidationMiddleware
             var userId    = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             var sessionId = context.User.FindFirst("SessionId")?.Value;
 
+            if (string.IsNullOrEmpty(sessionId))
+            {
+                // Tokens minted before sessions existed carry no SessionId and can't be revoked: refuse them.
+                // The client refreshes and gets a session-bound token.
+                context.Response.StatusCode  = StatusCodes.Status401Unauthorized;
+                context.Response.ContentType = "application/json";
+                await context.Response.WriteAsJsonAsync(new { Message = "Session expired or signed out." });
+                return;
+            }
+
             if (!string.IsNullOrEmpty(userId) && !string.IsNullOrEmpty(sessionId))
             {
                 var now = DateTime.UtcNow;

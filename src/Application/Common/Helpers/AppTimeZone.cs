@@ -76,6 +76,21 @@ public static class AppTimeZone
         return (localStart.ToUtc(), localEnd.ToUtc());
     }
 
+    /// <summary>
+    /// Month boundaries for a user whose "month" starts on <paramref name="startDay"/> (1–28), e.g. salary day.
+    /// With startDay 5, 12 Mar → 5 Mar … 4 Apr, and 2 Mar → 5 Feb … 4 Mar. startDay 1 is the calendar month.
+    /// </summary>
+    public static (DateTime StartUtc, DateTime EndUtc) MonthBoundsUtc(DateTime utcInstant, int startDay)
+    {
+        startDay = Math.Clamp(startDay, 1, 28);
+        if (startDay == 1) return MonthBoundsUtc(utcInstant);
+        var local = utcInstant.ToLocal();
+        var first = new DateTime(local.Year, local.Month, startDay, 0, 0, 0, DateTimeKind.Unspecified);
+        var localStart = local.Day >= startDay ? first : first.AddMonths(-1);
+        var localEnd = localStart.AddMonths(1).AddTicks(-1);
+        return (localStart.ToUtc(), localEnd.ToUtc());
+    }
+
     /// <summary>Same idea, for the calendar year.</summary>
     public static (DateTime StartUtc, DateTime EndUtc) YearBoundsUtc(DateTime utcInstant)
     {
