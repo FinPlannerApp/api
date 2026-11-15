@@ -59,4 +59,18 @@ public static class CreditCardStatementCalculator
             MostRecentStatementDate = mostRecentStatementDate
         };
     }
+
+    /// <summary>
+    /// What the tracked balance of the card was owed on a given statement date, rebuilt from today's balance and every
+    /// transaction since. A statement is compared with ITS OWN date, never with the current cycle: paying or recording an
+    /// older statement used to be measured against the latest one, which invented "untracked spend" on the wrong bill.
+    /// </summary>
+    public static async Task<decimal> StatementOutstandingAsOfAsync(IApplicationDbContext context, Account account, DateTime statementDate)
+    {
+        var after = await context.Transactions
+            .Where(t => t.AccountId == account.Id && t.Date > statementDate)
+            .ToListAsync();
+        var net = after.Sum(t => t.Type == TransactionType.Income ? t.Amount : -t.Amount);
+        return Math.Abs(account.Balance - net);
+    }
 }

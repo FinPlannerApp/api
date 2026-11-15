@@ -254,12 +254,16 @@ public partial class AccountService
         await _context.SaveChangesAsync();
         await _cache.InvalidateDashboardAsync(userId);
 
-        var impliedCharges = Math.Max(0, dto.BillAmount - computedBreakdown.StatementOutstanding);
+        // The figure to compare with is what was tracked on THAT statement's date, not on the latest one.
+        var trackedOnStatement = statementDate.Date == computedBreakdown.MostRecentStatementDate?.Date
+            ? computedBreakdown.StatementOutstanding
+            : await CreditCardStatementCalculator.StatementOutstandingAsOfAsync(_context, account, statementDate);
+        var impliedCharges = Math.Max(0, dto.BillAmount - trackedOnStatement);
 
         return Result.Success(new CreditCardBillResultDto
         {
             RecordedBillAmount = dto.BillAmount,
-            ComputedFromTransactions = computedBreakdown.StatementOutstanding,
+            ComputedFromTransactions = trackedOnStatement,
             ImpliedInterestAndFees = impliedCharges,
             StatementDate = statementDate
         });
@@ -310,9 +314,11 @@ public partial class AccountService
 
         if (targetBill == null)
         {
+            // Oldest unpaid statement first: with no statement chosen, a payment settles the oldest bill that is still
+            // open. It used to go to the newest one, which left the old bill overdue and marked the current one paid.
             var bills = await _context.CreditCardBills
                 .Where(b => b.AccountId == dto.CreditCardAccountId)
-                .OrderByDescending(b => b.StatementDate)
+                .OrderBy(b => b.StatementDate)
                 .ToListAsync();
 
             foreach (var b in bills)
@@ -332,7 +338,7 @@ public partial class AccountService
 
             if (targetBill == null && bills.Count > 0)
             {
-                targetBill = bills[0];
+                targetBill = bills[^1]; // everything is settled: an extra payment belongs to the latest statement
             }
         }
 
@@ -506,7 +512,11 @@ public partial class AccountService
                             (p.CreditCardBillId == targetBill.Id || (p.CreditCardBillId == null && p.Date >= targetBill.StatementDate && (targetBillNextStmt == null || p.Date < targetBillNextStmt))))
                 .SumAsync(p => (decimal?)p.InterestPortion) ?? 0;
 
-            var totalBillInterest = Math.Max(0, targetBill.BillAmount - computedBreakdown.StatementOutstanding);
+            // Compared with THIS statement's own date; for an older bill, the current cycle's balance says nothing about it.
+            var targetStatementOutstanding = targetBill.StatementDate.Date == computedBreakdown.MostRecentStatementDate?.Date
+                ? computedBreakdown.StatementOutstanding
+                : await CreditCardStatementCalculator.StatementOutstandingAsOfAsync(_context, ccAccount, targetBill.StatementDate);
+            var totalBillInterest = Math.Max(0, targetBill.BillAmount - targetStatementOutstanding);
             gapIsDeclaredInterest = (targetBill.InterestAndFees + targetBill.OtherCharges) > 0 &&
                                     (targetBill.InterestAndFees + targetBill.OtherCharges) >= totalBillInterest;
             remainingInterestToAllocate = Math.Max(0, totalBillInterest - interestAlreadyPaid);

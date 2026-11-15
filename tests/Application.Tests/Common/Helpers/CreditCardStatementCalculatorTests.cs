@@ -116,4 +116,30 @@ public class CreditCardStatementCalculatorTests
         result.StatementOutstanding.Should().Be(1000m);
         result.UnbilledOutstanding.Should().Be(0m);
     }
+
+    [Fact]
+    public async Task StatementOutstandingAsOf_UsesTheStatementsOwnDate_NotTheLatestCycle()
+    {
+        await using var context = NewContext();
+
+        var category = new AccountCategory { Name = "Credit Cards", UserId = "user-1", AccountType = AccountType.CreditCard };
+        context.AccountCategories.Add(category);
+        await context.SaveChangesAsync();
+
+        // Owes 1000 today: 300 was spent after the old statement (still unpaid), 500 after the newer one.
+        var account = new Account { Name = "Test Card", Balance = -1000m, UserId = "user-1", AccountCategoryId = category.Id };
+        context.Accounts.Add(account);
+        await context.SaveChangesAsync();
+
+        var oldStatement = new DateTime(2026, 8, 5);
+        var newStatement = new DateTime(2026, 9, 5);
+        context.Transactions.AddRange(
+            new Transaction { UserId = "user-1", Description = "Aug-Sep", Amount = 300m, Date = oldStatement.AddDays(10), Type = TransactionType.Expense, AccountId = account.Id },
+            new Transaction { UserId = "user-1", Description = "After Sep", Amount = 500m, Date = newStatement.AddDays(3), Type = TransactionType.Expense, AccountId = account.Id });
+        await context.SaveChangesAsync();
+
+        // On the old statement date the card owed 1000 - 300 - 500 = 200; on the newer one 1000 - 500 = 500.
+        (await CreditCardStatementCalculator.StatementOutstandingAsOfAsync(context, account, oldStatement)).Should().Be(200m);
+        (await CreditCardStatementCalculator.StatementOutstandingAsOfAsync(context, account, newStatement)).Should().Be(500m);
+    }
 }
