@@ -25,3 +25,4 @@ FROM accounts."ReleaseNotes" r,
         (7, 'improved', 'Mobile app refresh token grace window extended to avoid accidental logouts on app swipe')
      ) AS v(ord, kind, txt)
 WHERE r."Stream" = 'server' AND r."Version" = '6.3.0';
+
