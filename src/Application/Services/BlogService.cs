@@ -105,7 +105,7 @@ public class BlogService
 
         BlogCommentDto ToDto(BlogPostComment c) => new()
         {
-            Id = c.Id, Author = c.UserName, Content = c.Content, CreatedAt = c.CreatedAt.ToString("g"), Likes = c.LikesCount, ParentCommentId = c.ParentCommentId
+            Id = c.Id, Author = c.UserName, Content = c.Content, CreatedAt = c.CreatedAt.ToString("g", System.Globalization.CultureInfo.InvariantCulture), Likes = c.LikesCount, ParentCommentId = c.ParentCommentId
         };
         var byId = page.Items.ToDictionary(c => c.Id, ToDto);
         var parentIds = byId.Keys.ToList();
@@ -140,7 +140,7 @@ public class BlogService
                 Id = c.Id,
                 Author = c.UserName,
                 Content = c.Content,
-                CreatedAt = c.CreatedAt.ToString("g"),
+                CreatedAt = c.CreatedAt.ToString("g", System.Globalization.CultureInfo.InvariantCulture),
                 Likes = c.LikesCount,
                 ParentCommentId = c.ParentCommentId
             })

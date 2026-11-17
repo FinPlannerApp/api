@@ -67,7 +67,8 @@ public class IssueRelationsController : ControllerBase
             return BadRequest(new { message = "Invalid relation type." });
         }
 
-        if (!await CanEditIssueAsync(id, userId)) return Forbid();
+        // SEC-32: linking writes a mirror relation + activity onto the OTHER issue, so the caller must be able to edit both.
+        if (!await CanEditIssueAsync(id, userId) || !await CanEditIssueAsync(input.TargetIssueId, userId)) return Forbid();
 
         var (success, error) = await _relationService.AddRelationAsync(id, input.TargetIssueId, relType, userId);
 
@@ -90,7 +91,7 @@ public class IssueRelationsController : ControllerBase
             return BadRequest(new { message = "Invalid relation type." });
         }
 
-        if (!await CanEditIssueAsync(id, userId)) return Forbid();
+        if (!await CanEditIssueAsync(id, userId) || !await CanEditIssueAsync(targetIssueId, userId)) return Forbid();
 
         var (success, error) = await _relationService.RemoveRelationAsync(id, targetIssueId, relType, userId);
 

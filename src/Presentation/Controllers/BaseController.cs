@@ -27,14 +27,14 @@ public abstract class BaseController : ControllerBase
     }
 
     /// <summary>The most items any list endpoint sends in one response, however large the data grows.</summary>
-    private const int MaxListItems = 1000;
-    private const int MaxPageSize = 500;
+    private const int MaxListItems = 200;
+    private const int MaxPageSize = 100;
 
     /// <summary>
     /// One rule for every list endpoint, so none can send an unbounded array, and one response model for pages:
     /// - with ?pageNumber=&amp;pageSize= the result is the global PaginatedResult (data, totalRecords, pageNumber, pageSize),
-    ///   pageSize at most 500;
-    /// - without them a plain list is sent as before, capped at 1000 items, and marked X-Truncated when it was cut.
+    ///   pageSize at most 100;
+    /// - without them a plain list is sent as before, capped at 200 items, and marked X-Truncated when it was cut.
     /// X-Total-Count always says how many exist. Endpoints that already page in the database (the transaction, account
     /// and merchant lists) return PaginatedResult themselves and are not touched.
     /// </summary>

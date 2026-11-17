@@ -36,14 +36,14 @@ public class VoteService
             .FirstOrDefaultAsync(v => v.IssueId == issueId && v.UserId == userId);
 
         int newUserVote;
+        int delta; // change in the net vote count
 
         if (existingVote != null)
         {
             if (value == 0) // Explicit unvote
             {
                 _context.IssueVotes.Remove(existingVote);
-                issue.Votes -= existingVote.Value;
-                issue.PainScore -= existingVote.Value * 10;
+                delta = -existingVote.Value;
                 newUserVote = 0;
             }
             else if (existingVote.Value == value) // Same vote again = no change
@@ -52,11 +52,8 @@ public class VoteService
             }
             else // Switching vote direction
             {
-                issue.Votes -= existingVote.Value;
-                issue.PainScore -= existingVote.Value * 10;
+                delta = value - existingVote.Value;
                 existingVote.Value = value;
-                issue.Votes += value;
-                issue.PainScore += value * 10;
                 newUserVote = value;
             }
         }
@@ -64,10 +61,8 @@ public class VoteService
         {
             if (value != 0)
             {
-                var vote = new IssueVote { IssueId = issueId, UserId = userId, Value = value };
-                _context.IssueVotes.Add(vote);
-                issue.Votes += value;
-                issue.PainScore += value * 10;
+                _context.IssueVotes.Add(new IssueVote { IssueId = issueId, UserId = userId, Value = value });
+                delta = value;
                 newUserVote = value;
             }
             else
@@ -78,11 +73,22 @@ public class VoteService
 
         await _context.SaveChangesAsync();
 
+        // SEC-32: bump the counters in the database with one atomic UPDATE (Votes = Votes + n) instead of
+        // read-modify-write on a loaded copy, so two people voting at the same moment can't overwrite each other.
+        if (delta != 0)
+        {
+            await _context.Issues.Where(i => i.Id == issueId).ExecuteUpdateAsync(s => s
+                .SetProperty(i => i.Votes, i => i.Votes + delta)
+                .SetProperty(i => i.PainScore, i => i.PainScore + delta * 10));
+        }
+        var fresh = await _context.Issues.AsNoTracking().Where(i => i.Id == issueId)
+            .Select(i => new { i.Votes, i.PainScore }).FirstAsync();
+
         // Recalculate karma for the issue creator
         if (issue.CreatorUserId != null)
             await _gamificationService.RecalculateKarma(issue.CreatorUserId);
 
-        return (true, value == 0 ? "Vote removed." : "Vote recorded.", issue.Votes, issue.PainScore, newUserVote);
+        return (true, value == 0 ? "Vote removed." : "Vote recorded.", fresh.Votes, fresh.PainScore, newUserVote);
     }
 
     /// <summary>

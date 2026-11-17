@@ -18,19 +18,19 @@ public class GamificationService
     /// - Upvotes received on their issues (+5 each)
     /// - Downvotes received on their issues (-3 each)
     /// - Upvotes received on their comments (+2 each)
-    /// - Number of issues created (+1 each)
+    /// - Number of issues created (+1 each, capped at 10)
     /// </summary>
     public async Task RecalculateKarma(string userId)
     {
         // Votes received on user's issues
         var issueIds = await _context.Issues.Where(i => i.CreatorUserId == userId).Select(i => i.Id).ToListAsync();
-        var issueVotes = await _context.IssueVotes.Where(v => issueIds.Contains(v.IssueId)).ToListAsync();
+        var issueVotes = await _context.IssueVotes.Where(v => issueIds.Contains(v.IssueId) && v.UserId != userId).ToListAsync(); // never count the owner's own votes
         var issueUpvotes = issueVotes.Count(v => v.Value > 0);
         var issueDownvotes = issueVotes.Count(v => v.Value < 0);
 
         // Votes on user's comments
         var commentIds = await _context.IssueComments.Where(c => c.CreatorUserId == userId).Select(c => c.Id).ToListAsync();
-        var commentVotes = await _context.CommentVotes.Where(v => commentIds.Contains(v.CommentId)).ToListAsync();
+        var commentVotes = await _context.CommentVotes.Where(v => commentIds.Contains(v.CommentId) && v.UserId != userId).ToListAsync();
         var commentUpvotes = commentVotes.Count(v => v.Value > 0);
 
         // Number of issues created
@@ -53,7 +53,7 @@ public class GamificationService
         var karma = (issueUpvotes * 5) 
                     - (issueDownvotes * 3) 
                     + (commentUpvotes * 2) 
-                    + issueCount
+                    + Math.Min(issueCount, 10)   // SEC-32: filing issues earns at most 10 points, so spamming reports can't farm karma
                     + (resolvedIssueCount * 10)
                     + (helpfulCommentCount * 5)
                     + (rootCauseCommentCount * 10)

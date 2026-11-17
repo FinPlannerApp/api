@@ -48,10 +48,10 @@ public class IssueRankingService
             baseScore += (double)issue.FinancialImpactAmount.Value;
         }
 
-        // Votes are left out of the PainScore formula per original design —
-        // "Upvotes are lazy. You need weighted pain."
-        // They're tracked separately and added as a tie-breaker in sorting.
-        
+        // Each net vote is worth 10 points. VoteService applies the same +/-10 when someone votes, so
+        // recomputing the score after an edit (UpdateIssue) keeps the votes instead of wiping them (SEC-32).
+        baseScore += issue.Votes * 10;
+
         return baseScore;
     }
 }

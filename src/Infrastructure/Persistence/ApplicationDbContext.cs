@@ -139,8 +139,20 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         NormalizeDateTimeKinds();
         var auditEntries = OnBeforeSaveChanges();
         SetAuditProperties();
+        // SEC-33: the change and its audit rows are one atomic unit. If the caller already opened a
+        // transaction we join it; otherwise we open one just for these two saves, so a crash between them
+        // can no longer leave a saved change with no audit trail.
+        if (auditEntries.Count == 0 || Database.CurrentTransaction != null || !Database.IsRelational())
+        {
+            var saved = await base.SaveChangesAsync(cancellationToken);
+            await OnAfterSaveChanges(auditEntries, cancellationToken);
+            return saved;
+        }
+
+        await using var tx = await Database.BeginTransactionAsync(cancellationToken);
         var result = await base.SaveChangesAsync(cancellationToken);
-        await OnAfterSaveChanges(auditEntries);
+        await OnAfterSaveChanges(auditEntries, cancellationToken);
+        await tx.CommitAsync(cancellationToken);
         return result;
     }
 
@@ -245,7 +257,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         return auditEntries;
     }
 
-    private async Task OnAfterSaveChanges(List<AuditEntry> auditEntries)
+    private async Task OnAfterSaveChanges(List<AuditEntry> auditEntries, CancellationToken cancellationToken = default)
     {
         if (auditEntries == null || auditEntries.Count == 0)
             return;
@@ -277,10 +289,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
             log.ChangedByUserId = auditEntry.UserId;
             log.ChangedAt = DateTime.UtcNow;
 
-            await this.AddAsync(log);
+            await this.AddAsync(log, cancellationToken);
         }
-        // Save the log entries in a separate transaction
-        await base.SaveChangesAsync();
+        // Written in the same transaction as the change itself (see SaveChangesAsync).
+        await base.SaveChangesAsync(cancellationToken);
     }
 
     protected override void OnModelCreating(ModelBuilder builder)
@@ -370,6 +382,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
         builder.Entity<CreditCardBill>(e =>
         {
             e.ToTable("CreditCardBills", "accounts");
+            e.Property(b => b.PaidAmount).HasColumnType("numeric(18,2)");
+            e.Property(b => b.RemainingAmount).HasColumnType("numeric(18,2)");
             e.HasIndex(b => new { b.AccountId, b.StatementDate }).IsUnique();
             e.HasOne(b => b.Account)
                 .WithMany()

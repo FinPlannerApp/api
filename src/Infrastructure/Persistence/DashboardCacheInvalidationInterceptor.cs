@@ -13,7 +13,7 @@ namespace Infrastructure.Persistence;
 /// Invalidation is a plain in-memory version bump (no Redis command by default), so bursts of
 /// saves cost nothing and there is deliberately NO throttle: skipping a bump could show old numbers.
 /// </summary>
-public sealed class DashboardCacheInvalidationInterceptor : SaveChangesInterceptor
+public sealed class DashboardCacheInvalidationInterceptor : SaveChangesInterceptor, IDbTransactionInterceptor
 {
     private static readonly HashSet<string> TrackedEntities = new(StringComparer.Ordinal)
     {
@@ -64,15 +64,66 @@ public sealed class DashboardCacheInvalidationInterceptor : SaveChangesIntercept
             _pending.Add(context, users);
     }
 
+    // SEC-33: users whose cache must be cleared once the surrounding transaction COMMITS. Clearing earlier lets a
+    // reader re-fill the cache with the old numbers (the new rows aren't visible yet) and then keep serving them.
+    private readonly ConditionalWeakTable<DbContext, HashSet<string>> _deferred = new();
+
     private async Task FlushAsync(DbContext? context)
     {
         if (context is null || !_pending.TryGetValue(context, out var users))
             return;
 
         _pending.Remove(context);
+
+        if (context.Database.CurrentTransaction != null)
+        {
+            if (!_deferred.TryGetValue(context, out var waiting))
+                _deferred.Add(context, waiting = new HashSet<string>(StringComparer.Ordinal));
+            foreach (var u in users) waiting.Add(u);
+            return;
+        }
+
         foreach (var userId in users)
             await _cache.InvalidateDashboardAsync(userId);
     }
+
+    private async Task FlushDeferredAsync(DbContext? context)
+    {
+        if (context is null || !_deferred.TryGetValue(context, out var users))
+            return;
+        _deferred.Remove(context);
+        foreach (var userId in users)
+            await _cache.InvalidateDashboardAsync(userId);
+    }
+
+    private void DropDeferred(DbContext? context)
+    {
+        if (context is not null) _deferred.Remove(context);
+    }
+
+    public async Task TransactionCommittedAsync(System.Data.Common.DbTransaction transaction, TransactionEndEventData eventData, CancellationToken cancellationToken = default)
+        => await FlushDeferredAsync(eventData.Context);
+
+    public void TransactionCommitted(System.Data.Common.DbTransaction transaction, TransactionEndEventData eventData)
+        => FlushDeferredAsync(eventData.Context).GetAwaiter().GetResult();
+
+    public Task TransactionRolledBackAsync(System.Data.Common.DbTransaction transaction, TransactionEndEventData eventData, CancellationToken cancellationToken = default)
+    {
+        DropDeferred(eventData.Context);
+        return Task.CompletedTask;
+    }
+
+    public void TransactionRolledBack(System.Data.Common.DbTransaction transaction, TransactionEndEventData eventData)
+        => DropDeferred(eventData.Context);
+
+    public Task TransactionFailedAsync(System.Data.Common.DbTransaction transaction, TransactionErrorEventData eventData, CancellationToken cancellationToken = default)
+    {
+        DropDeferred(eventData.Context);
+        return Task.CompletedTask;
+    }
+
+    public void TransactionFailed(System.Data.Common.DbTransaction transaction, TransactionErrorEventData eventData)
+        => DropDeferred(eventData.Context);
 
     public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
         DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)

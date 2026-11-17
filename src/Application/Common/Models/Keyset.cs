@@ -44,8 +44,8 @@ public static class Keyset
         var p = keySelector.Parameters[0];
         var idBody = new ReplaceParameter(idSelector.Parameters[0], p).Visit(idSelector.Body)!;
         var keyBody = keySelector.Body;
-        var k = Expression.Constant(key);
-        var i = Expression.Constant(id);
+        var k = KeysetParam.Of(key);
+        var i = KeysetParam.Of(id);
         var body = Expression.AndAlso(
             Expression.LessThanOrEqual(keyBody, k),
             Expression.OrElse(Expression.LessThan(keyBody, k), Expression.LessThan(idBody, i)));

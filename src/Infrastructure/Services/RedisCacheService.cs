@@ -84,7 +84,8 @@ public sealed class RedisCacheService : ICacheService
     // restarts; the in-memory copy is re-read from Redis every VersionRecheck so a
     // second instance would pick up the other's invalidations.
     private readonly ConcurrentDictionary<string, (long Ver, DateTime CheckedAt)> _versions = new();
-    private static readonly TimeSpan VersionRecheck = TimeSpan.FromSeconds(30);
+    // SEC-33: other instances learn about a bump within this window; 30s meant stale dashboards for half a minute.
+    private static readonly TimeSpan VersionRecheck = TimeSpan.FromSeconds(5);
     private const string VersionedRoot = "dash::";
 
     /// <summary>True when the cache must not touch Redis at all (the default).</summary>
@@ -173,8 +174,10 @@ public sealed class RedisCacheService : ICacheService
             if (_db.Multiplexer.IsConnected)
             {
                 _guard.Record("cache-version-bump");
+                // Redis's INCR is the one source of truth (atomic across instances); a local "+1" guess could
+                // collide with another instance's bump.
                 var fromRedis = await _db.StringIncrementAsync($"ver::{scope}");
-                next = Math.Max(next, fromRedis);
+                next = fromRedis;
             }
         }
         catch (Exception ex)

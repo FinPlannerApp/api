@@ -210,7 +210,7 @@ public class AuthSessionTests
     [Fact]
     public async Task Replaying_a_rotated_token_signs_the_whole_session_out()
     {
-        var rig = await CreateRigAsync(new SessionSecuritySettings { RefreshReuseGraceSeconds = 0 });
+        var rig = await CreateRigAsync(new SessionSecuritySettings { RefreshReuseGraceSeconds = 0, RefreshSameDeviceGraceSeconds = 0 });
         var laptop = Device();
         var login = await rig.Auth.LoginAsync(Creds(), "1.1.1.1", ChromeWin, laptop);
         var oldToken = login.Value.RefreshToken!;

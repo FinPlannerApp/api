@@ -58,7 +58,12 @@ public class AuthController : BaseController
             Guid.TryParseExact(existing, "N", out _))
             return existing;
 
-        var id = Guid.NewGuid().ToString("N");
+        // No cookie (iOS Safari / home-screen apps often drop cross-site cookies): fall back to the install id the app
+        // keeps in its own storage, so the same install is not counted as a new device on every sign-in.
+        var fromHeader = Request.Headers["X-Device-Id"].ToString();
+        var id = fromHeader.Length == 32 && Guid.TryParseExact(fromHeader, "N", out _)
+            ? fromHeader.ToLowerInvariant()
+            : Guid.NewGuid().ToString("N");
         var isLocalHttp = !Request.IsHttps &&
                           (Request.Host.Host == "localhost" || Request.Host.Host == "127.0.0.1" || Request.Host.Host.StartsWith("192.168."));
         Response.Cookies.Append(DeviceCookieName, id, new CookieOptions

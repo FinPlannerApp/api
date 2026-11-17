@@ -144,6 +144,28 @@ public class InfrastructureMonitorWorker : BackgroundService
             return;
         }
 
+        // SEC-33: every running instance monitors on its own, so with N instances one outage used to send N identical
+        // emails. The first instance to claim this key (Redis SET NX, 20 min) sends; the rest skip. If Redis itself is
+        // unreachable we can't coordinate, so we send anyway: a duplicate alert beats a missed one.
+        try
+        {
+            var mux = _serviceProvider.GetService<IConnectionMultiplexer>();
+            if (mux != null && mux.IsConnected)
+            {
+                var claimed = await mux.GetDatabase().StringSetAsync(
+                    $"monitor-alert::{subject}", Environment.MachineName, TimeSpan.FromMinutes(20), When.NotExists);
+                if (!claimed)
+                {
+                    _logger.LogInformation("Alert '{Subject}' already sent by another instance.", subject);
+                    return;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Alert de-duplication unavailable; sending anyway.");
+        }
+
         var mailRequest = new MailRequest
         {
             To = alertEmail,

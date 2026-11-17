@@ -426,9 +426,15 @@ public class AuthService : IAuthService
         // just rotated. Inside the grace window, and only from the same device, treat it as that
         // race and rotate the session's current token instead of failing (a failure here used to
         // sign the user out everywhere).
+        // A phone can also be killed (swiped away from recents) after the server rotated the token but
+        // before the new cookie was stored. That device comes back with the old token minutes later, so
+        // the same device (matching device cookie) gets the longer SameDevice window.
+        var sameDevice = string.Equals(refreshToken.DeviceId, deviceId, StringComparison.Ordinal);
+        var graceWindow = TimeSpan.FromSeconds(Math.Max(0, sameDevice
+            ? Math.Max(_sessionSettings.RefreshReuseGraceSeconds, _sessionSettings.RefreshSameDeviceGraceSeconds)
+            : _sessionSettings.RefreshReuseGraceSeconds));
         if (refreshToken.RevokedUtc != null && refreshToken.SessionId != null &&
-            DateTime.UtcNow - refreshToken.RevokedUtc.Value <= TimeSpan.FromSeconds(Math.Max(0, _sessionSettings.RefreshReuseGraceSeconds)) &&
-            string.Equals(refreshToken.DeviceId, deviceId, StringComparison.Ordinal))
+            DateTime.UtcNow - refreshToken.RevokedUtc.Value <= graceWindow && sameDevice)
         {
             var successor = user.RefreshTokens
                 .Where(t => t.SessionId == refreshToken.SessionId && t.IsActive)
@@ -443,8 +449,7 @@ public class AuthService : IAuthService
             // A revoked token came back. Within a few seconds that is two tabs racing to refresh;
             // later than that it is a replay (for example a stolen cookie), so sign the whole
             // session out: whoever holds the newer token loses it too.
-            var graceSeconds = Math.Max(0, _sessionSettings.RefreshReuseGraceSeconds);
-            if (DateTime.UtcNow - refreshToken.RevokedUtc.Value > TimeSpan.FromSeconds(graceSeconds)
+            if (DateTime.UtcNow - refreshToken.RevokedUtc.Value > graceWindow
                 && refreshToken.SessionId != null)
             {
                 _logger.LogWarning("Refresh token reuse detected for {UserName} (session {SessionId}) from IP {IpAddress}. Signing the session out.",

@@ -25,6 +25,7 @@ public interface ISplitService
     Task<Result<PaymentRequestDto>> GetPaymentRequestAsync(string userId, int settlementId);
     Task<Result<PublicGroupViewDto>> GetPublicGroupViewAsync(string shareToken);
     Task<Result<string>> RegenerateShareTokenAsync(string userId, int groupId);
+    Task<Result<GroupDto>> SetPublicLinkAsync(string userId, int groupId, bool enabled);
     Task<Result<InviteCreatedDto>> CreateInviteAsync(string userId, CreateInviteDto dto);
     Task<Result<InvitePreviewDto>> PreviewInviteAsync(string token);
     Task<Result<JoinGroupResultDto>> JoinViaInviteAsync(string userId, JoinGroupDto dto);

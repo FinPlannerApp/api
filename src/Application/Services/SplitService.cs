@@ -373,7 +373,7 @@ public class SplitService : ISplitService
         if (fromMember == null || toMember == null)
             return Result.Failure<SettlementDto>(new Error("SplitMember.NotFound", "One or both members not found in this group."));
 
-        if (fromMember.LeftAt != null || toMember.LeftAt != null)
+        if ((fromMember.LeftAt != null || toMember.LeftAt != null) && !(group.IncludeLeftMembersInBalances && IsAdminLoaded(group, userId)))
             return Result.Failure<SettlementDto>(new Error("SplitSettlement.MemberLeft", "Someone in this payment has left the group."));
 
         // 1. Authorization: the group creator can record a payment on behalf of anyone.
@@ -787,6 +787,22 @@ public class SplitService : ISplitService
         return Result.Success(group.ShareToken);
     }
 
+    /// <summary>SEC-31: admin switches the public read-only link on (valid 30 days) or off.</summary>
+    public async Task<Result<GroupDto>> SetPublicLinkAsync(string userId, int groupId, bool enabled)
+    {
+        var group = await _context.SplitGroups.Include(g => g.Members).FirstOrDefaultAsync(g => g.Id == groupId);
+        if (group == null)
+            return Result.Failure<GroupDto>(new Error("SplitGroup.NotFound", "Group not found."));
+        if (!await IsAdminAsync(group, userId))
+            return Result.Failure<GroupDto>(new Error("SplitGroup.Forbidden", "Only a group admin can change the share link."));
+
+        group.PublicLinkEnabled = enabled;
+        group.PublicLinkExpiresAt = enabled ? DateTime.UtcNow.AddDays(30) : null;
+        await _context.SaveChangesAsync();
+        await RecordActivityAsync(groupId, userId, "PublicLinkChanged", enabled ? "turned the public link on (30 days)." : "turned the public link off.");
+        return Result.Success(MapToDto(group));
+    }
+
     public async Task<Result<PublicGroupViewDto>> GetPublicGroupViewAsync(string shareToken)
     {
         var group = await _context.SplitGroups
@@ -794,7 +810,7 @@ public class SplitService : ISplitService
             .Include(g => g.Expenses).ThenInclude(e => e.Payers)
             .Include(g => g.Expenses).ThenInclude(e => e.Participants)
             .Include(g => g.Settlements)
-            .FirstOrDefaultAsync(g => g.ShareToken == shareToken);
+            .FirstOrDefaultAsync(g => g.ShareToken == shareToken && g.PublicLinkEnabled && (g.PublicLinkExpiresAt == null || g.PublicLinkExpiresAt > DateTime.UtcNow));
 
         if (group == null)
             return Result.Failure<PublicGroupViewDto>(new Error("SplitGroup.NotFound", "This link doesn't point to a valid group."));
@@ -823,7 +839,7 @@ public class SplitService : ISplitService
     public async Task<Result<ExpensePageDto>> GetPublicExpensesAsync(string shareToken, string? cursor, int? limit)
     {
         var groupId = await _context.SplitGroups
-            .Where(g => g.ShareToken == shareToken)
+            .Where(g => g.ShareToken == shareToken && g.PublicLinkEnabled && (g.PublicLinkExpiresAt == null || g.PublicLinkExpiresAt > DateTime.UtcNow))
             .Select(g => (int?)g.Id)
             .FirstOrDefaultAsync();
 
@@ -1789,6 +1805,7 @@ public class SplitService : ISplitService
         if (group.Currency != currency) changes.Add($"currency {group.Currency} → {currency}");
         if (group.SimplifyDebts != dto.SimplifyDebts) changes.Add(dto.SimplifyDebts ? "simplify debts on" : "simplify debts off");
         if (group.AutoRemind != dto.AutoRemind) changes.Add(dto.AutoRemind ? "weekly reminders on" : "weekly reminders off");
+        if (group.IncludeLeftMembersInBalances != dto.IncludeLeftMembersInBalances) changes.Add(dto.IncludeLeftMembersInBalances ? "show left members' balances on" : "show left members' balances off");
         var start = dto.StartDate.HasValue ? EnsureUtc(dto.StartDate.Value.Date) : (DateTime?)null;
         var end = dto.EndDate.HasValue ? EnsureUtc(dto.EndDate.Value.Date) : (DateTime?)null;
         if (group.StartDate != start || group.EndDate != end) changes.Add("trip dates");
@@ -1796,6 +1813,7 @@ public class SplitService : ISplitService
         group.Currency = currency;
         group.SimplifyDebts = dto.SimplifyDebts;
         group.AutoRemind = dto.AutoRemind;
+        group.IncludeLeftMembersInBalances = dto.IncludeLeftMembersInBalances;
         group.StartDate = start;
         group.EndDate = end;
         await _context.SaveChangesAsync();
@@ -2274,10 +2292,17 @@ public class SplitService : ISplitService
         var simplified = SplitBalanceCalculator.BuildPlan(group, balances);
         var leftIds = group.Members.Where(m => m.LeftAt != null).Select(m => m.Id).ToHashSet();
 
+        var includeLeft = group.IncludeLeftMembersInBalances;
+        var leftWithBalance = balances.Where(b => leftIds.Contains(b.MemberId) && Math.Abs(b.NetBalance) >= 0.01m).ToList();
+
         return new GroupBalancesDto
         {
-            Balances = balances.Where(b => !leftIds.Contains(b.MemberId)).Select(b => new MemberBalanceDto
+            LeftMembersWithBalance = leftWithBalance.Count,
+            LeftMembersBalanceTotal = leftWithBalance.Sum(b => Math.Abs(b.NetBalance)),
+            IncludesLeftMembers = includeLeft,
+            Balances = balances.Where(b => includeLeft || !leftIds.Contains(b.MemberId)).Select(b => new MemberBalanceDto
             {
+                HasLeft = leftIds.Contains(b.MemberId),
                 MemberId = b.MemberId,
                 MemberName = b.MemberName,
                 TotalPaid = b.TotalPaid,
@@ -2502,6 +2527,9 @@ public class SplitService : ISplitService
         SimplifyDebts = g.SimplifyDebts,
         IsDirect = g.IsDirect,
         AutoRemind = g.AutoRemind,
+        IncludeLeftMembersInBalances = g.IncludeLeftMembersInBalances,
+        PublicLinkEnabled = g.PublicLinkEnabled && (g.PublicLinkExpiresAt == null || g.PublicLinkExpiresAt > DateTime.UtcNow),
+        PublicLinkExpiresAt = g.PublicLinkExpiresAt,
         StartDate = g.StartDate,
         EndDate = g.EndDate,
         Status = g.Status,

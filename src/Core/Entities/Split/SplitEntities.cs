@@ -28,6 +28,16 @@ public class SplitGroup : BaseEntity
     public bool AutoRemind { get; set; }
     public DateTime? LastAutoRemindAt { get; set; }
 
+    /// <summary>
+    /// When on, people who left the group still show in Balances (marked "left") and an admin can record
+    /// payments for them, so late adjustments to old expenses can still be settled. Off by default.
+    /// </summary>
+    public bool IncludeLeftMembersInBalances { get; set; }
+
+    /// <summary>The no-login public link only works while an admin has switched it on; it switches itself off after 30 days.</summary>
+    public bool PublicLinkEnabled { get; set; }
+    public DateTime? PublicLinkExpiresAt { get; set; }
+
     /// <summary>Optional trip dates (shown in the header; informational).</summary>
     public DateTime? StartDate { get; set; }
     public DateTime? EndDate { get; set; }

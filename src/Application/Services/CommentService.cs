@@ -253,13 +253,14 @@ public class CommentService
             .FirstOrDefaultAsync(v => v.CommentId == commentId && v.UserId == userId);
 
         int newUserVote;
+        int delta;
 
         if (existing != null)
         {
             if (value == 0)
             {
                 _context.CommentVotes.Remove(existing);
-                comment.Score -= existing.Value;
+                delta = -existing.Value;
                 newUserVote = 0;
             }
             else if (existing.Value == value)
@@ -268,25 +269,31 @@ public class CommentService
             }
             else
             {
-                comment.Score -= existing.Value;
+                delta = value - existing.Value;
                 existing.Value = value;
-                comment.Score += value;
                 newUserVote = value;
             }
         }
         else if (value != 0)
         {
             _context.CommentVotes.Add(new CommentVote { CommentId = commentId, UserId = userId, Value = value });
-            comment.Score += value;
+            delta = value;
             newUserVote = value;
         }
         else
         {
+            delta = 0;
             newUserVote = 0;
         }
 
         await _context.SaveChangesAsync();
-        return (true, "Vote updated.", comment.Score, newUserVote);
+
+        // SEC-32: atomic counter update (no read-modify-write race).
+        if (delta != 0)
+            await _context.IssueComments.Where(c => c.Id == commentId)
+                .ExecuteUpdateAsync(s => s.SetProperty(c => c.Score, c => c.Score + delta));
+        var score = await _context.IssueComments.AsNoTracking().Where(c => c.Id == commentId).Select(c => c.Score).FirstAsync();
+        return (true, "Vote updated.", score, newUserVote);
     }
 
     /// <summary>

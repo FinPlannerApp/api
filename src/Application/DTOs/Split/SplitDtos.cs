@@ -17,6 +17,9 @@ public class GroupDto
     public bool SimplifyDebts { get; set; } = true;
     public bool IsDirect { get; set; }
     public bool AutoRemind { get; set; }
+    public bool IncludeLeftMembersInBalances { get; set; }
+    public bool PublicLinkEnabled { get; set; }
+    public DateTime? PublicLinkExpiresAt { get; set; }
     public DateTime? StartDate { get; set; }
     public DateTime? EndDate { get; set; }
     public SplitGroupStatus Status { get; set; }
@@ -61,6 +64,11 @@ public class UpdateGroupDto
 }
 
 /// <summary>Group-wide settings (creator only). Every field is sent each time.</summary>
+public class SetPublicLinkDto
+{
+    public bool Enabled { get; set; }
+}
+
 public class UpdateGroupSettingsDto
 {
     public int GroupId { get; set; }
@@ -69,6 +77,8 @@ public class UpdateGroupSettingsDto
     public bool SimplifyDebts { get; set; } = true;
     /// <summary>Email a weekly reminder to members who still owe money.</summary>
     public bool AutoRemind { get; set; }
+    /// <summary>Admin only: keep members who left in the balances so late adjustments can be settled.</summary>
+    public bool IncludeLeftMembersInBalances { get; set; }
     public DateTime? StartDate { get; set; }
     public DateTime? EndDate { get; set; }
 }
@@ -145,6 +155,10 @@ public class GroupBalancesDto
     public List<SimplifiedDebtDto> SimplifiedPlan { get; set; } = new();
     public List<CategorySpendDto> CategoryBreakdown { get; set; } = new();
     public int ExpenseCount { get; set; }
+    /// <summary>Members who left but still carry a non-zero balance (hidden unless the admin toggle is on).</summary>
+    public int LeftMembersWithBalance { get; set; }
+    public decimal LeftMembersBalanceTotal { get; set; }
+    public bool IncludesLeftMembers { get; set; }
 }
 
 public class CategorySpendDto
@@ -165,6 +179,8 @@ public class MemberBalanceDto
     public decimal InTransit { get; set; }
     /// <summary>TotalPaid - TotalShare + SettledPaid - SettledReceived</summary>
     public decimal NetBalance { get; set; }
+    /// <summary>True for someone who has left the group (shown only when the admin toggle is on).</summary>
+    public bool HasLeft { get; set; }
 }
 
 public class SimplifiedDebtDto

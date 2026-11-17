@@ -9,6 +9,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Presentation.Controllers;
 
@@ -432,6 +434,15 @@ public class IssuesController : ControllerBase
             else return Fail("The screenshot must be a JPEG or PNG image.");
         }
 
+        // At most 10 screenshots per person per day: they are large, and the database is shared by everyone.
+        var screenshotDropped = false;
+        if (shot != null)
+        {
+            var since = DateTime.UtcNow.AddHours(-24);
+            var today = await _context.IssueDiagnostics.CountAsync(d => d.UserId == userId && d.Screenshot != null && d.CreatedAt >= since);
+            if (today >= 10) { shot = null; shotType = null; screenshotDropped = true; }
+        }
+
         var firstLine = Application.Common.Helpers.HtmlSanitizer.Clean(text.Split((char)10, 2)[0]).Trim();
         var title = "Bug: " + (firstLine.Length > 80 ? firstLine[..80].TrimEnd() + "…" : firstLine);
         var created = await Create(new CreateIssueDto
@@ -446,22 +457,34 @@ public class IssuesController : ControllerBase
             return Fail("The report could not be saved. Please try again.");
 
         var fingerprint = Application.Common.Helpers.ReportFingerprint.From(context);
-        _context.IssueDiagnostics.Add(new IssueDiagnostic
+        // The issue is already saved. If the details can't be saved the report still stands, and the person is told,
+        // instead of getting an error for a report that exists (and a duplicate when they retry).
+        var detailsSaved = true;
+        try
         {
-            IssueId = issueId,
-            UserId = userId,
-            ContextJson = context,
-            Fingerprint = fingerprint,
-            Screenshot = shot,
-            ScreenshotContentType = shotType
-        });
-        await _context.SaveChangesAsync();
+            _context.IssueDiagnostics.Add(new IssueDiagnostic
+            {
+                IssueId = issueId,
+                UserId = userId,
+                ContextJson = context,
+                Fingerprint = fingerprint,
+                Screenshot = shot,
+                ScreenshotContentType = shotType
+            });
+            await _context.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            detailsSaved = false;
+            fingerprint = null;
+            HttpContext.RequestServices.GetService<ILogger<IssuesController>>()?.LogError(ex, "Quick report {IssueId}: technical details could not be saved.", issueId);
+        }
 
         // How many other people already reported the same thing (same page, error and failing call).
         var similar = fingerprint == null ? 0 : await _context.IssueDiagnostics
             .Where(d => d.Fingerprint == fingerprint && d.UserId != userId).Select(d => d.UserId).Distinct().CountAsync();
 
-        return Ok(new { isSuccess = true, value = new { id = issueId, similarReports = similar } });
+        return Ok(new { isSuccess = true, value = new { id = issueId, similarReports = similar, detailsSaved, screenshotDropped } });
     }
 
     /// <summary>

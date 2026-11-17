@@ -22,4 +22,7 @@ public class SessionSecuritySettings
     /// a race between two tabs, not theft. After that, reuse signs the whole session out.
     /// </summary>
     public int RefreshReuseGraceSeconds { get; set; } = 30;
+
+    /// <summary>How long the SAME device (same device cookie) may present a just-rotated refresh token, for when the app was killed before saving the new one.</summary>
+    public int RefreshSameDeviceGraceSeconds { get; set; } = 900;
 }

@@ -252,6 +252,8 @@ public partial class AccountService
         }
 
         await _context.SaveChangesAsync();
+        await CreditCardBillMath.RecomputeStoredAsync(_context, dto.AccountId);   // a new/changed bill moves the payment boundaries
+        await _context.SaveChangesAsync();
         await _cache.InvalidateDashboardAsync(userId);
 
         // The figure to compare with is what was tracked on THAT statement's date, not on the latest one.
@@ -770,6 +772,8 @@ public partial class AccountService
         var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
         if (saveResult.IsFailure)
             return Result.Failure<CreditCardPaymentBatchResultDto>(saveResult.Error);
+
+        await CreditCardBillMath.RecomputeStoredAsync(_context, dto.CreditCardAccountId);   // stored paid/remaining (PH1-03); persisted by the save below
 
         foreach (var (entry, payment) in pendingWalletEntries)
         {

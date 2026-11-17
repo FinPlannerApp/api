@@ -370,6 +370,7 @@ public class TransactionService : ITransactionService
                 "That exact transaction was just saved. If you meant to add it twice, wait a few seconds and try again."));
 
         Transaction? transaction = null;
+        int? syncCardPaymentAccountId = null;
         decimal oldAmount = 0;
         TransactionType oldType = TransactionType.Expense;
 
@@ -384,6 +385,38 @@ public class TransactionService : ITransactionService
                 return Result.Failure<TransactionDto>(new Error(
                     "Transaction.PartOfPair",
                     "This transaction is one side of a transfer or loan payment and can't be deleted on its own — deleting only one leg would leave the accounting inconsistent. Contact support or use the account merge/correction tools if this needs reversing."));
+            }
+
+            // Rows created by a credit-card payment are mirrored in the payment record (PH1-08).
+            //  • Interest/fee row: its amount CAN be corrected (the bank charged ₹250, not ₹300) — the payment's
+            //    InterestPortion and the bill's stored paid/remaining follow it. Its type can't change.
+            //  • Cashback row: amount/type/date are locked, because wallet and cashback ledgers depend on them.
+            var linkedPayment = await _context.CreditCardPayments.FirstOrDefaultAsync(ccp =>
+                ccp.InterestTransactionId == transaction.Id || ccp.CashbackTransactionId == transaction.Id);
+            if (linkedPayment != null)
+            {
+                var isInterestRow = linkedPayment.InterestTransactionId == transaction.Id;
+                var amountChanged = transaction.Amount != dto.Amount;
+                var typeChanged = transaction.Type != dto.Type;
+                var dateChanged = transaction.Date.Date != dto.Date.EnsureUtc().Date;
+                if (typeChanged || (!isInterestRow && (amountChanged || dateChanged)))
+                {
+                    return Result.Failure<TransactionDto>(new Error(
+                        "Transaction.CardPaymentRow",
+                        isInterestRow
+                            ? "This row is the interest/fee charge of a credit card payment, so it must stay an expense. You can change its amount, date, description, category and notes."
+                            : "This row is the cashback of a credit card payment, so its amount, type and date can't be edited on their own. You can still change its description, category, notes and tags. To change the amounts, delete the card payment (you can undo it for 10 minutes) and record it again."));
+                }
+                if (isInterestRow && amountChanged)
+                {
+                    if (dto.Amount > linkedPayment.Amount)
+                        return Result.Failure<TransactionDto>(new Error(
+                            "Transaction.CardPaymentRow",
+                            "The interest/fee can't be more than the payment it came from."));
+                    linkedPayment.InterestPortion = dto.Amount;
+                    linkedPayment.PrincipalPortion = linkedPayment.Amount - dto.Amount;
+                    syncCardPaymentAccountId = linkedPayment.CreditCardAccountId;
+                }
             }
 
             oldAmount = transaction.Amount;
@@ -449,6 +482,12 @@ public class TransactionService : ITransactionService
         var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
         if (saveResult.IsFailure)
             return Result.Failure<TransactionDto>(saveResult.Error);
+
+        if (syncCardPaymentAccountId.HasValue)
+        {
+            await CreditCardBillMath.RecomputeStoredAsync(_context, syncCardPaymentAccountId.Value);
+            await _context.SaveChangesAsync();
+        }
 
         // Only check for NEW expense transactions — see design notes above
         // for why edits are deliberately out of scope for this check.
@@ -630,6 +669,14 @@ public class TransactionService : ITransactionService
         var saveResult = await ConcurrencySafeSave.TrySaveChangesAsync(_context);
         if (saveResult.IsFailure)
             return Result.Failure<bool>(saveResult.Error);
+
+        // Stored paid/remaining on the bills of any card whose payment was just removed (PH1-03).
+        if (ccPayments.Count > 0)
+        {
+            foreach (var cardId in ccPayments.Select(cp => cp.CreditCardAccountId).Distinct())
+                await CreditCardBillMath.RecomputeStoredAsync(_context, cardId);
+            await _context.SaveChangesAsync();
+        }
 
         await _cache.InvalidateDashboardAsync(userId);
 

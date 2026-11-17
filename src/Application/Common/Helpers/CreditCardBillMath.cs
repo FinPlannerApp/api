@@ -17,6 +17,7 @@ public static class CreditCardBillMath
         IApplicationDbContext context, CreditCardBill bill, CancellationToken ct = default)
     {
         if (bill.IsPaid) return 0m;
+        if (bill.RemainingAmount.HasValue) return bill.RemainingAmount.Value;   // stored (PH1-03): no summing on every read
 
         var next = await NextStatementAsync(context, bill, ct);
         var paid = await context.CreditCardPayments
@@ -27,6 +28,35 @@ public static class CreditCardBillMath
             .SumAsync(p => (decimal?)p.Amount, ct) ?? 0m;
 
         return Math.Max(0m, bill.BillAmount - paid);
+    }
+
+    /// <summary>
+    /// Recomputes the stored PaidAmount / RemainingAmount of every bill on one card with the attribution rule above.
+    /// Call it AFTER payments or bills were saved, then save again. Cheap: a card has a handful of bills.
+    /// </summary>
+    public static async Task RecomputeStoredAsync(IApplicationDbContext context, int accountId, CancellationToken ct = default)
+    {
+        var bills = await context.CreditCardBills
+            .Where(b => b.AccountId == accountId && !b.IsDeleted)
+            .OrderBy(b => b.StatementDate)
+            .ToListAsync(ct);
+        if (bills.Count == 0) return;
+        var payments = await context.CreditCardPayments.AsNoTracking()
+            .Where(p => p.CreditCardAccountId == accountId && !p.IsDeleted)
+            .Select(p => new { p.Amount, p.Date, p.CreditCardBillId })
+            .ToListAsync(ct);
+
+        for (var i = 0; i < bills.Count; i++)
+        {
+            var b = bills[i];
+            DateTime? next = i + 1 < bills.Count ? bills[i + 1].StatementDate : null;
+            var paid = payments
+                .Where(p => p.CreditCardBillId == b.Id ||
+                            (p.CreditCardBillId == null && p.Date >= b.StatementDate && (next == null || p.Date < next)))
+                .Sum(p => p.Amount);
+            b.PaidAmount = paid;
+            b.RemainingAmount = b.IsPaid ? 0m : Math.Max(0m, b.BillAmount - paid);
+        }
     }
 
     /// <summary>Every bill on the card that still has an unpaid amount, oldest first, with what remains on each.</summary>

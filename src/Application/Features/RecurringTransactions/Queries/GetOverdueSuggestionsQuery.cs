@@ -60,7 +60,7 @@ public class GetOverdueSuggestionsQueryHandler : IRequestHandler<GetOverdueSugge
             {
                 var onAccount = query.Where(t => t.AccountId == accountId.Value && t.Type == TransactionType.Income);
                 match = o.Source == "CreditCard"
-                    ? await onAccount.Where(t => t.Amount >= low).OrderBy(t => t.Amount).ThenByDescending(t => t.Date).FirstOrDefaultAsync(ct)
+                    ? await onAccount.Where(t => t.Amount >= low && t.Amount <= amount * 3m).OrderBy(t => t.Amount).ThenByDescending(t => t.Date).FirstOrDefaultAsync(ct) // a payment can exceed a bill, but not by orders of magnitude (a big refund is not a payment)
                     : await onAccount.Where(t => t.Amount >= low && t.Amount <= high).OrderByDescending(t => t.Date).FirstOrDefaultAsync(ct);
                 if (match != null)
                 {

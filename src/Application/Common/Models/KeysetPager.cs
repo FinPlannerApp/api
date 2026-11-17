@@ -76,8 +76,8 @@ public static class KeysetPager
     {
         var p = key.Parameters[0];
         var idBody = new Swap(id.Parameters[0], p).Visit(id.Body)!;
-        var k = Expression.Constant(afterKey, typeof(TKey));
-        var i = Expression.Constant(afterId);
+        var k = KeysetParam.Of(afterKey);
+        var i = KeysetParam.Of(afterId);
 
         Expression Cmp(Expression left, Expression right, bool greater, bool orEqual)
         {

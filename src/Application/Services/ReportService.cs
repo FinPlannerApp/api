@@ -3,6 +3,7 @@ using Application.Common.Helpers;
 using Application.Common.Models;
 using Application.Contracts;
 using Application.DTOs.Budgets;
+using Application.DTOs.Transactions;
 using Application.Features.Budgets.Queries;
 using CsvHelper;
 using MediatR;
@@ -160,24 +161,35 @@ public class ReportService : IReportService
     // ── 4. Account Statement ────────────────────────────────────────────────
     public async Task<Result<byte[]>> GenerateAccountStatementReportAsync(string userId, int accountId, DateTime startDate, DateTime endDate)
     {
-        var queryParams = new QueryParameters
-        {
-            PageNumber = 1,
-            PageSize = 1000, // report cap — see README for why, and what to do if a real account exceeds this
-            SortBy = "date",
-            SortOrder = "asc",
-            Filters = new Dictionary<string, string>()
-        };
-
-        var txResult = await _transactionService.GetTransactionsAsync(userId, accountId, queryParams);
-        if (!txResult.IsSuccess)
-            return Result.Failure<byte[]>(txResult.Error);
-
         var utcStart = startDate.Kind == DateTimeKind.Utc ? startDate : (startDate.Kind == DateTimeKind.Local ? startDate.ToUniversalTime() : DateTime.SpecifyKind(startDate, DateTimeKind.Utc));
         var utcEnd = endDate.Kind == DateTimeKind.Utc ? endDate : (endDate.Kind == DateTimeKind.Local ? endDate.ToUniversalTime() : DateTime.SpecifyKind(endDate, DateTimeKind.Utc));
 
-        var rows = txResult.Value!.Data
-            .Where(t => t.Date >= utcStart && t.Date <= utcEnd)
+        // Read the statement page by page (100 at a time, oldest first) instead of one huge query: memory stays flat
+        // and, unlike a single capped read, no transaction is missed however long the account's history is.
+        var all = new List<TransactionDto>();
+        string? cursor = null;
+        for (var page = 0; page < 500; page++)
+        {
+            var queryParams = new QueryParameters
+            {
+                PageNumber = 1,
+                PageSize = 100,
+                SortBy = "date",
+                SortOrder = "asc",
+                Cursor = cursor,
+                Filters = new Dictionary<string, string>()
+            };
+            var pageResult = await _transactionService.GetTransactionsAsync(userId, accountId, queryParams);
+            if (!pageResult.IsSuccess)
+                return Result.Failure<byte[]>(pageResult.Error);
+            var data = pageResult.Value!.Data;
+            all.AddRange(data.Where(t => t.Date >= utcStart && t.Date <= utcEnd));
+            if (!pageResult.Value.HasMore || string.IsNullOrEmpty(pageResult.Value.NextCursor)) break;
+            if (data.Count > 0 && data[^1].Date > utcEnd) break; // oldest first: everything after this is out of range
+            cursor = pageResult.Value.NextCursor;
+        }
+
+        var rows = all
             .OrderBy(t => t.Date)
             .Select(t => new AccountStatementRow
             {

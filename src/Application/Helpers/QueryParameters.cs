@@ -4,7 +4,7 @@ namespace Application;
 
 public class QueryParameters
 {
-    private const int MaxPageSize = 1000;
+    private const int MaxPageSize = 100;
     private int _pageSize = 10;
 
     private int _pageNumber = 1;

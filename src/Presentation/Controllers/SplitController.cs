@@ -112,6 +112,10 @@ public class SplitController : BaseController
     public async Task<IActionResult> ResetShareToken(int groupId)
         => HandleResult(await _service.RegenerateShareTokenAsync(UserId, groupId));
 
+    [HttpPost("groups/{groupId}/public-link")]
+    public async Task<IActionResult> SetPublicLink(int groupId, [FromBody] SetPublicLinkDto dto)
+        => HandleResult(await _service.SetPublicLinkAsync(UserId, groupId, dto.Enabled));
+
     [HttpPost("invites")]
     public async Task<IActionResult> CreateInvite([FromBody] CreateInviteDto dto)
         => HandleResult(await _service.CreateInviteAsync(UserId, dto));

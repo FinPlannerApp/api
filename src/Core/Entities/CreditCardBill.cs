@@ -21,4 +21,9 @@ public class CreditCardBill : BaseEntity
     /// <summary>Other non-purchase charges in the bill (late fee, annual fee, hidden charges, GST on those).</summary>
     public decimal OtherCharges { get; set; }
     public bool IsPaid { get; set; } = false;
+
+    /// <summary>Stored total of payments that count toward this bill (kept up to date by CreditCardBillMath.RecomputeStoredAsync). Null until first computed.</summary>
+    public decimal? PaidAmount { get; set; }
+    /// <summary>Stored amount still unpaid (0 when IsPaid). Null until first computed.</summary>
+    public decimal? RemainingAmount { get; set; }
 }

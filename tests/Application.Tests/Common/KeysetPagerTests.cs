@@ -117,4 +117,25 @@ public class KeysetPagerTests
         KeysetPager.TryDecodeCursor<string>(cursor, out _, out _).Should().BeFalse();
         KeysetPager.TryDecodeCursor<DateTime>(cursor, out _, out _).Should().BeFalse();
     }
+
+    private sealed class LiteralFinder : System.Linq.Expressions.ExpressionVisitor
+    {
+        public readonly List<object?> Literals = new();
+        protected override System.Linq.Expressions.Expression VisitConstant(System.Linq.Expressions.ConstantExpression node)
+        {
+            if (node.Value is string or int or DateTime or decimal or double) Literals.Add(node.Value);
+            return base.VisitConstant(node);
+        }
+    }
+
+    [Fact]
+    public async Task Cursor_ValuesAreQueryParameters_NotSqlLiterals()
+    {
+        // A literal would give every cursor its own SQL text and compiled query (no plan reuse, growing cache).
+        await using var ctx = NewContext();
+        var query = ctx.Merchants.SeekAfter(m => m.Name, m => m.Id, "Shop 05", 42, false, false);
+        var finder = new LiteralFinder();
+        finder.Visit(query.Expression);
+        finder.Literals.Should().NotContain("Shop 05").And.NotContain(42);
+    }
 }

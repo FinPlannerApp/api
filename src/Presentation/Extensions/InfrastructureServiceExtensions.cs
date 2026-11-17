@@ -141,7 +141,9 @@ public static class InfrastructureServiceExtensions
         services.AddHostedService<RewardPointsExpirySchedulerWorker>();
         services.AddHostedService<AccountChargeAdvanceSchedulerWorker>();
         services.AddHostedService<SplitAutomationWorker>();
+        services.AddHostedService<API.Hubs.SplitHubSessionSweeper>();
         services.AddHostedService<PaymentReminderSchedulerWorker>();
+        services.AddHostedService<DiagnosticsRetentionWorker>();
 
         // 3. Register Identity with STRONG password requirements (dev AND production)
         services.AddIdentityCore<ApplicationUser>(options =>
