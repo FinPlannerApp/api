@@ -25,7 +25,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-	  <VersionPrefix>6.2.0</VersionPrefix>
+	  <VersionPrefix>6.3.0</VersionPrefix>
 	  <EnvironmentName Condition="'$(EnvironmentName)' == ''">Development</EnvironmentName>
 	  <VersionSuffix>$(EnvironmentName.ToLower())-$([System.DateTime]::UtcNow.ToString(yyyyMMdd-HHmm))</VersionSuffix>
     <RootNamespace>API</RootNamespace>
