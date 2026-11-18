@@ -327,11 +327,16 @@ public class AuthService : IAuthService
 
         var now = DateTime.UtcNow;
         var sessionId = Guid.NewGuid().ToString();
+        var cappedUserAgent = Truncate(userAgent, MaxUserAgentLength);
 
         // Signing in again on the same device replaces that device's old session, so the device
-        // list does not fill up with duplicates.
+        // list does not fill up with duplicates. On iOS/Safari mobile PWAs, deviceId cookies can be lost
+        // between process kills; matching by DeviceId OR by identical UserAgent ensures stale ghost sessions
+        // from previous logins on the same device are immediately revoked.
         var sameDeviceSessions = user.RefreshTokens
-            .Where(t => t.IsActive && t.DeviceId == deviceId && t.SessionId != null)
+            .Where(t => t.IsActive && t.SessionId != null &&
+                        (t.DeviceId == deviceId ||
+                         (!string.IsNullOrEmpty(t.UserAgent) && t.UserAgent == cappedUserAgent)))
             .Select(t => t.SessionId!)
             .Distinct()
             .ToList();
@@ -352,7 +357,6 @@ public class AuthService : IAuthService
             RevokeSessionTokens(user, liveSessions[i].Id, ipAddress);
 
         // Remember this device.
-        var cappedUserAgent = Truncate(userAgent, MaxUserAgentLength);
         var device = user.Devices.FirstOrDefault(d => d.DeviceId == deviceId);
         if (device == null)
         {

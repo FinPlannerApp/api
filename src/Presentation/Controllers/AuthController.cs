@@ -108,7 +108,8 @@ public class AuthController : BaseController
         if (result.IsSuccess)
         {
             SetRefreshTokenCookie(result.Value.RefreshToken!);
-            result.Value.RefreshToken = null!;
+            // Return RefreshToken in the response body as fallback for iOS PWA / cross-site environments
+            // where cookies are dropped on process termination.
         }
 
         return HandleResult(result);
@@ -118,9 +119,9 @@ public class AuthController : BaseController
     [API.Filters.CookieCsrfGuard]
     [AllowAnonymous]
     [EnableRateLimiting("login")]
-    public async Task<IActionResult> Refresh()
+    public async Task<IActionResult> Refresh([FromBody] RefreshTokenDto? dto = null)
     {
-        var token = GetRefreshTokenFromCookie();
+        var token = (!string.IsNullOrWhiteSpace(dto?.RefreshToken) ? dto.RefreshToken : null) ?? GetRefreshTokenFromCookie();
         if (string.IsNullOrEmpty(token))
             return HandleResult(Result.Failure<LoginResponseDto>(new Error("Auth.NoToken", "No refresh token present.")));
 
@@ -129,7 +130,8 @@ public class AuthController : BaseController
         if (result.IsSuccess)
         {
             SetRefreshTokenCookie(result.Value.RefreshToken!);
-            result.Value.RefreshToken = null!;
+            // Return RefreshToken in the response body as fallback for iOS PWA / cross-site environments
+            // where cookies are dropped on process termination.
         }
 
         return HandleResult(result);
@@ -139,9 +141,9 @@ public class AuthController : BaseController
     [API.Filters.CookieCsrfGuard]
     [AllowAnonymous]
     [EnableRateLimiting("login")]
-    public async Task<IActionResult> Logout()
+    public async Task<IActionResult> Logout([FromBody] RefreshTokenDto? dto = null)
     {
-        var token = GetRefreshTokenFromCookie();
+        var token = (!string.IsNullOrWhiteSpace(dto?.RefreshToken) ? dto.RefreshToken : null) ?? GetRefreshTokenFromCookie();
         var result = token != null
             ? await _authService.LogoutAsync(token, GetIpAddress())
             : Result.Success(true);
